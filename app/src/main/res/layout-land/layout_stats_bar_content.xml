@@ -45,7 +45,7 @@
         android:layout_width="96dp"
         android:layout_height="0dp" />
 
-    <!-- The exit keeps its width (flag and IP only; the rest is in the tooltip), the status takes what is left. -->
+    <!-- The exit keeps its width, the status takes what is left. -->
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
@@ -66,7 +66,7 @@
             tools:text="@string/connection_test_available" />
 
         <TextView
-            android:id="@+id/exit_ip"
+            android:id="@+id/exit_country"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="16dp"
@@ -75,7 +75,7 @@
             android:textColor="?whiteOrTextPrimary"
             android:textSize="14sp"
             android:visibility="gone"
-            tools:text="203.0.113.5"
+            tools:text="Germany"
             tools:visibility="visible" />
 
     </LinearLayout>

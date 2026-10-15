@@ -28,7 +28,7 @@ import java.net.Proxy
  */
 object ExitIp {
 
-    class Info(val ip: String, val countryCode: String, val country: String, val city: String)
+    class Info(val countryCode: String, val country: String)
 
     private const val LOOKUP_URL = "http://ip-api.com/json/"
     private const val TIMEOUT_SECONDS = 10L
@@ -89,8 +89,8 @@ object ExitIp {
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("HTTP ${response.code}")
             val json = JsonInput.parseObjectOrNull(response.peekBody(MAX_BYTES).string()) ?: return null
-            val ip = json.string("query").ifEmpty { return null }
-            return Info(ip, json.string("countryCode"), json.string("country"), json.string("city"))
+            val info = Info(json.string("countryCode"), json.string("country"))
+            return info.takeIf { it.countryCode.isNotEmpty() || it.country.isNotEmpty() }
         }
     }
 

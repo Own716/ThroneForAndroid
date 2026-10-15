@@ -46,9 +46,7 @@ class StatsBar @JvmOverloads constructor(
     private lateinit var statusText: TextView
     private lateinit var txText: TextView
     private lateinit var rxText: TextView
-    private var exitIpText: TextView? = null
-    private var exitLocationText: TextView? = null
-    private var exitColumn: View? = null
+    private var exitText: TextView? = null
     private var statusLine: CharSequence = ""
     private var stateReported = false
     private val exitListener = { showExit() }
@@ -130,9 +128,7 @@ class StatsBar @JvmOverloads constructor(
         statusText = findViewById(R.id.status)
         txText = findViewById(R.id.tx)
         rxText = findViewById(R.id.rx)
-        exitIpText = findViewById(R.id.exit_ip)
-        exitLocationText = findViewById(R.id.exit_location)
-        exitColumn = findViewById(R.id.exit_column)
+        exitText = findViewById(R.id.exit_country)
         super.setOnClickListener(l)
     }
 
@@ -156,42 +152,26 @@ class StatsBar @JvmOverloads constructor(
     }
 
     private fun updateTooltip() {
-        val exit = exitIpText?.takeIf { it.isVisible }?.contentDescription
+        val exit = exitText?.takeIf { it.isVisible }?.contentDescription
         TooltipCompat.setTooltipText(this, if (exit == null) statusLine else "$statusLine\n$exit")
     }
 
-    /**
-     * runningCountryInfo (mainwindow_view.cpp:151-165, its tooltip :209-210): flag and IP, the country and city where
-     * they fit; the tooltip always has them.
-     */
+    /** runningCountryInfo (mainwindow_view.cpp:151-165): the exit's flag and country, no IP or city. */
     private fun showExit() {
-        val ipView = exitIpText ?: return
+        val view = exitText ?: return
         val info = ExitIp.info?.takeIf { currentState == BaseService.State.Connected }
-        // Portrait only: an empty exit column must not keep half of the row from the speeds.
-        exitColumn?.isVisible = info != null
         if (info == null) {
-            ipView.isVisible = false
-            exitLocationText?.isVisible = false
+            view.isVisible = false
         } else {
-            val code = info.countryCode
-            val country = if (TestFormat.isCountryCode(code)) TestFormat.countryName(code) else info.country
-            val location = if (country.isNotEmpty() && info.city.isNotEmpty()) {
-                context.getString(R.string.exit_ip_location, country, info.city)
+            val country = if (TestFormat.isCountryCode(info.countryCode)) {
+                TestFormat.countryName(info.countryCode)
             } else {
-                country.ifEmpty { info.city }
+                info.country
             }
-            val flag = TestFormat.flag(code)
-            ipView.text = if (flag.isEmpty()) info.ip else "$flag\u00A0${info.ip}"
-            ipView.contentDescription = if (location.isEmpty()) {
-                context.getString(R.string.exit_ip_summary, info.ip)
-            } else {
-                context.getString(R.string.exit_ip_summary_location, info.ip, location)
-            }
-            ipView.isVisible = true
-            exitLocationText?.let {
-                it.text = location
-                it.isVisible = location.isNotEmpty()
-            }
+            val flag = TestFormat.flag(info.countryCode)
+            view.text = if (flag.isEmpty()) country else "$flag\u00A0$country"
+            view.contentDescription = country
+            view.isVisible = true
         }
         updateTooltip()
     }

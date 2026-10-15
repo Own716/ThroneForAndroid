@@ -1672,7 +1672,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">공지 - %s</string>
     <string name="subinfo_no_app">%s을(를) 열 수 있는 앱이 없습니다</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">나가는 IP: %1$s</string>
-    <string name="exit_ip_summary_location">나가는 IP: %1$s (%2$s)</string>
 </resources>

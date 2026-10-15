@@ -1673,7 +1673,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">お知らせ - %s</string>
     <string name="subinfo_no_app">%s を開けるアプリがありません</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">出口 IP：%1$s</string>
-    <string name="exit_ip_summary_location">出口 IP：%1$s（%2$s）</string>
 </resources>

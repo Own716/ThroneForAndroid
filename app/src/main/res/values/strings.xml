@@ -1865,11 +1865,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Announcement - %s</string>
     <string name="subinfo_no_app">No app can open %s</string>
-
-    <!-- The running connection's exit in the stats bar: %1$s country, %2$s city (desktop runningCountryInfo). -->
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <!-- Tooltip and spoken text of the exit IP: %1$s the IP address. -->
-    <string name="exit_ip_summary">Exit IP: %1$s</string>
-    <!-- As exit_ip_summary; %2$s the location (exit_ip_location). -->
-    <string name="exit_ip_summary_location">Exit IP: %1$s (%2$s)</string>
 </resources>

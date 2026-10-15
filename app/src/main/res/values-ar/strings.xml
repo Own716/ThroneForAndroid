@@ -1801,7 +1801,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">إعلان - %s</string>
     <string name="subinfo_no_app">لا يوجد تطبيق يمكنه فتح %s</string>
-    <string name="exit_ip_location">%1$s، %2$s</string>
-    <string name="exit_ip_summary">عنوان IP للخروج: %1$s</string>
-    <string name="exit_ip_summary_location">عنوان IP للخروج: %1$s (%2$s)</string>
 </resources>

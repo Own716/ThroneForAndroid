@@ -1700,7 +1700,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Duyuru - %s</string>
     <string name="subinfo_no_app">%s adresini açabilecek uygulama yok</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">Çıkış IP: %1$s</string>
-    <string name="exit_ip_summary_location">Çıkış IP: %1$s (%2$s)</string>
 </resources>

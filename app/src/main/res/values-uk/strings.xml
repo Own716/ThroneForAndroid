@@ -1758,7 +1758,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Оголошення — %s</string>
     <string name="subinfo_no_app">Немає застосунку, що може відкрити %s</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">Зовнішня IP: %1$s</string>
-    <string name="exit_ip_summary_location">Зовнішня IP: %1$s (%2$s)</string>
 </resources>

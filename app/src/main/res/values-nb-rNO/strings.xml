@@ -1698,7 +1698,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Kunngjøring - %s</string>
     <string name="subinfo_no_app">Ingen app kan åpne %s</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">Utgående IP: %1$s</string>
-    <string name="exit_ip_summary_location">Utgående IP: %1$s (%2$s)</string>
 </resources>

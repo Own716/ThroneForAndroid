@@ -1748,7 +1748,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Объявление — %s</string>
     <string name="subinfo_no_app">Нет приложения, способного открыть %s</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">Выходной IP: %1$s</string>
-    <string name="exit_ip_summary_location">Выходной IP: %1$s (%2$s)</string>
 </resources>

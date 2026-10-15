@@ -1698,7 +1698,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Pengumuman - %s</string>
     <string name="subinfo_no_app">Tidak ada aplikasi yang dapat membuka %s</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">IP keluar: %1$s</string>
-    <string name="exit_ip_summary_location">IP keluar: %1$s (%2$s)</string>
 </resources>

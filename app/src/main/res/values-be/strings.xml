@@ -1747,7 +1747,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Аб\'ява — %s</string>
     <string name="subinfo_no_app">Ніводная праграма не можа адкрыць %s</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">IP выхаду: %1$s</string>
-    <string name="exit_ip_summary_location">IP выхаду: %1$s (%2$s)</string>
 </resources>

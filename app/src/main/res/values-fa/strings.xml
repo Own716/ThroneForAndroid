@@ -1718,7 +1718,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">اطلاعیه - %s</string>
     <string name="subinfo_no_app">هیچ برنامه‌ای نمی‌تواند %s را باز کند</string>
-    <string name="exit_ip_location">%1$s، %2$s</string>
-    <string name="exit_ip_summary">IP خروجی: %1$s</string>
-    <string name="exit_ip_summary_location">IP خروجی: %1$s (%2$s)</string>
 </resources>

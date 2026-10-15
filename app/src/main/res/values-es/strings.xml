@@ -1694,7 +1694,4 @@
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
     <string name="subinfo_announcement_title">Anuncio - %s</string>
     <string name="subinfo_no_app">Ninguna aplicación puede abrir %s</string>
-    <string name="exit_ip_location">%1$s, %2$s</string>
-    <string name="exit_ip_summary">IP de salida: %1$s</string>
-    <string name="exit_ip_summary_location">IP de salida: %1$s (%2$s)</string>
 </resources>
