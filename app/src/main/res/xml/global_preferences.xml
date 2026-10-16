@@ -61,6 +61,12 @@
         app:summary="@string/settings_core_sum"
         app:title="@string/settings_core" />
     <Preference
+        app:fragment="io.nekohasekai.sagernet.ui.settings.DiagnosticsFragment"
+        app:icon="@drawable/ic_baseline_bug_report_24"
+        app:key="settingsDiagnostics"
+        app:summary="@string/settings_diagnostics_sum"
+        app:title="@string/settings_diagnostics" />
+    <Preference
         app:icon="@drawable/ic_file_cloud_queue"
         app:key="settingsBackup"
         app:summary="@string/settings_backup_sum"

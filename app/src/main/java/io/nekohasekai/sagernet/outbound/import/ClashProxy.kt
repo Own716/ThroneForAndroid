@@ -1,15 +1,20 @@
 package io.nekohasekai.sagernet.outbound.import
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.json.JsonArray
+import io.nekohasekai.sagernet.outbound.json.JsonNull
 import io.nekohasekai.sagernet.outbound.json.JsonObject
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.vtr
 import java.util.TreeMap
 
 /**
  * One Clash `proxies:` entry with the field conversions of the desktop's clash::from_node / load_opt
- * (src/configs/sub/clash.cpp): a string field also accepts an integer or a boolean, a bool field (MyBool) accepts
- * `true`, the integer 1 or the strings "true" / "1", an int field (MyInt) accepts an integer or a string parsed
- * like std::stoi, and everything of another shape keeps its default. Nested option blocks are exposed as
- * [ClashProxy] views themselves so the per-type parsers read `ws-opts`, `smux`, `reality-opts` ... the same way.
+ * (src/configs/sub/clash.cpp): a string field also accepts a number or a boolean, a bool field (MyBool) accepts only
+ * true/false/1/0 (mihomo refuses yes/no/on/off), an int field (MyInt) a whole number in int range, as a number or as
+ * decimal text. A present value of another shape keeps the default and, during an import, is reported. Nested
+ * option blocks are exposed as [ClashProxy] views themselves so the per-type parsers read `ws-opts`, `smux`,
+ * `reality-opts` ... the same way.
  */
 class ClashProxy(@JvmField val node: JsonObject) {
 
@@ -18,27 +23,34 @@ class ClashProxy(@JvmField val node: JsonObject) {
 
     fun has(key: String): Boolean = node.contains(key)
 
+    /** Present and not null: an optional value (xhttpDownloadSettings) that otherwise takes the proxy's own. */
+    fun present(key: String): Boolean = node.contains(key) && !node.isNull(key)
+
     /** load_opt<std::string>. */
-    fun string(key: String): String = when {
-        node.isString(key) -> node.string(key)
-        node.isNumber(key) && node[key] is Long -> node.integer(key).toString()
-        node.isBool(key) -> if (node.bool(key)) "true" else "false"
+    fun string(key: String): String = when (val value = node[key]) {
+        is String -> value
+        is Long -> value.toString()
+        is Double -> formatDouble(value)
+        is Boolean -> if (value) "true" else "false"
         else -> ""
     }
 
-    /** from_node(MyBool) / load_opt<bool>. */
-    fun bool(key: String): Boolean = when {
-        node.isBool(key) -> node.bool(key)
-        node.isNumber(key) && node[key] is Long -> node.integer(key) == 1L
-        node.isString(key) -> node.string(key).let { it == "true" || it == "1" }
-        else -> false
+    /** load_opt<MyBool>. */
+    fun bool(key: String): Boolean {
+        val value = node[key]
+        if (value == null || value === JsonNull) return false
+        readBool(value)?.let { return it }
+        if (ParseDiag.active()) ParseDiag.warn(key, vtr(R.string.validation_clash_expected_bool), nodeText(value))
+        return false
     }
 
-    /** from_node(MyInt): an integer, or a string parsed like std::stoi (leading digits, 0 on failure). */
-    fun int(key: String): Int = when {
-        node.isNumber(key) && node[key] is Long -> node.integer(key).toInt()
-        node.isString(key) -> stoi(node.string(key))
-        else -> 0
+    /** load_opt<MyInt>. */
+    fun int(key: String): Int {
+        val value = node[key]
+        if (value == null || value === JsonNull) return 0
+        readInt(value)?.let { return it }
+        if (ParseDiag.active()) ParseDiag.warn(key, vtr(R.string.validation_clash_expected_int), nodeText(value))
+        return 0
     }
 
     /** A string or a sequence of strings (alpn, host-key, h2 host ...); scalars of other types are stringified. */
@@ -74,22 +86,58 @@ class ClashProxy(@JvmField val node: JsonObject) {
             when (it) {
                 is String -> it
                 is Long -> it.toString()
+                is Double -> formatDouble(it)
                 is Boolean -> if (it) "true" else "false"
                 else -> null
             }
         }
 
-        /** std::stoi: optional leading whitespace, an optional sign, then the longest digit run; 0 when none or overflow. */
-        @JvmStatic
-        fun stoi(text: String): Int {
-            var i = 0
-            while (i < text.length && text[i].isWhitespace()) i++
-            val start = i
-            if (i < text.length && (text[i] == '+' || text[i] == '-')) i++
-            val digitsStart = i
-            while (i < text.length && text[i] in '0'..'9') i++
-            if (i == digitsStart) return 0
-            return text.substring(start, i).toIntOrNull() ?: 0
+        /** QByteArray::number(v, 'g', 15): C's %g, which drops trailing zeros where Java's keeps them. */
+        private fun formatDouble(v: Double): String = trimG(String.format(java.util.Locale.ROOT, "%.15g", v))
+
+        private fun trimG(s: String): String {
+            val e = s.indexOfFirst { it == 'e' || it == 'E' }
+            val mantissa = if (e < 0) s else s.substring(0, e)
+            val trimmed = if (mantissa.contains('.')) mantissa.trimEnd('0').trimEnd('.') else mantissa
+            if (e < 0) return trimmed
+            val exp = s.substring(e + 1).toInt()
+            return trimmed + "e" + (if (exp < 0) "-" else "+") + Math.abs(exp).toString().padStart(2, '0')
+        }
+
+        /** clashReadInt (clash.cpp): a whole decimal number in int range, as a number or as trimmed text. */
+        private fun readInt(value: Any): Int? = when (value) {
+            is Long -> if (value in Int.MIN_VALUE..Int.MAX_VALUE) value.toInt() else null
+            is String -> value.trim().let { if (Regex("[+-]?[0-9]+").matches(it)) it.toIntOrNull() else null }
+            else -> null
+        }
+
+        /** clashReadBool (clash.cpp): only true/false/1/0. */
+        private fun readBool(value: Any): Boolean? = when (value) {
+            is Boolean -> value
+            is Long -> when (value) {
+                0L -> false
+                1L -> true
+                else -> null
+            }
+
+            is String -> when (value.trim().lowercase()) {
+                "true", "1" -> true
+                "false", "0" -> false
+                else -> null
+            }
+
+            else -> null
+        }
+
+        /** clashNodeText (clash.cpp): the value as shown next to a report. */
+        private fun nodeText(value: Any): String = when (value) {
+            is String -> value
+            is Long -> value.toString()
+            is Double -> formatDouble(value)
+            is Boolean -> if (value) "true" else "false"
+            is JsonArray -> "[…]"
+            is JsonObject -> "{…}"
+            else -> ""
         }
     }
 }

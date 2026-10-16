@@ -1,10 +1,14 @@
 package io.nekohasekai.sagernet.ui.profile
 
+import androidx.preference.ListPreference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.outbound.types.XrayVless
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.validation.CommonChecks
+import io.nekohasekai.sagernet.validation.Validation
 
 /** The Xray-core VLESS outbound: uuid / encryption / flow, the Xray stream settings and the Xray mux. */
 class XrayVlessSettingsActivity : BindingSettingsActivity<XrayVless>() {
@@ -62,6 +66,7 @@ class XrayVlessSettingsActivity : BindingSettingsActivity<XrayVless>() {
         pbm.text("$STREAM.tls.pinnedPeerCertSha256")
         pbm.text("$STREAM.tls.verifyPeerCertByName")
         pbm.text("$STREAM.tls.echConfigList")
+        pbm.text("$STREAM.tls.cipherSuites")
 
         pbm.text("$STREAM.reality.serverName")
         pbm.text("$STREAM.reality.fingerprint")
@@ -90,6 +95,7 @@ class XrayVlessSettingsActivity : BindingSettingsActivity<XrayVless>() {
         // empty inherits the uTLS preset (xrayStreamSetting.cpp:312, 377)
         presetMenuSummary("$STREAM.tls.fingerprint", DataStore.utlsFingerprint)
         presetMenuSummary("$STREAM.reality.fingerprint", DataStore.utlsFingerprint)
+        cipherSuitesInput("$STREAM.tls.cipherSuites", ":")
         presetTriSummary("multiplex.enabled", DataStore.xrayMuxDefaultOn)
         presetIntSummary("multiplex.concurrency", DataStore.xrayMuxConcurrency)
 
@@ -112,10 +118,66 @@ class XrayVlessSettingsActivity : BindingSettingsActivity<XrayVless>() {
         }
 
         onMenu("multiplex.enabled") { setVisible(it == "1", "multiplex.concurrency", "multiplex.xudpConcurrency") }
+
+        // dialog_edit_profile_xray.cpp, edit_xrayvless.cpp: a stored value the menu lacks is shown, and flagged by
+        // validate, instead of being rewritten on save; a flow matching an entry but for case is canonicalised.
+        findPreference<ListPreference>("$STREAM.security")?.keepUnlistedValue()
+        val flowMenu = findPreference<ListPreference>("flow")
+        if (flowMenu != null) {
+            val flow = flowMenu.value.orEmpty().trim()
+            val listed = flowMenu.entryValues.firstOrNull { it.toString().equals(flow, ignoreCase = true) }?.toString()
+            if (listed != null) {
+                if (listed != flowMenu.value) flowMenu.value = listed
+            } else if (flow.equals("none", ignoreCase = true)) {
+                flowMenu.value = ""
+            } else {
+                flowMenu.keepUnlistedValue()
+            }
+        }
+    }
+
+    /** xrayStreamSetting::Validate names the Xray JSON paths (streamSettings.tlsSettings.serverName …); rows are streamSetting.tls.*. */
+    override fun issueKey(field: String): String? {
+        if (field == "id") return "uuid"
+        if (!field.startsWith("streamSettings.")) return null
+        var rest = field.removePrefix("streamSettings.")
+        val section = XRAY_SECTIONS[rest.substringBefore('.')]
+        if (section != null) {
+            rest = rest.substringAfter('.', "")
+            if (section == "xhttp") {
+                rest = rest.removePrefix("extra.").removePrefix("xmux.")
+                // the download leg's address, port and network are all edited in its JSON row
+                if (rest.startsWith("downloadSettings", ignoreCase = true)) rest = "downloadSettings"
+            }
+            rest = "$section.$rest"
+        }
+        val key = "$STREAM.$rest"
+        return key.takeIf { k -> pbm.items.any { it.cacheName == k } }
+    }
+
+    // dialog_edit_profile_xray.cpp bindXrayStream / bindXrayXHTTP: what validate cannot see in the parsed model.
+    override fun ValidationForm.bindValidation() {
+        for (key in listOf("$STREAM.ws.host", "$STREAM.httpupgrade.host", "$STREAM.xhttp.host", "$STREAM.grpc.authority")) {
+            bind(key) { CommonChecks.hostHeader(it, false) }.warning()
+        }
+        for (key in listOf("$STREAM.ws.headers", "$STREAM.httpupgrade.headers", "$STREAM.xhttp.headers")) bind(key, ::headerLines)
+        for (key in listOf("$STREAM.ws.ed", "$STREAM.httpupgrade.ed")) bind(key, Validation.Rules.int(0, Int.MAX_VALUE.toLong()))
+        bind("$STREAM.xhttp.scMaxBufferedPosts", Validation.Rules.int(0, Long.MAX_VALUE))
+        bind("$STREAM.xhttp.hKeepAlivePeriod", Validation.Rules.int(Long.MIN_VALUE, Long.MAX_VALUE))
     }
 
     companion object {
         private const val STREAM = "streamSetting"
+
+        private val XRAY_SECTIONS = mapOf(
+            "tlsSettings" to "tls",
+            "realitySettings" to "reality",
+            "xhttpSettings" to "xhttp",
+            "splithttpSettings" to "xhttp",
+            "wsSettings" to "ws",
+            "httpupgradeSettings" to "httpupgrade",
+            "grpcSettings" to "grpc",
+        )
     }
 
 }

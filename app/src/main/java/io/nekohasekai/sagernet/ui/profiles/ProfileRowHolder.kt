@@ -13,11 +13,15 @@ import android.widget.TextView
 import androidx.annotation.ColorInt
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.isVisible
+import androidx.preference.PreferenceDataStore
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.card.MaterialCardView
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
+import io.nekohasekai.sagernet.database.SettingsRegistry
 import io.nekohasekai.sagernet.database.TestShowItems
+import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeListener
 import io.nekohasekai.sagernet.ktx.alert
 import io.nekohasekai.sagernet.ktx.getColorAttr
 import io.nekohasekai.sagernet.ktx.tryToShow
@@ -185,6 +189,36 @@ internal class RowContent(
     }
 }
 
+/**
+ * The type text of a card (ProfilesTableModel.cpp ColType): the type, then the security in parentheses while
+ * show_config_security is on, e.g. "HTTP (TLS)". Both settings it reads are cached until either is written.
+ */
+private object TypeLabel : OnPreferenceDataStoreChangeListener {
+    private class Flags(val showSecurity: Boolean, val skipCert: Boolean)
+
+    @Volatile
+    private var flags: Flags? = null
+
+    init {
+        DataStore.configurationStore.registerChangeListener(this)
+    }
+
+    override fun onPreferenceDataStoreChanged(store: PreferenceDataStore, key: String) {
+        if (key == SettingsRegistry.SHOW_CONFIG_SECURITY.key || key == SettingsRegistry.SKIP_CERT.key) flags = null
+    }
+
+    fun of(profile: ProxyEntity): String {
+        val current = flags ?: Flags(
+            SettingsRegistry.SHOW_CONFIG_SECURITY.read(DataStore.configurationStore),
+            DataStore.skipCert,
+        ).also { flags = it }
+        val type = profile.displayType()
+        if (!current.showSecurity) return type
+        val security = profile.outbound.displaySecurity(current.skipCert)
+        return if (security.isEmpty()) type else "$type ($security)"
+    }
+}
+
 internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdapter) :
     RecyclerView.ViewHolder(view) {
 
@@ -243,7 +277,7 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
         this.profile = profile
         val context = itemView.context
         name.text = profile.displayName()
-        type.text = profile.displayType()
+        type.text = TypeLabel.of(profile)
         type.setTextColor(context.getProtocolColor(profile.type))
         bindContent()
         bindState()
@@ -300,7 +334,7 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
         selectCheck.isVisible = selecting
         selectCheck.isChecked = selecting && host.selection.isChecked(id)
         editButton.isVisible = buttons && !adapter.isCompact
-        shareButton.isVisible = buttons && !adapter.isCompact && !profile.isChain()
+        shareButton.isVisible = buttons && !adapter.isCompact
         moreButton.isVisible = buttons
         applyCardColors(host.isSelectedProfile(id), selectCheck.isChecked)
     }

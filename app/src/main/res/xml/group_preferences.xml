@@ -80,6 +80,18 @@
 
         <moe.matsuri.nb4a.ui.SimpleMenuPreference
             app:defaultValue="0"
+            app:entryValues="@array/int_array_4"
+            app:key="groupSubTlsVersion"
+            app:title="@string/grp_tls_version" />
+
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:defaultValue="0"
+            app:entryValues="@array/int_array_3"
+            app:key="groupSubHttpVersion"
+            app:title="@string/grp_http_version" />
+
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:defaultValue="0"
             app:entryValues="@array/int_array_3"
             app:icon="@drawable/ic_baseline_fingerprint_24"
             app:key="groupSubSendHwid"
@@ -107,6 +119,16 @@
         app:isPreferenceVisible="false"
         app:key="groupAdvancedUpdate"
         app:title="@string/grp_update">
+
+        <EditTextPreference
+            app:key="groupSubUpdateInterval"
+            app:title="@string/grp_update_interval" />
+
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:defaultValue="0"
+            app:entryValues="@array/int_array_3"
+            app:key="groupSubServerInterval"
+            app:title="@string/grp_server_interval" />
 
         <SwitchPreference
             app:key="groupSubKeepWorking"

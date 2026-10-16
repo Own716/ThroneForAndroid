@@ -42,6 +42,11 @@
             app:key="alwaysShowAddress"
             app:summary="@string/always_show_address_sum"
             app:title="@string/always_show_address" />
+        <SwitchPreference
+            app:icon="@drawable/ic_baseline_security_24"
+            app:key="show_config_security"
+            app:summary="@string/show_config_security_sum"
+            app:title="@string/show_config_security" />
     </PreferenceCategory>
 
     <PreferenceCategory app:title="@string/cag_notification">

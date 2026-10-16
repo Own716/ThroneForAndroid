@@ -1,16 +1,62 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
-import io.nekohasekai.sagernet.outbound.import.ClashProxy
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
 import io.nekohasekai.sagernet.outbound.SecurityInfo
 import io.nekohasekai.sagernet.outbound.SecurityLevel
 import io.nekohasekai.sagernet.outbound.common.XrayMultiplex
 import io.nekohasekai.sagernet.outbound.common.XrayStreamSetting
+import io.nekohasekai.sagernet.outbound.common.normalizeXrayNetwork
+import io.nekohasekai.sagernet.outbound.common.stripXrayDialerState
+import io.nekohasekai.sagernet.outbound.common.withXrayDownloadLeg
+import io.nekohasekai.sagernet.outbound.common.xrayDownloadLeg
+import io.nekohasekai.sagernet.outbound.import.ClashProxy
+import io.nekohasekai.sagernet.outbound.json.JsonInput
 import io.nekohasekai.sagernet.outbound.json.JsonObject
+import io.nekohasekai.sagernet.outbound.json.jsonObjectOf
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
+
+/** xrayFlows (xrayVless.h). */
+val xrayFlows = listOf("xtls-rprx-vision", "xtls-rprx-vision-udp443")
+
+/** The Checks of xrayVless.h. */
+object XrayVlessChecks {
+    /** Xray infra/conf/vless.go: "none" or mlkem768x25519plus.<native|xorpub|random>.<1rtt|0rtt>.<parts>, parts of 20+ chars being keys. */
+    @JvmStatic
+    fun xrayVlessEncryption(encryption: String): String {
+        if (encryption.isEmpty()) return vtr(R.string.validation_xray_vless_encryption_none)
+        if (encryption == "none") return ""
+        val parts = encryption.split('.')
+        if (parts.size < 4 || parts[0] != "mlkem768x25519plus") return vtr(R.string.validation_xray_vless_encryption_format)
+        if (parts[1] != "native" && parts[1] != "xorpub" && parts[1] != "random") return vtr(R.string.validation_xray_vless_encryption_mode)
+        if (parts[2] != "1rtt" && parts[2] != "0rtt") return vtr(R.string.validation_xray_vless_encryption_rtt)
+        // Shorter parts are padding specs.
+        for (i in 3 until parts.size) {
+            if (parts[i].length < 20) continue
+            if (Validation.base64Key(parts[i], 32, true, false).isEmpty() || Validation.base64Key(parts[i], 1184, true, false).isEmpty()) continue
+            return vtr(R.string.validation_xray_vless_encryption_key)
+        }
+        return ""
+    }
+
+    /** Without VLESS encryption, Vision needs TLS or REALITY directly on the raw network. */
+    @JvmStatic
+    fun xrayVlessVision(flow: String, encryption: String, network: String, security: String): String {
+        if (!flow.startsWith("xtls-rprx-vision") || XrayVless.isVlessEncrypted(encryption)) return ""
+        val normalized = normalizeXrayNetwork(network)
+        if ((normalized.isEmpty() || normalized == "raw") && (security == "tls" || security == "reality")) return ""
+        return vtr(R.string.validation_xray_vless_vision)
+    }
+}
 
 /**
  * xrayVless (include/configs/outbounds/xrayVless.h, src/configs/outbounds/xrayVless.cpp): the Xray-core VLESS
@@ -26,42 +72,44 @@ class XrayVless : Outbound("xrayvless") {
     @JvmField var multiplex: XrayMultiplex = XrayMultiplex()
 
     override fun isXray(): Boolean = true
+    override fun hasXrayStream(): Boolean = true
     override fun getXrayStream(): XrayStreamSetting = streamSetting
     override fun getXrayMultiplex(): XrayMultiplex = multiplex
 
-    /** xrayVless.cpp:41-50. */
+    /** xrayVless::ParseFromClash. */
     override fun parseFromClash(node: JsonObject): Boolean {
         val proxy = ClashProxy(node)
         if (proxy.type != "vless") return false
         baseParseFromClash(proxy)
         uuid = proxy.string("uuid")
         val clashFlow = proxy.string("flow")
-        if (clashFlow.isNotEmpty()) flow = clashFlow
+        if (clashFlow.isNotEmpty()) flow = importFlow(clashFlow)
         val clashEncryption = proxy.string("encryption")
-        if (clashEncryption.isNotEmpty()) encryption = clashEncryption
+        if (clashEncryption.isNotEmpty()) encryption = importEncryption(clashEncryption)
         streamSetting.parseFromClash(proxy)
         multiplex.parseFromClash(proxy)
         return true
     }
 
-    /** xrayVless.cpp:8-20: no default port. */
+    /** xrayVless::ParseFromLink: no default port; a network the Xray stream refuses drops the link. */
     override fun parseFromLink(link: String): Boolean {
         val url = LinkParser.parse(link)
         if (!url.isValid) return false
         val q = url.query
         super.parseFromLink(url)
         uuid = url.userName
-        encryption = q.valueOr("encryption", "none")
-        flow = q.valueOr("flow", "")
-        streamSetting.parseFromLink(url)
+        encryption = importEncryption(q.valueOr("encryption", "none"))
+        flow = importFlow(q.value("flow"))
+        if (!streamSetting.parseFromLink(url)) return false
         multiplex.parseFromLink(url)
         return !(uuid.isEmpty() || server.isEmpty())
     }
 
     /**
-     * xrayVless.cpp:22-39 on the flat `settings` object (no base parse: no dial fields, no ACE conversion of the
+     * xrayVless::ParseFromJson on the flat `settings` object (no base parse: no dial fields, no ACE conversion of the
      * address). A real Xray outbound with `settings.vnext` is flattened first the way the desktop subscription
-     * parser does before calling this ([normalizeForParse]).
+     * parser does before calling this ([normalizeForParse]). False when the stream does not parse, so the importer
+     * keeps a lossless custom Xray outbound; the DB loader ignores the result.
      */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("protocol") != "vless") return false
@@ -75,14 +123,19 @@ class XrayVless : Outbound("xrayvless") {
             if (settings.contains("id")) uuid = settings.string("id")
             if (settings.contains("encryption")) encryption = settings.string("encryption")
         }
+        var streamParsed = true
         val stream = source.obj("streamSettings")
-        if (stream.isNotEmpty()) streamSetting.parseFromJson(stream)
+        if (stream.isNotEmpty()) streamParsed = streamSetting.parseFromJson(stream)
         val mux = source.obj("mux")
         if (mux.isNotEmpty()) multiplex.parseFromJson(mux)
-        return true
+        if (ParseDiag.active()) {
+            flow = importFlow(flow)
+            encryption = importEncryption(encryption)
+        }
+        return streamParsed
     }
 
-    /** xrayVless.cpp:67-84: no dial-field query items; '+' goes out as %2B so receivers don't decode it as a space. */
+    /** xrayVless::ExportToLink: no dial-field query items; '+' goes out as %2B so receivers don't decode it as a space. */
     override fun exportToLink(): String {
         val url = LinkBuilder("vless")
         url.plusAsEscape = true
@@ -98,7 +151,7 @@ class XrayVless : Outbound("xrayvless") {
         return url.build()
     }
 
-    /** xrayVless.cpp:71-85. */
+    /** xrayVless::ExportToJson. */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (name.isNotEmpty()) obj["tag"] = name
@@ -111,7 +164,7 @@ class XrayVless : Outbound("xrayvless") {
         return obj
     }
 
-    /** xrayVless.cpp:87-92: the sing-box side placeholder (CheckConfig / IsValid only). */
+    /** xrayVless::Build: the sing-box side placeholder (CheckConfig / IsValid only). */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "socks"
@@ -119,7 +172,7 @@ class XrayVless : Outbound("xrayvless") {
         return BuildResult(obj)
     }
 
-    /** xrayVless.cpp:94-107. */
+    /** xrayVless::BuildXray; no bind interface, so no BindXrayDownloadLeg: binding is wired by the core. */
     override fun buildXray(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["protocol"] = "vless"
@@ -131,7 +184,7 @@ class XrayVless : Outbound("xrayvless") {
         return BuildResult(obj)
     }
 
-    /** xrayVless.cpp:74-79 / 96-101: address, port, id and encryption always; flow unless empty or "none". */
+    /** xrayVless ExportToJson / BuildXray: address, port, id and encryption always; flow unless empty or "none". */
     private fun settingsJson(): JsonObject {
         val settings = JsonObject()
         settings["address"] = server
@@ -142,28 +195,73 @@ class XrayVless : Outbound("xrayvless") {
         return settings
     }
 
-    /** xrayVless.h:26-28. */
+    /** xrayVless.h. */
     override fun displayType(): String = "VLESS (Xray)"
 
-    /** xrayVless.cpp:126-133. */
+    /** xrayVless::GetSecurity: VLESS Encryption wraps the whole XHTTP connection, so the download leg cannot weaken it. */
     override fun security(): SecurityInfo {
         val info = super.security()
-        if (info.level == SecurityLevel.None && isVlessEncrypted(encryption)) {
-            return info.copy(label = "Encrypted", level = SecurityLevel.Secure)
+        if (isVlessEncrypted(encryption)) {
+            if (info.level == SecurityLevel.None) return info.copy(label = "Encrypted", level = SecurityLevel.Secure)
+            return info
         }
-        return info
+        if (normalizeXrayNetwork(streamSetting.network) != "xhttp") return info
+        val stream = jsonObjectOf("network" to "xhttp", "xhttpSettings" to streamSetting.xhttp.exportToJson())
+        return withXrayDownloadLeg(info, getAddress(), xrayDownloadLeg(jsonObjectOf("streamSettings" to stream)))
+    }
+
+    /** xrayVless::StripForeignState: the XHTTP download leg is a whole Xray stream kept as written, so it can carry a TLS key log and the source's dialer settings. */
+    override fun stripForeignState(issues: MutableList<Issue>) {
+        val x = streamSetting.xhttp
+        val at = "streamSettings.xhttpSettings.extra."
+        fun strip(download: JsonObject, downloadAt: String): Boolean {
+            val keyLog = stripXrayStreamKeyLog(download, downloadAt, issues)
+            return stripXrayDialerState(download) || keyLog
+        }
+        val download = JsonInput.parseObject(x.downloadSettings)
+        if (download.isNotEmpty() && strip(download, at + "downloadSettings.")) x.downloadSettings = download.toCompact()
+        for (key in x.rawExtra.keys()) {
+            if (!key.equals("downloadSettings", ignoreCase = true)) continue
+            val extraDownload = x.rawExtra[key] as? JsonObject ?: continue
+            strip(extraDownload, "$at$key.")
+        }
+    }
+
+    /** xrayVless::Validate. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Error, "id", Validation.xrayId(uuid))
+        issues.addIssue(Severity.Error, "encryption", XrayVlessChecks.xrayVlessEncryption(encryption))
+        val flowMessage = Validation.oneOf(flow, listOf("", "none") + xrayFlows)
+        if (flowMessage.isNotEmpty()) {
+            issues.addIssue(Severity.Error, "flow", flowMessage, flow)
+        } else {
+            issues.addIssue(
+                Severity.Error, "flow",
+                XrayVlessChecks.xrayVlessVision(flow, encryption, streamSetting.network, streamSetting.security), flow,
+            )
+        }
     }
 
     companion object {
         /**
-         * IsVlessEncrypted (xrayVless.h:9-10): Xray loads only "none" or an mlkem768x25519plus key string, which
+         * IsVlessEncrypted (xrayVless.h): Xray loads only "none" or an mlkem768x25519plus key string, which
          * encrypts the payload without transport security.
          */
         @JvmStatic
         fun isVlessEncrypted(encryption: String): Boolean = encryption.isNotEmpty() && encryption != "none"
 
+        /** xrayVlessImportFlow: Xray compares flow names exactly. */
+        private fun importFlow(raw: String): String = raw.trim().lowercase()
+
+        /** xrayVlessImportEncryption: "none" in any case becomes "none"; key strings are kept as written. */
+        private fun importEncryption(raw: String): String {
+            val value = raw.trim()
+            return if (value.equals("none", ignoreCase = true)) "none" else value
+        }
+
         /**
-         * normalizeXrayVlessForParse (SubscriptionParser.cpp:142-162): a real Xray outbound nests the server under
+         * normalizeXrayVlessForParse (SubscriptionParser.cpp): a real Xray outbound nests the server under
          * `settings.vnext[0]` and the user under its `users[0]`, while [parseFromJson] reads a flat `settings`.
          * Returns the object unchanged when it is already flat, the flattened copy when the nested form is complete,
          * and null when it is not a vless outbound or the nested form is incomplete (the desktop then keeps such an

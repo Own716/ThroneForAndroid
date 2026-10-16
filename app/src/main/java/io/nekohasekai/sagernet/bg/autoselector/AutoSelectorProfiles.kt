@@ -1,10 +1,12 @@
 package io.nekohasekai.sagernet.bg.autoselector
 
 import io.nekohasekai.sagernet.bg.test.TestEngine
+import io.nekohasekai.sagernet.database.GroupSort
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.SettingsMapper
+import io.nekohasekai.sagernet.database.SortInput
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.outbound.config.AutoSelectorPlanner
 import io.nekohasekai.sagernet.outbound.types.AutoSelector
@@ -41,21 +43,26 @@ object AutoSelectorProfiles {
      * AutoSelectorMonitor::PersistHealth (AutoSelectorMonitor.cpp:104-135): a probed member's average becomes its
      * profile's latency, a dead one's -1 with the core's last error as the test error; softer states are inconclusive
      * and keep their result. Only changed latencies are written, and only the latency result: traffic and the other
-     * test columns stay. [profileIds] maps the members' tags to profiles.
+     * test columns stay; kept sorts that read test results move the changed ones. [profileIds] maps the members'
+     * tags to profiles.
      */
     fun saveHealth(profileIds: Map<String, Long>, members: List<AutoSelectorStatus.Member>) {
         val at = System.currentTimeMillis() / 1000
         val dao = SagerDatabase.proxyDao
+        val dirty = ArrayList<Long>()
         SagerDatabase.instance.runInTransaction {
             for (member in members) {
                 val id = profileIds[member.tag] ?: continue
                 if (member.probes == 0) continue
-                when {
+                val written = when {
                     member.isUsable && member.averageMs > 0 -> dao.updateLatency(id, member.averageMs, at, null)
                     member.isDead -> dao.updateLatency(id, -1, at, member.lastError.ifEmpty { null })
+                    else -> 0
                 }
+                if (written > 0) dirty.add(id)
             }
         }
+        GroupSort.repositionLater(dirty, SortInput.TEST_RESULT)
     }
 
     /** profile_start (mainwindow_profile_lifecycle.cpp:206-221): the plan succeeds and wants measurements first. */

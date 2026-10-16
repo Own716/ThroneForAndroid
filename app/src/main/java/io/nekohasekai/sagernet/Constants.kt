@@ -58,6 +58,7 @@ object Key {
     const val RESUME_AFTER_UPDATE = "resumeAfterUpdate"
     const val BATTERY_PROMPT_SHOWN = "batteryPromptShown"
     const val LOG_EXPORT_REDACT = "logExportRedact"
+    const val LOG_FONT_SIZE = "logFontSize"
     const val HWID_FALLBACK = "hwidFallback"
     const val WIFI_PERMISSION_ASKED = "wifiPermissionAsked"
     const val SERVICE_ERROR = "serviceError"

@@ -47,11 +47,28 @@ data class ProxyGroup(
     @ColumnInfo(name = "sub_options_json", defaultValue = "{}") var subOptions: SubscriptionOptions = SubscriptionOptions(),
     /** The last fetch's [SubUserInfo]; read it through [subInfo]. */
     @ColumnInfo(name = "sub_metadata_json", defaultValue = "{}") var subMetadata: SubUserInfo = SubUserInfo(),
+    /** The [GroupSortMethod] ordinal the group is kept sorted by; read both through [sort]. */
+    @ColumnInfo(name = "sort_method", defaultValue = "0") var sortMethod: Int = 0,
+    @ColumnInfo(name = "sort_descending", defaultValue = "0") var sortDescending: Boolean = false,
     @ColumnInfo(name = "display_order", defaultValue = "0") var displayOrder: Long = 0L,
 ) : Parcelable {
 
     @get:Ignore
     val isSubscription: Boolean get() = url.isNotEmpty()
+
+    /** Group::sort, the order kept as the profiles change; RAW keeps the manual order (GroupsRepo.cpp groupFromJson). */
+    @get:Ignore
+    val sort: GroupSortAction
+        get() {
+            val method = GroupSortMethod.of(sortMethod)
+            return GroupSortAction(method, method != GroupSortMethod.RAW && sortDescending)
+        }
+
+    /** Group::SortReads: whether a change of [input] can move a row of the kept sort. */
+    fun sortReads(input: SortInput): Boolean = GroupSort.reads(sort.method, input)
+
+    /** Group::KeepsSorted. */
+    fun keepsSorted(): Boolean = sortReads(SortInput.MEMBERSHIP)
 
     /** GroupsRepo.cpp:110-112: rows written before `sub_metadata_json` keep the raw header in [info]. */
     @get:Ignore
@@ -99,6 +116,13 @@ data class ProxyGroup(
 
         @Query("UPDATE `groups` SET `display_order` = :order WHERE `id` = :groupId")
         fun setDisplayOrder(groupId: Long, order: Long)
+
+        /** Group::SetSort without rewriting the rest of the row; 0 when nothing changed. */
+        @Query(
+            "UPDATE `groups` SET `sort_method` = :method, `sort_descending` = :descending " +
+                "WHERE `id` = :groupId AND (`sort_method` != :method OR `sort_descending` != :descending)"
+        )
+        fun setSort(groupId: Long, method: Int, descending: Boolean): Int
 
         /**
          * A subscription refresh's stamp without rewriting the rest of the row; the structured info replaces the raw

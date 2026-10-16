@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -15,6 +16,41 @@ import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkCodec
 import io.nekohasekai.sagernet.outbound.link.LinkParser
 import io.nekohasekai.sagernet.outbound.link.LinkQuery
+import io.nekohasekai.sagernet.validation.CommonChecks
+import io.nekohasekai.sagernet.validation.Empty
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Rule
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.acceptOptional
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
+
+/** naive.h naiveCongestionControls. */
+val naiveCongestionControls = listOf("bbr", "bbr2", "cubic", "reno")
+
+/** The Checks of naive.h. */
+object NaiveChecks {
+    /** NaiveExtraHeaders: Name="value" pairs as the editor writes them; parseHeaderPairs drops every header when one is unpaired. */
+    @JvmStatic
+    fun naiveExtraHeaders(text: String): String {
+        if (text.isBlank() || CommonChecks.parseHeaderPairs(text).isNotEmpty()) return ""
+        return vtr(R.string.validation_naive_extra_headers_format)
+    }
+
+    /** NaiveExtraHeaderNames. */
+    @JvmStatic
+    fun naiveExtraHeaderNames(pairs: List<String>): String {
+        var i = 0
+        while (i + 1 < pairs.size) {
+            val message = Validation.httpToken(pairs[i], Empty.Required)
+            if (message.isNotEmpty()) return vtr(R.string.validation_naive_header_name, pairs[i], message)
+            i += 2
+        }
+        return ""
+    }
+}
 
 /** naive (include/configs/outbounds/naive.h, src/configs/outbounds/naive.cpp). */
 class Naive : Outbound("naive") {
@@ -38,7 +74,7 @@ class Naive : Outbound("naive") {
     override fun limitedTls(): Boolean = true
     override fun getTls(): Tls = tls
 
-    /** naive.cpp:70-102: `naive+quic://` selects QUIC; only sni/certificates/fragment/ECH of the TLS block are read. */
+    /** naive::ParseFromLink: `naive+quic://` selects QUIC; only sni/certificates/fragment/ECH of the TLS block are read. */
     override fun parseFromLink(link: String): Boolean {
         val escaped = escapeUserInfoAts(link)
         val url = LinkParser.parse(escaped)
@@ -49,11 +85,19 @@ class Naive : Outbound("naive") {
         password = url.password
         if (serverPort == 0) serverPort = 443
         if (q.has("uot")) uot = q.value("uot") == "true" || QtStrings.toInt(q.value("uot")) > 0
-        if (q.has("insecure-concurrency")) insecure_concurrency = maxOf(0, QtStrings.toInt(q.value("insecure-concurrency")))
+        if (q.has("insecure-concurrency")) {
+            val value = q.value("insecure-concurrency").trim()
+            if (keep("insecure-concurrency", value, Validation.Rules.int(0, Int.MAX_VALUE.toLong()))) {
+                insecure_concurrency = maxOf(0, QtStrings.toInt(value))
+            }
+        }
         if (q.has("extra-headers")) extra_headers = parseExtraHeaders(q)
         if (url.scheme == "naive+quic") {
             quic = true
-            if (q.has("congestion_control")) congestion_control = q.value("congestion_control")
+            if (q.has("congestion_control")) {
+                val value = q.value("congestion_control").trim()
+                if (keep("congestion_control", value, Validation.Rules.oneOf(naiveCongestionControls))) congestion_control = value
+            }
         }
         tls.enabled = true
         if (q.has("sni")) tls.server_name = q.value("sni")
@@ -67,7 +111,7 @@ class Naive : Outbound("naive") {
         return server.isNotEmpty()
     }
 
-    /** naive.cpp:104-129. */
+    /** naive::ParseFromJson. */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("type") != "naive") return false
         super.parseFromJson(obj)
@@ -89,9 +133,21 @@ class Naive : Outbound("naive") {
             if (obj.isObject("udp_over_tcp")) uot = obj.obj("udp_over_tcp").bool("enabled")
         }
         if (obj.contains("quic")) quic = obj.bool("quic")
-        if (obj.contains("quic_congestion_control")) congestion_control = obj.string("quic_congestion_control")
+        if (obj.contains("quic_congestion_control")) {
+            val value = obj.string("quic_congestion_control")
+            if (keep("quic_congestion_control", value, Validation.Rules.oneOf(naiveCongestionControls))) congestion_control = value
+        }
         if (obj.contains("tls")) tls.parseFromJson(naiveTls(obj.obj("tls"), keepFragment = true))
         return true
+    }
+
+    /** naive::Validate. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        if (quic) {
+            issues.addIssue(Severity.Error, "quic_congestion_control", Validation.oneOf(congestion_control, naiveCongestionControls), congestion_control)
+        }
+        issues.addIssue(Severity.Warning, "extra_headers", NaiveChecks.naiveExtraHeaderNames(extra_headers))
     }
 
     /** naive.cpp:131-160. */
@@ -162,8 +218,12 @@ class Naive : Outbound("naive") {
     override fun security(): SecurityInfo = securityFromTls(if (quic) "QUIC" else "")
 
     companion object {
+        /** naiveKeep: without a diagnostics scope (DB loads, clones) a parse keeps every value as it always did. */
+        private fun keep(field: String, value: String, rule: Rule): Boolean =
+            !ParseDiag.active() || acceptOptional(field, rule(value), value)
+
         /**
-         * naive.cpp:58-67: the core's naive outbound reads only these keys and refuses to start on most other TLS
+         * naiveTLS: the core's naive outbound reads only these keys and refuses to start on most other TLS
          * options; `fragment` is kept in the persisted form only, for the dialer-level ("custom") fragment of baseBuild.
          */
         private fun naiveTls(tls: JsonObject, keepFragment: Boolean): JsonObject {
@@ -195,18 +255,21 @@ class Naive : Outbound("naive") {
             return link.substring(0, from) + userInfo.replace("@", "%40") + link.substring(lastAt)
         }
 
-        // naive.cpp:33-47 reads the FullyEncoded item, turns every '+' into a space (form encoding, as Husi writes it)
-        // and percent-decodes; on the PrettyDecoded item the same '+' rule holds because a %2B escape is kept there
-        // while a literal '+' is not, so decoding that form is equivalent
+        // naive.cpp parseExtraHeaders reads the FullyEncoded item, turns every '+' into a space (form encoding, as Husi
+        // writes it) and percent-decodes; on the PrettyDecoded item the same '+' rule holds because a %2B escape is kept
+        // there while a literal '+' is not, so decoding that form is equivalent
         private fun parseExtraHeaders(q: LinkQuery): MutableList<String> {
             val text = LinkCodec.decodeFully(q.value("extra-headers").replace('+', ' '))
             val pairs = ArrayList<String>()
             for (rawLine in QtStrings.splitSkipEmpty(text, "\n")) {
                 val line = if (rawLine.endsWith('\r')) rawLine.dropLast(1) else rawLine
                 val colon = line.indexOf(':')
-                if (colon <= 0) continue
-                val name = line.substring(0, colon).trim()
-                if (name.isEmpty()) continue
+                val name = if (colon > 0) line.substring(0, colon).trim() else ""
+                if (name.isEmpty()) {
+                    // The line may carry a credential, so it is not echoed.
+                    if (line.isNotBlank()) ParseDiag.warn("extra-headers", vtr(R.string.validation_naive_header_line))
+                    continue
+                }
                 pairs.add(name)
                 pairs.add(line.substring(colon + 1).trim())
             }

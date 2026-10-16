@@ -8,6 +8,7 @@ import io.nekohasekai.sagernet.outbound.Outbound
 import io.nekohasekai.sagernet.outbound.config.ConfigGenerator
 import io.nekohasekai.sagernet.outbound.config.GeneratedConfig
 import io.nekohasekai.sagernet.outbound.config.GeneratorSettings
+import io.nekohasekai.sagernet.outbound.config.PortLease
 import io.nekohasekai.sagernet.outbound.config.ProfileProvider
 import io.nekohasekai.sagernet.outbound.config.RoutingInput
 import io.nekohasekai.sagernet.outbound.config.TestCandidate
@@ -32,25 +33,26 @@ object CoreConfigs {
 
     /**
      * The main config of [profile]; throws with the generator's message when it cannot be built. [deferRuleSets]
-     * is GeneratorSettings.deferRuleSets, for a start the user let go without its rule-sets.
+     * is GeneratorSettings.deferRuleSets, for a start the user let go without its rule-sets. A config that will run
+     * leases its bridge ports to [ports] (ConfigGenerator.build).
      */
-    fun buildMain(profile: ProxyEntity, deferRuleSets: Boolean = false): GeneratedConfig {
+    fun buildMain(profile: ProxyEntity, deferRuleSets: Boolean = false, ports: PortLease? = null): GeneratedConfig {
         val (landing, front) = groupProxies(profile.groupId)
         val settings = SettingsMapper.generatorSettings().copy(deferRuleSets = deferRuleSets)
-        val generated = generator(SettingsMapper.routingInput(), settings).build(profile.id, landing, front)
+        val generated = generator(SettingsMapper.routingInput(), settings).build(profile.id, landing, front, ports)
         if (!generated.ok) error(generated.error ?: "config generation failed")
         return generated
     }
 
     /** One test config for every candidate at once, each under its own group's landing / front proxy. */
-    fun buildTest(profileIds: List<Long>): GeneratedConfig {
+    fun buildTest(profileIds: List<Long>, ports: PortLease? = null): GeneratedConfig {
         val groups = HashMap<Long, Pair<Long, Long>>()
         val candidates = profileIds.map { id ->
             val groupId = SagerDatabase.proxyDao.getById(id)?.groupId ?: -1L
             val (landing, front) = groups.getOrPut(groupId) { groupProxies(groupId) }
             TestCandidate(id, landing, front)
         }
-        return generator().buildTest(candidates)
+        return generator().buildTest(candidates, ports)
     }
 
     /** (landing_proxy_id, front_proxy_id) of a group, -1 when unset (any id <= 0 is "none"). */

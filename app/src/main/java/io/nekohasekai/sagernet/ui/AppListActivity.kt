@@ -19,11 +19,13 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.simplecityapps.recyclerview_fastscroll.views.FastScrollRecyclerView
 import io.nekohasekai.sagernet.BuildConfig
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.databinding.LayoutAppListBinding
 import io.nekohasekai.sagernet.databinding.LayoutAppsItemBinding
 import io.nekohasekai.sagernet.ktx.crossFadeFrom
@@ -327,8 +329,58 @@ class AppListActivity : ThemedActivity() {
                 }
                 return true
             }
+
+            R.id.action_copy_to_proxied_apps -> {
+                copyToProxiedApps()
+                return true
+            }
         }
         return super.onOptionsItemSelected(item)
+    }
+
+    /**
+     * #93: Apps VPN mode decides which apps the tun captures at all, a rule's apps only pick an outbound for captured
+     * traffic, so this copies the selection there rather than merging the two. Bypass mode lists the apps kept out of
+     * the VPN, so "add" there takes them off that list; a remembered bypass list is never turned into a proxy list.
+     */
+    private fun copyToProxiedApps() {
+        val packages = selected.filter { it != RouteRule.UNKNOWN_PACKAGE }
+        if (packages.isEmpty()) {
+            Snackbar.make(binding.list, R.string.picker_copy_none, Snackbar.LENGTH_LONG).show()
+            return
+        }
+        val stored = DataStore.individual.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val enabled = DataStore.proxyApps
+        val bypass = DataStore.bypass
+
+        fun save(bypassMode: Boolean, list: List<String>) {
+            DataStore.proxyApps = true
+            DataStore.bypass = bypassMode
+            DataStore.individual = list.distinct().joinToString("\n")
+            Snackbar.make(binding.list, R.string.picker_copy_done, Snackbar.LENGTH_LONG).show()
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this).setTitle(R.string.picker_copy_to_proxied_apps)
+        when {
+            enabled && bypass -> {
+                dialog.setMessage(getString(R.string.picker_copy_bypass_message, packages.size))
+                dialog.setPositiveButton(R.string.picker_copy_remove_bypass) { _, _ -> save(true, stored - packages.toSet()) }
+                dialog.setNeutralButton(R.string.picker_copy_proxy_only) { _, _ -> save(false, packages) }
+            }
+
+            bypass && stored.isNotEmpty() -> {
+                dialog.setMessage(getString(R.string.picker_copy_off_bypass_message, packages.size))
+                dialog.setPositiveButton(R.string.picker_copy_proxy_only) { _, _ -> save(false, packages) }
+            }
+
+            else -> {
+                val message = if (enabled) R.string.picker_copy_proxy_message else R.string.picker_copy_off_message
+                dialog.setMessage(getString(message, packages.size))
+                dialog.setPositiveButton(R.string.picker_copy_add) { _, _ -> save(false, stored + packages) }
+                dialog.setNeutralButton(R.string.picker_copy_replace) { _, _ -> save(false, packages) }
+            }
+        }
+        dialog.setNegativeButton(android.R.string.cancel, null).show()
     }
 
     override fun onSupportNavigateUp(): Boolean {

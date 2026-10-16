@@ -59,19 +59,46 @@ enum class SendHwid(val value: Int) {
     }
 }
 
+/** Group.h subTlsVersion (sub_tls_version, sub_options `tls_version`); persisted as ints, append only. */
+enum class SubTlsVersion(val value: Int) {
+    AUTO(0), TLS12(1), TLS13(2);
+
+    companion object {
+        @JvmStatic
+        fun of(value: Int): SubTlsVersion? = entries.firstOrNull { it.value == value }
+    }
+}
+
+/** Group.h subHttpVersion (sub_http_version, sub_options `http_version`); persisted as ints, append only. */
+enum class SubHttpVersion(val value: Int) {
+    AUTO(0), HTTP11(1);
+
+    companion object {
+        @JvmStatic
+        fun of(value: Int): SubHttpVersion? = entries.firstOrNull { it.value == value }
+    }
+}
+
 /**
- * The per-group subscription options (`SubscriptionOptions`, Group.h:43-63) stored in `groups.sub_options_json`.
- * Empty strings inherit the global subscription settings; `removeUnavailable` and `sortByLatency` only take effect
- * while `urlTest` is on. The codec is Group.cpp:8-45: defaults are omitted, so all defaults are `{}`.
+ * The per-group subscription options (`SubscriptionOptions`, Group.h) stored in `groups.sub_options_json`.
+ * Empty strings and null values inherit the global subscription settings; `removeUnavailable` and `sortByLatency`
+ * only take effect while `urlTest` is on. The codec is Group.cpp ToJson/FromJson: defaults are omitted, so all
+ * defaults are `{}`.
  */
 @Parcelize
 data class SubscriptionOptions(
     var userAgent: String = "",
+    var tlsVersion: SubTlsVersion? = null,
+    var httpVersion: SubHttpVersion? = null,
     var sendHwid: SendHwid = SendHwid.KEEP_DEFAULT,
     var hwid: String = "",
     var hwidOs: String = "",
     var hwidOsVersion: String = "",
     var hwidModel: String = "",
+    /** Minutes, at least 30; 0 follows sub_auto_update. */
+    var updateInterval: Int = 0,
+    /** Null follows sub_respect_server_interval. */
+    var respectServerInterval: Boolean? = null,
     var keepWorking: Boolean = false,
     var removeDuplicates: Boolean = false,
     var removeInsecure: Boolean = false,
@@ -89,11 +116,15 @@ data class SubscriptionOptions(
     fun toJson(): JsonObject {
         val json = JsonObject()
         if (userAgent.isNotEmpty()) json["user_agent"] = userAgent
+        tlsVersion?.let { json["tls_version"] = it.value }
+        httpVersion?.let { json["http_version"] = it.value }
         if (sendHwid != SendHwid.KEEP_DEFAULT) json["send_hwid"] = sendHwid.value
         if (hwid.isNotEmpty()) json["hwid"] = hwid
         if (hwidOs.isNotEmpty()) json["hwid_os"] = hwidOs
         if (hwidOsVersion.isNotEmpty()) json["hwid_os_version"] = hwidOsVersion
         if (hwidModel.isNotEmpty()) json["hwid_model"] = hwidModel
+        if (updateInterval > 0) json["update_interval"] = updateInterval
+        respectServerInterval?.let { json["respect_server_interval"] = it }
         if (keepWorking) json["keep_working"] = true
         if (removeDuplicates) json["remove_duplicates"] = true
         if (removeInsecure) json["remove_insecure"] = true
@@ -117,12 +148,16 @@ data class SubscriptionOptions(
             val mode = json.int("send_hwid")
             return SubscriptionOptions(
                 userAgent = json.string("user_agent"),
+                tlsVersion = json.intOrNull("tls_version")?.let(SubTlsVersion::of),
+                httpVersion = json.intOrNull("http_version")?.let(SubHttpVersion::of),
                 sendHwid = if (mode == SendHwid.ON.value || mode == SendHwid.OFF.value) SendHwid.of(mode)
                 else SendHwid.KEEP_DEFAULT,
                 hwid = json.string("hwid"),
                 hwidOs = json.string("hwid_os"),
                 hwidOsVersion = json.string("hwid_os_version"),
                 hwidModel = json.string("hwid_model"),
+                updateInterval = maxOf(json.int("update_interval"), 0),
+                respectServerInterval = if (json.isBool("respect_server_interval")) json.bool("respect_server_interval") else null,
                 keepWorking = json.bool("keep_working"),
                 removeDuplicates = json.bool("remove_duplicates"),
                 removeInsecure = json.bool("remove_insecure"),
@@ -134,6 +169,13 @@ data class SubscriptionOptions(
                 nameExclude = json.string("name_exclude"),
                 showInfoCard = !json.isBool("show_info_card") || json.bool("show_info_card"),
             )
+        }
+
+        /** QJsonValue::toInt(-1): null unless a whole number that fits an int. */
+        private fun JsonObject.intOrNull(key: String): Int? = when (val v = this[key]) {
+            is Long -> if (v >= Int.MIN_VALUE && v <= Int.MAX_VALUE) v.toInt() else null
+            is Double -> if (v == Math.rint(v) && v >= Int.MIN_VALUE && v <= Int.MAX_VALUE) v.toInt() else null
+            else -> null
         }
 
         /** A column that is not a JSON object reads as all defaults (GroupsRepo.cpp:212-215). */

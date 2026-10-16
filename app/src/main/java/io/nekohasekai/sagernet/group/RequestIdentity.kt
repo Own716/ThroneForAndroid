@@ -3,13 +3,17 @@ package io.nekohasekai.sagernet.group
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SendHwid
+import io.nekohasekai.sagernet.database.SubHttpVersion
+import io.nekohasekai.sagernet.database.SubTlsVersion
 import io.nekohasekai.sagernet.ktx.appUserAgent
 
-/** RequestIdentity (GroupUpdater.hpp:19-26): the user agent and HWID headers of a subscription request. */
+/** RequestIdentity (GroupUpdater.hpp): the user agent, HWID headers and TLS / HTTP versions of a subscription request. */
 class RequestIdentity(
     @JvmField val userAgent: String,
     @JvmField val sendHwid: Boolean,
     @JvmField val device: DeviceDetails,
+    @JvmField val tlsVersion: SubTlsVersion = SubTlsVersion.AUTO,
+    @JvmField val httpVersion: SubHttpVersion = SubHttpVersion.AUTO,
 ) {
 
     /** identityHeaders (GroupUpdater.cpp:59-70). */
@@ -66,16 +70,20 @@ class RequestIdentity(
             var userAgent = appUserAgent()
             var sendHwid = DataStore.subSendHwid
             var device = applyCustomHwidParams(DeviceDetails.get(), DataStore.subCustomHwidParams)
-            if (group == null) return RequestIdentity(userAgent, sendHwid, device)
+            var tlsVersion = SubTlsVersion.of(DataStore.subTlsVersion) ?: SubTlsVersion.AUTO
+            var httpVersion = SubHttpVersion.of(DataStore.subHttpVersion) ?: SubHttpVersion.AUTO
+            if (group == null) return RequestIdentity(userAgent, sendHwid, device, tlsVersion, httpVersion)
 
             val options = group.subOptions
             if (usableHeaderValue(options.userAgent)) userAgent = options.userAgent
+            options.tlsVersion?.let { tlsVersion = it }
+            options.httpVersion?.let { httpVersion = it }
             if (options.sendHwid != SendHwid.KEEP_DEFAULT) sendHwid = options.sendHwid == SendHwid.ON
             if (usableHeaderValue(options.hwid)) device = device.copy(hwid = options.hwid)
             if (usableHeaderValue(options.hwidOs)) device = device.copy(os = options.hwidOs)
             if (usableHeaderValue(options.hwidOsVersion)) device = device.copy(osVersion = options.hwidOsVersion)
             if (usableHeaderValue(options.hwidModel)) device = device.copy(model = options.hwidModel)
-            return RequestIdentity(userAgent, sendHwid, device)
+            return RequestIdentity(userAgent, sendHwid, device, tlsVersion, httpVersion)
         }
     }
 }

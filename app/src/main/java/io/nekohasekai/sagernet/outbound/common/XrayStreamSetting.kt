@@ -1,32 +1,539 @@
 package io.nekohasekai.sagernet.outbound.common
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
+import io.nekohasekai.sagernet.outbound.QtStrings
+import io.nekohasekai.sagernet.outbound.SecurityInfo
+import io.nekohasekai.sagernet.outbound.SecurityLevel
 import io.nekohasekai.sagernet.outbound.import.ClashProxy
 import io.nekohasekai.sagernet.outbound.json.JsonArray
-import io.nekohasekai.sagernet.outbound.QtStrings
 import io.nekohasekai.sagernet.outbound.json.JsonInput
+import io.nekohasekai.sagernet.outbound.json.JsonNull
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
 import io.nekohasekai.sagernet.outbound.json.jsonObjectOf
 import io.nekohasekai.sagernet.outbound.link.Hosts
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.outbound.link.LinkQuery
 import io.nekohasekai.sagernet.outbound.link.ParsedLink
+import io.nekohasekai.sagernet.ui.json.engine.JsonTree
+import io.nekohasekai.sagernet.ui.json.engine.JsonType
+import io.nekohasekai.sagernet.validation.CommonChecks
+import io.nekohasekai.sagernet.validation.Empty
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.acceptOptional
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.jsonStringList
+import io.nekohasekai.sagernet.validation.readQueryInt
+import io.nekohasekai.sagernet.validation.vtr
 
-/** xrayStreamSetting.h:5-9 */
+/** XrayNetworks (xrayStreamSetting.h). */
 val xrayNetworks = listOf("raw", "xhttp", "ws", "httpupgrade", "grpc")
-/** xrayTLS (xrayStreamSetting.h:17-33, xrayStreamSetting.cpp:248-318). No insecure flag is modelled. */
+val xrayXhttpModes = listOf("auto", "packet-up", "stream-up", "stream-one")
+val xrayXhttpMetaPlacements = listOf("", "path", "cookie", "header", "query")
+val xrayXhttpUplinkDataPlacements = listOf("", "auto", "body", "cookie", "header")
+val xrayXhttpUplinkMethods = listOf("", "POST", "PUT", "PATCH", "GET")
+
+/** NormalizeXrayNetwork (xrayStreamSetting.cpp): the aliases Xray itself accepts (tcp, splithttp, websocket), case-insensitively. */
+fun normalizeXrayNetwork(network: String): String = when (val lower = network.lowercase()) {
+    "tcp" -> "raw"
+    "splithttp" -> "xhttp"
+    "websocket" -> "ws"
+    else -> lower
+}
+
+/** XrayLower (xrayStreamSetting.cpp): Go's strings.ToLower for comparing against ASCII names (U+0130 -> i, Kelvin sign -> k). */
+fun xrayLower(text: String): String {
+    val out = StringBuilder(text.length)
+    for (c in text) {
+        out.append(
+            when {
+                c in 'A'..'Z' -> c + 32
+                c.code == 0x0130 -> 'i'
+                c.code == 0x212A -> 'k'
+                else -> c
+            },
+        )
+    }
+    return out.toString()
+}
+
+enum class XrayLegProtection { Verified, Unverified, Plain }
+
+// An object inside a local copy, with its path for messages ("" or ending in '.').
+private class XrayNode(@JvmField val obj: JsonObject, @JvmField val at: String)
+
+private fun xrayRoot(obj: JsonObject, at: String = ""): List<XrayNode> = listOf(XrayNode(obj, at))
+
+// Every key Xray's case-folding decoder reads as name, in QJsonObject order.
+private fun xrayKeysNamed(o: JsonObject, name: String): List<String> = o.sortedKeys().filter { it.equals(name, ignoreCase = true) }
+
+private fun xrayRemoveNamed(o: JsonObject, name: String): Boolean {
+    val keys = xrayKeysNamed(o, name)
+    for (key in keys) o.remove(key)
+    return keys.isNotEmpty()
+}
+
+private fun xrayUnset(value: Any?): Boolean = value == null || value === JsonNull
+
+// dialerProxy names an outbound of the source config, and domainStrategy would outrank the core's resolver; Xray folds case.
+private fun xrayStripDialerKeys(sockopt: JsonObject): Boolean {
+    val proxy = xrayRemoveNamed(sockopt, "dialerProxy")
+    val strategy = xrayRemoveNamed(sockopt, "domainStrategy")
+    return proxy || strategy
+}
+
+/**
+ * xrayStreamEditLive: Go merges every spelling of a pointer field, holders in turn, into one struct and a null
+ * discards the earlier ones; those are dropped, any other non-object is skipped, and [edit] gets the rest in place.
+ */
+private fun xrayEditLive(holders: List<XrayNode>, name: String, create: Boolean, edit: (List<XrayNode>) -> Unit) {
+    val spellings = ArrayList<Pair<XrayNode, String>>()
+    for (holder in holders) for (key in xrayKeysNamed(holder.obj, name)) spellings.add(holder to key)
+    var discarded = 0
+    for (i in spellings.indices) if (spellings[i].first.obj.isNull(spellings[i].second)) discarded = i + 1
+    for (i in 0 until discarded) spellings[i].first.obj.remove(spellings[i].second)
+    val live = spellings.drop(discarded).filterTo(ArrayList()) { it.first.obj[it.second] is JsonObject }
+    if (live.isEmpty()) {
+        if (!create || holders.isEmpty()) return
+        holders.last().obj[name] = JsonObject()
+        live.add(holders.last() to name)
+    }
+    edit(live.map { (holder, key) -> XrayNode(holder.obj.obj(key), holder.at + key + ".") })
+}
+
+/** xrayStreamLast: the value Go keeps across spellings (a null resets only a pointer field) and its path; null when unset. */
+private fun xrayLast(nodes: List<XrayNode>, name: String, pointer: Boolean): Pair<Any?, String?> {
+    var result: Any? = null
+    var at: String? = null
+    for (node in nodes) {
+        for (key in xrayKeysNamed(node.obj, name)) {
+            val value = node.obj[key]
+            if (value === JsonNull && !pointer) continue
+            result = value
+            at = node.at + key
+        }
+    }
+    return result to at
+}
+
+// A set method outranks network, and neither means tcp; only the XHTTP dialer reads downloadSettings.
+private fun xrayDialsXhttp(streams: List<XrayNode>): Boolean {
+    var transport = xrayLast(streams, "method", true).first
+    if (xrayUnset(transport)) transport = xrayLast(streams, "network", true).first
+    val name = xrayLower(transport as? String ?: "")
+    return name == "xhttp" || name == "splithttp"
+}
+
+// xhttpSettings outranks splithttpSettings, and extra is a json.RawMessage: its last spelling, even a null one, replaces the rest.
+private fun xrayEditDownloadLeg(streams: List<XrayNode>, edit: (List<XrayNode>) -> Unit) {
+    fun fromHolders(holders: List<XrayNode>) {
+        var extraHolder: XrayNode? = null
+        var extraKey = ""
+        for (holder in holders) {
+            for (key in xrayKeysNamed(holder.obj, "extra")) {
+                extraHolder = holder
+                extraKey = key
+            }
+        }
+        val holder = extraHolder
+        if (holder == null) {
+            xrayEditLive(holders, "downloadSettings", false, edit)
+            return
+        }
+        val extra = holder.obj[extraKey] as? JsonObject ?: return
+        xrayEditLive(xrayRoot(extra, holder.at + extraKey + "."), "downloadSettings", false, edit)
+    }
+    var xhttp = false
+    xrayEditLive(streams, "xhttpSettings", false) {
+        xhttp = true
+        fromHolders(it)
+    }
+    if (!xhttp) xrayEditLive(streams, "splithttpSettings", false) { fromHolders(it) }
+}
+
+// Every spelling loses the key and it is written once, into the last live sockopt, so Go's merge keeps it.
+private fun xraySetSockopt(streams: List<XrayNode>, key: String, value: String) {
+    xrayEditLive(streams, "sockopt", true) { sockopts ->
+        for (sockopt in sockopts) xrayRemoveNamed(sockopt.obj, key)
+        sockopts.last().obj[key] = value
+    }
+}
+
+// Xray's XHTTP dialer dereferences the download leg's destination and casts its transport settings unchecked: either crashes the core.
+private fun xrayDownloadEndpoint(issues: MutableList<Issue>, leg: List<XrayNode>) {
+    val at = leg.last().at
+    val address = xrayLast(leg, "address", true)
+    val port = xrayLast(leg, "port", false)
+    val method = xrayLast(leg, "method", true)
+    val transport = if (!xrayUnset(method.first)) method else xrayLast(leg, "network", true)
+    val value = transport.first
+    val transportName = when {
+        value is String -> xrayLower(value)
+        xrayUnset(value) -> "tcp"
+        else -> ""
+    }
+    if (transportName != "xhttp" && transportName != "splithttp") {
+        issues.addIssue(Severity.Error, transport.second ?: (at + "network"), vtr(R.string.validation_xray_download_network), value as? String ?: "")
+    }
+    val host = address.first
+    if (host !is String || host.trim().isEmpty()) {
+        issues.addIssue(Severity.Error, address.second ?: (at + "address"), vtr(R.string.validation_xray_download_address))
+    }
+    val portOk = when (val number = port.first) {
+        is Long -> number in 1L..65535L
+        is Double -> number == Math.floor(number) && number >= 1 && number <= 65535
+        else -> false
+    }
+    if (!portOk) issues.addIssue(Severity.Error, port.second ?: (at + "port"), vtr(R.string.validation_xray_download_port))
+}
+
+/** XrayDownloadLeg: the spellings Go merges into the one XHTTP download leg Xray dials for an outbound (the object holding streamSettings), in decode order. */
+fun xrayDownloadLeg(outbound: JsonObject): List<JsonObject> {
+    val leg = ArrayList<JsonObject>()
+    xrayEditLive(xrayRoot(outbound.copy()), "streamSettings", false) { streams ->
+        if (!xrayDialsXhttp(streams)) return@xrayEditLive
+        xrayEditDownloadLeg(streams) { spellings -> spellings.forEach { leg.add(it.obj) } }
+    }
+    return leg
+}
+
+/** XrayDownloadLegProtection: how Xray protects a download leg made of these spellings, and the server it dials. */
+fun xrayDownloadLegProtection(leg: List<JsonObject>): Pair<XrayLegProtection, String> {
+    val nodes = leg.map { XrayNode(it.copy(), "") }
+    val server = xrayLast(nodes, "address", true).first as? String ?: ""
+    val security = xrayLower(xrayLast(nodes, "security", false).first as? String ?: "")
+    if (security == "reality") return XrayLegProtection.Verified to server
+    if (security != "tls") return XrayLegProtection.Plain to server
+    var insecure = false
+    var pinned = false
+    xrayEditLive(nodes, "tlsSettings", false) { tls ->
+        insecure = xrayLast(tls, "allowInsecure", false).first as? Boolean ?: false
+        // Xray verifies against a pin or the names it is given even with allowInsecure; it splits both on commas and skips blanks.
+        for (name in listOf("pinnedPeerCertSha256", "verifyPeerCertByName")) {
+            val entries = (xrayLast(tls, name, false).first as? String ?: "").split(',')
+            pinned = pinned || entries.any { it.trim().isNotEmpty() }
+        }
+    }
+    return (if (insecure && !pinned) XrayLegProtection.Unverified else XrayLegProtection.Verified) to server
+}
+
+/** WithXrayDownloadLeg (Outbound.cpp): a download leg weaker than the main stream, to a public server, weakens the profile. */
+fun withXrayDownloadLeg(info: SecurityInfo, host: String, leg: List<JsonObject>): SecurityInfo {
+    if (leg.isEmpty() || info.level == SecurityLevel.Unknown) return info
+    val (protection, server) = xrayDownloadLegProtection(leg)
+    if (protection == XrayLegProtection.Verified || Hosts.isPrivateHost(server)) return info
+    val level = if (protection == XrayLegProtection.Plain) SecurityLevel.None else SecurityLevel.Weak
+    // A label that already counts gives way only to a weaker leg.
+    if (info.isDangerous && !Hosts.isPrivateHost(host) && info.level <= level) return info
+    return info.copy(
+        label = if (protection == XrayLegProtection.Plain) "Raw download" else "Insecure TLS download",
+        level = level,
+        caVerified = false,
+        publicLeg = true,
+    )
+}
+
+/** SetXrayDialerProxy: routes every leg of an Xray outbound through the outbound tagged [tag], the XHTTP download leg included. */
+fun setXrayDialerProxy(outbound: JsonObject, tag: String) {
+    xrayEditLive(xrayRoot(outbound), "streamSettings", true) { streams ->
+        xraySetSockopt(streams, "dialerProxy", tag)
+        // The download leg dials with its own sockopt unless the main one sets penetrate.
+        xrayEditDownloadLeg(streams) { leg -> xraySetSockopt(leg, "dialerProxy", tag) }
+    }
+}
+
+/** BindXrayDownloadLeg: binds the XHTTP download leg of an Xray outbound to [iface] unless it names an interface of its own. */
+fun bindXrayDownloadLeg(outbound: JsonObject, iface: String) {
+    if (iface.isEmpty()) return
+    xrayEditLive(xrayRoot(outbound), "streamSettings", false) { streams ->
+        xrayEditDownloadLeg(streams) { leg ->
+            var pinned = false
+            xrayEditLive(leg, "sockopt", false) { sockopts ->
+                pinned = (xrayLast(sockopts, "interface", false).first as? String ?: "").isNotEmpty()
+            }
+            if (!pinned) xraySetSockopt(leg, "interface", iface)
+        }
+    }
+}
+
+/** StripXrayDialerState: removes dialerProxy and domainStrategy from every sockopt spelling of a stream object; true when any went. */
+fun stripXrayDialerState(stream: JsonObject): Boolean {
+    var changed = false
+    for (key in xrayKeysNamed(stream, "sockopt")) {
+        val sockopt = stream[key] as? JsonObject ?: continue
+        if (xrayStripDialerKeys(sockopt)) changed = true
+    }
+    return changed
+}
+
+// Xray infra/conf ParseRangeString plus ensureOrder: (from, to), or null where Xray refuses the text.
+private fun xrayStreamRange(text: String): Pair<Long, Long>? {
+    val t = text.trim()
+    if (t.isEmpty()) return 0L to 0L
+    if (Validation.intOrRange(t, Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong(), Empty.Allowed, true).isNotEmpty()) return null
+    val dash = t.indexOf('-', if (t.startsWith('-')) 1 else 0)
+    val first = Validation.toInt(if (dash < 0) t else t.substring(0, dash)) ?: 0L
+    val second = Validation.toInt(if (dash < 0) t else t.substring(dash + 1)) ?: 0L
+    return Pair(minOf(first, second), maxOf(first, second))
+}
+
+// Xray transport/internet/tls/tls.go: PresetFingerprints, ModernFingerprints and OtherFingerprints, matched lower-cased.
+private val XRAY_STREAM_FINGERPRINTS = setOf(
+    "chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized", "randomizednoalpn", "unsafe",
+    "hellofirefox_120", "hellofirefox_148", "hellochrome_120", "hellochrome_131", "hellochrome_133", "helloios_13",
+    "helloios_14", "helloedge_106", "hellosafari_26_3", "hello360_11_0", "helloqq_11_1",
+    "hellogolang", "hellorandomized", "hellorandomizedalpn", "hellorandomizednoalpn", "hellofirefox_auto",
+    "hellofirefox_55", "hellofirefox_56", "hellofirefox_63", "hellofirefox_65", "hellofirefox_99", "hellofirefox_102",
+    "hellofirefox_105", "hellochrome_auto", "hellochrome_58", "hellochrome_62", "hellochrome_70", "hellochrome_72",
+    "hellochrome_83", "hellochrome_87", "hellochrome_96", "hellochrome_100", "hellochrome_102", "hellochrome_106_shuffle",
+    "helloios_auto", "helloios_11_1", "helloios_12_1", "helloandroid_11_okhttp", "helloedge_85", "helloedge_auto",
+    "hellosafari_16_0", "hellosafari_auto", "hello360_auto", "hello360_7_5", "helloqq_auto", "hellochrome_100_psk",
+    "hellochrome_112_psk_shuf", "hellochrome_114_padding_psk_shuf", "hellochrome_115_pq", "hellochrome_115_pq_psk",
+    "hellochrome_120_pq",
+)
+
+private val XRAY_SESSION_ID_TABLES = mapOf(
+    "ALPHABET" to "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "Alphabet" to "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "BASE36" to "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "Base62" to "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+    "HEX" to "0123456789ABCDEF",
+    "alphabet" to "abcdefghijklmnopqrstuvwxyz",
+    "base36" to "0123456789abcdefghijklmnopqrstuvwxyz",
+    "hex" to "0123456789abcdef",
+    "number" to "0123456789",
+)
+
+// Unknown names are dropped with a note so Xray's default applies instead of a start failure.
+private fun xrayKnownFingerprint(raw: String, reality: Boolean, field: String): String {
+    val fingerprint = raw.trim()
+    return if (acceptOptional(field, XrayChecks.xrayFingerprint(fingerprint, reality), fingerprint)) fingerprint else ""
+}
+
+// Links carry headers as name|value|name|value.
+private fun xrayLinkHeaders(q: LinkQuery): MutableList<String> {
+    val raw = q.valueFully("headers")
+    if (raw.isEmpty()) return ArrayList()
+    val headers = QtStrings.split(raw, "|")
+    if (headers.size % 2 == 0) return headers
+    ParseDiag.warn("headers", vtr(R.string.validation_xray_headers_pairs))
+    return ArrayList()
+}
+
+private fun xrayWarnUnparsableExtra(value: String) {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty() || JsonInput.parseObjectOrNull(trimmed)?.isEmpty() == true) return
+    ParseDiag.warn("extra", vtr(R.string.validation_xray_extra_invalid))
+}
+
+// ParseDiag::Scope as a sink: values the caller has already read, and reported, elsewhere.
+private inline fun <T> unreported(read: () -> T): T {
+    val scope = ParseDiag.Scope()
+    try {
+        return read()
+    } finally {
+        scope.close()
+    }
+}
+
+/** The Checks of xrayStreamSetting.h, shared by the Xray stream editor and the import check; each returns "" when acceptable. */
+object XrayChecks {
+    @JvmStatic
+    fun xrayNetwork(network: String): String {
+        val t = network.trim()
+        if (t.isEmpty() || normalizeXrayNetwork(t) in xrayNetworks) return ""
+        return vtr(R.string.validation_xray_network, t)
+    }
+
+    @JvmStatic
+    fun xraySecurity(security: String): String {
+        val t = security.trim()
+        if (t.lowercase() in listOf("", "none", "tls", "reality")) return ""
+        return vtr(R.string.validation_xray_security, t)
+    }
+
+    @JvmStatic
+    fun xrayRealityNetwork(security: String, network: String): String {
+        val t = normalizeXrayNetwork(network.trim())
+        if (security.trim().lowercase() != "reality" || t.isEmpty() || t == "raw" || t == "xhttp" || t == "grpc") return ""
+        return vtr(R.string.validation_xray_reality_network)
+    }
+
+    @JvmStatic
+    fun xrayFingerprint(fingerprint: String, reality: Boolean): String {
+        val t = fingerprint.trim().lowercase()
+        if (t.isEmpty()) return ""
+        // XrayReality.build drops "unsafe"; Xray refuses hellogolang for REALITY.
+        if (reality && t == "hellogolang") return vtr(R.string.validation_xray_reality_hellogolang)
+        if (t in XRAY_STREAM_FINGERPRINTS) return ""
+        return vtr(R.string.validation_xray_fingerprint, fingerprint.trim())
+    }
+
+    /** A warning: Xray skips unknown names. */
+    @JvmStatic
+    fun xrayCipherSuites(text: String): String {
+        for (name in splitCipherSuites(text)) {
+            if (name in TLS_SECURE_CIPHER_SUITES || name in TLS_INSECURE_CIPHER_SUITES) continue
+            return vtr(R.string.validation_xray_cipher_unknown, name)
+        }
+        return ""
+    }
+
+    /** A warning: a uTLS hello ignores the list. */
+    @JvmStatic
+    fun xrayCipherSuitesNeedUnsafe(cipherSuites: String, fingerprint: String): String {
+        if (splitCipherSuites(cipherSuites).isEmpty() || fingerprint.trim().lowercase() == TLS_UNSAFE_FINGERPRINT) return ""
+        return vtr(R.string.validation_xray_cipher_need_unsafe)
+    }
+
+    @JvmStatic
+    fun xrayPinnedSha256(text: String): String = Validation.eachItem(text, Validation.Split.Comma, { item ->
+        if (Validation.hex(item.replace(":", ""), 64, 64, true, Empty.Required).isEmpty()) "" else vtr(R.string.validation_xray_pinned_sha256)
+    })
+
+    /** A warning: a bad list makes every connection fail. [serverName] is the effective SNI. */
+    @JvmStatic
+    fun xrayEchConfigList(text: String, serverName: String): String {
+        val t = text.trim()
+        if (t.isEmpty()) return ""
+        if (!t.contains("://")) {
+            if (Validation.base64(t).isEmpty()) return ""
+            return vtr(R.string.validation_xray_ech_config)
+        }
+        // Xray transport/internet/tls/ech.go: "name+server", else the SNI when it is a domain.
+        var name = ""
+        val plus = t.indexOf('+')
+        if (plus >= 0) {
+            name = t.substring(0, plus).trim()
+        } else {
+            val sni = serverName.trim()
+            if (sni.isNotEmpty() && Validation.ip(sni.replace("[", "").replace("]", "")).isNotEmpty()) name = sni
+        }
+        if (name.isNotEmpty()) return ""
+        return vtr(R.string.validation_xray_ech_domain)
+    }
+
+    @JvmStatic
+    fun xraySpiderX(spiderX: String): String {
+        val t = spiderX.trim()
+        if (t.isEmpty() || t.startsWith('/')) return ""
+        return vtr(R.string.validation_xray_spiderx)
+    }
+
+    /** Xray infra/conf/transport_security.go: RawURLEncoding of a 1952-byte ML-DSA-65 public key. */
+    @JvmStatic
+    fun xrayMldsa65Verify(key: String): String = Validation.base64Key(key, 1952, true, false, Empty.Allowed)
+
+    @JvmStatic
+    fun xrayHeadersHost(pairs: List<String>): String {
+        var i = 0
+        while (i < pairs.size) {
+            if (pairs[i].trim().equals("host", ignoreCase = true)) return vtr(R.string.validation_xray_headers_host)
+            i += 2
+        }
+        return ""
+    }
+
+    /** Xray Int32Range: "n" or "a-b" (negatives allowed, reversed bounds swapped). */
+    @JvmStatic
+    fun xrayInt32Range(text: String): String =
+        Validation.intOrRange(text, Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong(), Empty.Allowed, true)
+
+    @JvmStatic
+    fun xrayXPaddingBytes(text: String): String {
+        val (from, to) = xrayStreamRange(text) ?: return xrayInt32Range(text)
+        if ((from == 0L && to == 0L) || (from > 0 && to > 0)) return ""
+        return vtr(R.string.validation_xray_padding_bounds)
+    }
+
+    @JvmStatic
+    fun xrayXHTTPMode(mode: String): String = Validation.oneOf(mode, listOf("") + xrayXhttpModes)
+
+    @JvmStatic
+    fun xrayPaddingMethod(method: String): String = Validation.oneOf(method, listOf("", "repeat-x", "tokenish"))
+
+    @JvmStatic
+    fun xrayPaddingPlacement(placement: String): String =
+        Validation.oneOf(placement, listOf("", "queryInHeader", "cookie", "header", "query"))
+
+    @JvmStatic
+    fun xrayMetaPlacement(placement: String): String = Validation.oneOf(placement, xrayXhttpMetaPlacements)
+
+    @JvmStatic
+    fun xrayUplinkDataPlacement(placement: String, mode: String): String {
+        Validation.oneOf(placement, xrayXhttpUplinkDataPlacements).let { if (it.isNotEmpty()) return it }
+        val t = placement.trim()
+        // Literally packet-up: Xray checks before it resolves auto.
+        if ((t == "cookie" || t == "header") && mode.trim() != "packet-up") return vtr(R.string.validation_xray_uplink_placement_mode)
+        return ""
+    }
+
+    @JvmStatic
+    fun xrayUplinkMethod(method: String, mode: String): String {
+        if (method.trim().uppercase() != "GET" || mode.trim() == "packet-up") return ""
+        return vtr(R.string.validation_xray_uplink_get_mode)
+    }
+
+    @JvmStatic
+    fun xraySessionId(table: String, length: String): String {
+        if (table.isEmpty()) return ""
+        val bytes = (XRAY_SESSION_ID_TABLES[table] ?: table).toByteArray(Charsets.UTF_8)
+        val (from, to) = xrayStreamRange(length) ?: return ""
+        if (from <= 0) return vtr(R.string.validation_xray_session_length)
+        // Xray roomSize: the sum of n^k over the length range must reach 2^31.
+        val needed = 2147483648.0
+        var room = 0.0
+        if (bytes.size == 1) {
+            room = (to - from + 1).toDouble()
+        } else {
+            var k = from
+            while (k <= to && room < needed) {
+                room += Math.pow(bytes.size.toDouble(), k.toDouble())
+                k++
+            }
+        }
+        if (room < needed) return vtr(R.string.validation_xray_session_room)
+        if (bytes.any { (it.toInt() and 0xFF) >= 0x80 }) return vtr(R.string.validation_xray_session_ascii)
+        return ""
+    }
+
+    @JvmStatic
+    fun xrayXmuxExclusive(maxConnections: String, maxConcurrency: String): String {
+        val connections = xrayStreamRange(maxConnections) ?: return ""
+        val concurrency = xrayStreamRange(maxConcurrency) ?: return ""
+        if (connections.second <= 0 || concurrency.second <= 0) return ""
+        return vtr(R.string.validation_xray_xmux_exclusive)
+    }
+
+    /** Errors for an outbound's XHTTP download leg that would crash the core: no address, no port 1-65535, or another network. */
+    @JvmStatic
+    fun xrayXHTTPDownloadLeg(issues: MutableList<Issue>, at: String, outbound: JsonObject) {
+        xrayEditLive(xrayRoot(outbound.copy(), at), "streamSettings", false) { streams ->
+            if (!xrayDialsXhttp(streams)) return@xrayEditLive
+            xrayEditDownloadLeg(streams) { leg -> xrayDownloadEndpoint(issues, leg) }
+        }
+    }
+}
+
+/** xrayTLS (xrayStreamSetting.h, xrayStreamSetting.cpp). No insecure flag is modelled. */
 class XrayTls {
     @JvmField var serverName: String = ""
     @JvmField var pinnedPeerCertSha256: String = ""
     @JvmField var verifyPeerCertByName: String = ""
     @JvmField var alpn: MutableList<String> = ArrayList()
     @JvmField var fingerprint: String = ""
+    /** Colon separated, as Xray takes it. */
+    @JvmField var cipherSuites: String = ""
     /** Base64 ECHConfigList, or "<query domain>+<DoH url>" for Xray to fetch it itself. */
     @JvmField var echConfigList: String = ""
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:248-262. */
+    /** xrayTLS::ParseFromLink. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
@@ -35,34 +542,55 @@ class XrayTls {
         if (q.has("server_name")) serverName = q.value("server_name")
         if (q.has("pcs")) pinnedPeerCertSha256 = q.valueFully("pcs")
         if (q.has("vcn")) verifyPeerCertByName = q.valueFully("vcn")
-        if (q.has("alpn")) alpn = QtStrings.split(q.valueFully("alpn"), ",")
-        if (q.has("fp")) fingerprint = q.value("fp")
-        if (q.has("ech")) echConfigList = q.valueFully("ech")
+        if (q.has("alpn")) alpn = QtStrings.splitList(q.valueFully("alpn"))
+        if (q.has("fp")) fingerprint = xrayKnownFingerprint(q.value("fp"), false, "fp")
+        if (q.has("cs")) cipherSuites = splitCipherSuites(q.valueFully("cs")).joinToString(":")
+        if (q.has("ech")) echConfigList = q.valueFully("ech").trim()
         return true
     }
 
-    /** xrayStreamSetting.cpp:264-273. */
+    /** xrayTLS::ParseFromJson: also the DB loader, so only an import normalises or drops values. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("serverName")) serverName = obj.string("serverName")
         if (obj.contains("pinnedPeerCertSha256")) pinnedPeerCertSha256 = obj.string("pinnedPeerCertSha256")
         if (obj.contains("verifyPeerCertByName")) verifyPeerCertByName = obj.string("verifyPeerCertByName")
-        if (obj.contains("alpn")) alpn = obj.array("alpn").strings()
-        if (obj.contains("fingerprint")) fingerprint = obj.string("fingerprint")
+        val importing = ParseDiag.active()
+        if (obj.contains("alpn")) {
+            alpn = jsonStringList(obj["alpn"], "tlsSettings.alpn")
+            // Xray's StringList also takes one comma-separated string.
+            if (importing) alpn = QtStrings.splitList(alpn.joinToString(","))
+        }
+        if (obj.contains("fingerprint")) {
+            val value = obj.string("fingerprint")
+            fingerprint = if (importing) xrayKnownFingerprint(value, false, "tlsSettings.fingerprint") else value
+        }
+        if (obj.contains("cipherSuites")) cipherSuites = obj.string("cipherSuites")
         if (obj.contains("echConfigList")) echConfigList = obj.string("echConfigList")
         return true
     }
 
-    /** xrayStreamSetting.cpp:275-288. */
+    /** xrayTLS::ParseFromClash. */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         serverName = proxy.string("servername").ifEmpty { proxy.string("sni") }.ifEmpty { proxy.string("server") }
-        alpn.addAll(proxy.strings("alpn"))
+        for (item in proxy.strings("alpn")) {
+            val protocol = item.trim()
+            if (protocol.isNotEmpty()) alpn.add(protocol)
+        }
+        // mihomo's fingerprint is the certificate pin in hex, which validate checks as for pcs; client-fingerprint is the uTLS hello.
+        val pin = proxy.string("fingerprint")
+        if (pin.isNotEmpty()) pinnedPeerCertSha256 = pin.trim()
+        // Xray's "unsafe" is Go's own TLS, which mihomo's "none" asks for; an empty fingerprint would mean Chrome.
         val clientFingerprint = proxy.string("client-fingerprint")
-        if (clientFingerprint.isNotEmpty()) fingerprint = clientFingerprint
+        if (isClashNoFingerprint(clientFingerprint)) {
+            fingerprint = TLS_UNSAFE_FINGERPRINT
+        } else if (clientFingerprint.isNotEmpty()) {
+            fingerprint = xrayKnownFingerprint(clientFingerprint, false, "client-fingerprint")
+        }
         return true
     }
 
-    /** xrayStreamSetting.cpp:290-299: sni is always written. */
+    /** xrayTLS::ExportToLink: sni is always written. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         q.add("sni" to serverName)
@@ -70,11 +598,12 @@ class XrayTls {
         if (verifyPeerCertByName.isNotEmpty()) q.add("vcn" to verifyPeerCertByName)
         if (alpn.isNotEmpty()) q.add("alpn" to alpn.joinToString(","))
         if (fingerprint.isNotEmpty()) q.add("fp" to fingerprint)
+        if (cipherSuites.isNotEmpty()) q.add("cs" to cipherSuites)
         if (echConfigList.isNotEmpty()) q.add("ech" to echConfigList)
         return q
     }
 
-    /** xrayStreamSetting.cpp:301-312: serverName is always written. */
+    /** xrayTLS::ExportToJson: serverName is always written. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["serverName"] = Hosts.toAceHost(serverName)
@@ -82,11 +611,12 @@ class XrayTls {
         if (verifyPeerCertByName.isNotEmpty()) obj["verifyPeerCertByName"] = verifyPeerCertByName
         if (alpn.isNotEmpty()) obj["alpn"] = JsonValues.stringArray(alpn)
         if (fingerprint.isNotEmpty()) obj["fingerprint"] = fingerprint
+        if (cipherSuites.isNotEmpty()) obj["cipherSuites"] = cipherSuites
         if (echConfigList.isNotEmpty()) obj["echConfigList"] = echConfigList
         return obj
     }
 
-    /** xrayStreamSetting.cpp:314-318. */
+    /** xrayTLS::Build. */
     fun build(ctx: BuildContext): JsonObject {
         val obj = exportToJson()
         if (fingerprint.isEmpty() && ctx.utlsFingerprint.isNotEmpty()) obj["fingerprint"] = ctx.utlsFingerprint
@@ -94,54 +624,69 @@ class XrayTls {
     }
 }
 
-/** xrayReality (xrayStreamSetting.h:33-47, xrayStreamSetting.cpp:316-379). `password` is the public key. */
+/** xrayReality (xrayStreamSetting.h, xrayStreamSetting.cpp). `password` is the public key. */
 class XrayReality {
     @JvmField var serverName: String = ""
     @JvmField var fingerprint: String = ""
     @JvmField var password: String = ""
     @JvmField var shortId: String = ""
     @JvmField var spiderX: String = ""
+    /** The server's ML-DSA-65 public key ("pqv" in links), which signs the REALITY certificate. */
+    @JvmField var mldsa65Verify: String = ""
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:316-329. */
+    /** xrayReality::ParseFromLink. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
         if (q.has("sni")) serverName = q.value("sni")
         if (q.has("peer")) serverName = q.value("peer")
-        if (q.has("pbk")) password = q.value("pbk")
-        if (q.has("fp")) fingerprint = q.value("fp")
-        if (q.has("sid")) shortId = q.value("sid")
+        if (q.has("pbk")) password = importRealityPublicKey(q.value("pbk"), "pbk")
+        if (q.has("fp")) fingerprint = xrayKnownFingerprint(q.value("fp"), true, "fp")
+        if (q.has("sid")) shortId = q.value("sid").trim()
         if (q.has("spx")) spiderX = q.valueFully("spx")
+        if (q.has("pqv")) mldsa65Verify = q.valueFully("pqv").trim()
         return true
     }
 
-    /** xrayStreamSetting.cpp:331-339. */
+    /** xrayReality::ParseFromJson: also the DB loader, so only an import drops or reports values. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("serverName")) serverName = obj.string("serverName")
-        if (obj.contains("fingerprint")) fingerprint = obj.string("fingerprint")
-        if (obj.contains("password")) password = obj.string("password")
-        if (obj.contains("shortId")) shortId = obj.string("shortId")
+        if (obj.contains("fingerprint")) {
+            val value = obj.string("fingerprint")
+            fingerprint = if (ParseDiag.active()) xrayKnownFingerprint(value, true, "realitySettings.fingerprint") else value
+        }
+        // Xray reads publicKey, the older name, when password is empty.
+        if (obj.contains("password") || obj.contains("publicKey")) {
+            val field = if (obj.string("password").trim().isEmpty()) "publicKey" else "password"
+            val key = obj.string(field)
+            password = if (ParseDiag.active()) importRealityPublicKey(key, "realitySettings.$field") else key.trim()
+        }
+        if (obj.contains("shortId")) shortId = obj.string("shortId").trim()
         if (obj.contains("spiderX")) spiderX = obj.string("spiderX")
+        if (obj.contains("mldsa65Verify")) mldsa65Verify = obj.string("mldsa65Verify").trim()
         return true
     }
 
-    /** xrayStreamSetting.cpp:341-353. */
+    /** xrayReality::ParseFromClash. */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         serverName = proxy.string("servername").ifEmpty { proxy.string("sni") }.ifEmpty { proxy.string("server") }
+        // REALITY needs uTLS, so mihomo's "none" leaves Xray's default.
         val clientFingerprint = proxy.string("client-fingerprint")
-        if (clientFingerprint.isNotEmpty()) fingerprint = clientFingerprint
+        if (clientFingerprint.isNotEmpty() && !isClashNoFingerprint(clientFingerprint)) {
+            fingerprint = xrayKnownFingerprint(clientFingerprint, true, "client-fingerprint")
+        }
         val opts = proxy.obj("reality-opts")
         val publicKey = opts.string("public-key")
-        if (publicKey.isNotEmpty()) password = publicKey
+        if (publicKey.isNotEmpty()) password = importRealityPublicKey(publicKey, "reality-opts.public-key")
         val id = opts.string("short-id")
-        if (id.isNotEmpty()) shortId = id
+        if (id.isNotEmpty()) shortId = id.trim()
         return true
     }
 
-    /** xrayStreamSetting.cpp:355-363. */
+    /** xrayReality::ExportToLink. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         q.add("sni" to serverName)
@@ -149,10 +694,11 @@ class XrayReality {
         if (password.isNotEmpty()) q.add("pbk" to password)
         if (shortId.isNotEmpty()) q.add("sid" to shortId)
         if (spiderX.isNotEmpty()) q.add("spx" to spiderX)
+        if (mldsa65Verify.isNotEmpty()) q.add("pqv" to mldsa65Verify)
         return q
     }
 
-    /** xrayStreamSetting.cpp:365-373. */
+    /** xrayReality::ExportToJson. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["serverName"] = Hosts.toAceHost(serverName)
@@ -160,18 +706,20 @@ class XrayReality {
         if (password.isNotEmpty()) obj["password"] = password
         if (shortId.isNotEmpty()) obj["shortId"] = shortId
         if (spiderX.isNotEmpty()) obj["spiderX"] = spiderX
+        if (mldsa65Verify.isNotEmpty()) obj["mldsa65Verify"] = mldsa65Verify
         return obj
     }
 
-    /** xrayStreamSetting.cpp:375-379. */
+    /** xrayReality::Build: REALITY needs a uTLS hello and fails on "unsafe"; Xray's own default (chrome) takes over. */
     fun build(ctx: BuildContext): JsonObject {
         val obj = exportToJson()
         if (fingerprint.isEmpty() && ctx.utlsFingerprint.isNotEmpty()) obj["fingerprint"] = ctx.utlsFingerprint
+        if (obj.string("fingerprint") == TLS_UNSAFE_FINGERPRINT) obj.remove("fingerprint")
         return obj
     }
 }
 
-/** xrayXHTTP (xrayStreamSetting.h:49-98, xrayStreamSetting.cpp:381-546). Unknown `extra`/`xmux` keys survive in rawExtra/rawXmux. */
+/** xrayXHTTP (xrayStreamSetting.h, xrayStreamSetting.cpp). Unknown `extra`/`xmux` keys survive in rawExtra/rawXmux. */
 class XrayXhttp {
     @JvmField var host: String = ""
     @JvmField var path: String = ""
@@ -211,7 +759,7 @@ class XrayXhttp {
     @JvmField var downloadSettings: String = ""
 
     companion object {
-        /** xrayStreamSetting.cpp:96-128. */
+        /** knownXHTTPExtraKeys (xrayStreamSetting.cpp). */
         private val KNOWN_EXTRA_KEYS = setOf(
             "headers", "xPaddingBytes", "xPaddingObfsMode", "xPaddingKey", "xPaddingHeader", "xPaddingPlacement",
             "xPaddingMethod", "uplinkHTTPMethod", "sessionPlacement", "sessionKey", "sessionIDPlacement", "sessionIDKey",
@@ -220,7 +768,7 @@ class XrayXhttp {
             "scMaxBufferedPosts", "scStreamUpServerSecs", "serverMaxHeaderBytes", "xmux", "downloadSettings",
         )
 
-        /** xrayStreamSetting.cpp:130-140. */
+        /** knownXHTTPXmuxKeys (xrayStreamSetting.cpp). */
         private val KNOWN_XMUX_KEYS = setOf(
             "maxConcurrency", "maxConnections", "cMaxReuseTimes", "hMaxRequestTimes", "hMaxReusableSecs", "hKeepAlivePeriod",
         )
@@ -242,7 +790,7 @@ class XrayXhttp {
         }
     }
 
-    /** xrayStreamSetting.cpp:182-194. */
+    /** parseXHTTPXmuxObject (xrayStreamSetting.cpp). */
     private fun parseXmuxObject(obj: JsonObject) {
         for (key in obj.keys()) {
             if (key !in KNOWN_XMUX_KEYS) rawXmux[key] = JsonValues.deepCopy(obj[key]!!)
@@ -255,7 +803,7 @@ class XrayXhttp {
         if (obj.contains("hKeepAlivePeriod")) hKeepAlivePeriod = obj.variantLong("hKeepAlivePeriod")
     }
 
-    /** xrayStreamSetting.cpp:196-245. */
+    /** parseXHTTPExtraObject (xrayStreamSetting.cpp). */
     private fun parseExtraObject(obj: JsonObject) {
         for (key in obj.keys()) {
             if (key !in KNOWN_EXTRA_KEYS) rawExtra[key] = JsonValues.deepCopy(obj[key]!!)
@@ -298,7 +846,7 @@ class XrayXhttp {
         if (xmuxObj.isNotEmpty()) parseXmuxObject(xmuxObj)
     }
 
-    /** xrayStreamSetting.cpp:381-388: Python dict repr ('key': True) is rewritten only when the JSON parse fails. */
+    /** xrayXHTTP::ParseExtraJson: Python dict repr ('key': True) is rewritten only when the JSON parse fails. */
     fun parseExtraJson(text: String): Boolean {
         var obj = JsonInput.parseObject(text)
         if (obj.isEmpty()) obj = JsonInput.parseObject(text.replace('\'', '"').replace("True", "true").replace("False", "false"))
@@ -309,18 +857,18 @@ class XrayXhttp {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:390-422. */
+    /** xrayXHTTP::ParseFromLink. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
         if (q.has("host")) host = q.value("host")
         if (q.has("path")) path = q.valueFully("path")
         if (q.has("mode")) mode = q.value("mode")
-        if (q.has("extra") && !parseExtraJson(q.valueFully("extra"))) parseExtraJson(q.valueFormDecoded("extra"))
-        if (q.has("headers")) {
-            headers = QtStrings.split(q.valueFully("headers"), "|")
-            if (headers.size % 2 != 0) headers.clear()
+        if (q.has("extra")) {
+            val extra = q.valueFully("extra")
+            if (!parseExtraJson(extra) && !parseExtraJson(q.valueFormDecoded("extra"))) xrayWarnUnparsableExtra(extra)
         }
+        if (q.has("headers")) headers = xrayLinkHeaders(q)
         if (q.has("x_padding_bytes")) xPaddingBytes = q.value("x_padding_bytes")
         if (q.has("no_grpc_header")) noGRPCHeader = q.value("no_grpc_header").replace("1", "true") == "true"
         if (q.has("sc_max_each_post_bytes")) scMaxEachPostBytes = q.value("sc_max_each_post_bytes")
@@ -330,11 +878,16 @@ class XrayXhttp {
         if (q.has("max_reuse_times")) cMaxReuseTimes = q.value("max_reuse_times")
         if (q.has("max_request_times")) hMaxRequestTimes = q.value("max_request_times")
         if (q.has("max_reusable_secs")) hMaxReusableSecs = q.value("max_reusable_secs")
-        if (q.has("keep_alive_period")) hKeepAlivePeriod = QtStrings.toLong(q.value("keep_alive_period"))
+        if (q.has("keep_alive_period")) {
+            val value = q.value("keep_alive_period").trim()
+            if (acceptOptional("keep_alive_period", Validation.int(value, Long.MIN_VALUE, Long.MAX_VALUE), value)) {
+                hKeepAlivePeriod = Validation.toInt(value) ?: 0L
+            }
+        }
         return true
     }
 
-    /** xrayStreamSetting.cpp:424-443: every top-level key other than host/path/mode/extra is an extra field. */
+    /** xrayXHTTP::ParseFromJson: every top-level key other than host/path/mode/extra is an extra field. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("host")) host = obj.string("host")
@@ -349,13 +902,13 @@ class XrayXhttp {
         val exObj = obj.obj("extra")
         if (exObj.isNotEmpty()) {
             parseExtraObject(exObj)
-        } else if (obj.isString("extra")) {
-            parseExtraJson(obj.string("extra"))
+        } else if (obj.isString("extra") && !parseExtraJson(obj.string("extra"))) {
+            xrayWarnUnparsableExtra(obj.string("extra"))
         }
         return true
     }
 
-    /** xrayStreamSetting.cpp:445-472: `xhttp-opts` with its reuse and download settings. */
+    /** xrayXHTTP::ParseFromClash: `xhttp-opts` with its reuse and download settings; a null download-settings means none. */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         val opts = proxy.obj("xhttp-opts")
         host = opts.string("host")
@@ -375,11 +928,11 @@ class XrayXhttp {
         hMaxReusableSecs = reuse.string("h-max-reusable-secs")
         val keepAlivePeriod = reuse.string("h-keep-alive-period")
         if (keepAlivePeriod.isNotEmpty()) hKeepAlivePeriod = QtStrings.toLong(keepAlivePeriod)
-        if (opts.has("download-settings")) downloadSettings = clashDownloadSettings(opts.obj("download-settings")).toCompact()
+        if (opts.present("download-settings")) downloadSettings = clashDownloadSettings(proxy).toCompact()
         return true
     }
 
-    /** xrayStreamSetting.cpp:474-488. */
+    /** xrayXHTTP::ExportToLink. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         if (host.isNotEmpty()) q.add("host" to host)
@@ -394,7 +947,7 @@ class XrayXhttp {
         return q
     }
 
-    /** xrayStreamSetting.cpp:490-542. */
+    /** xrayXHTTP::ExportToJson. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (host.isNotEmpty()) obj["host"] = Hosts.toAceHost(host)
@@ -427,7 +980,8 @@ class XrayXhttp {
         exportString(extraObj, "scStreamUpServerSecs", scStreamUpServerSecs)
         exportInt(extraObj, "serverMaxHeaderBytes", serverMaxHeaderBytes)
         if (mode == "stream-one") {
-            extraObj.remove("downloadSettings")
+            // Xray refuses downloadSettings in stream-one mode under any spelling.
+            xrayRemoveNamed(extraObj, "downloadSettings")
         } else if (downloadSettings.isNotEmpty()) {
             val dsObj = JsonInput.parseObject(downloadSettings)
             if (dsObj.isNotEmpty()) extraObj["downloadSettings"] = dsObj
@@ -446,11 +1000,11 @@ class XrayXhttp {
         return obj
     }
 
-    /** xrayStreamSetting.cpp:544-546. */
+    /** xrayXHTTP::Build. */
     fun build(ctx: BuildContext): JsonObject = exportToJson()
 }
 
-/** xrayWS (xrayStreamSetting.h:100-114, xrayStreamSetting.cpp:548-631). */
+/** xrayWS (xrayStreamSetting.h, xrayStreamSetting.cpp). */
 class XrayWs {
     @JvmField var path: String = ""
     @JvmField var host: String = ""
@@ -460,22 +1014,19 @@ class XrayWs {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:548-565. */
+    /** xrayWS::ParseFromLink. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
         if (q.has("host")) host = q.value("host")
         if (q.has("path")) path = q.valueFully("path")
-        if (q.has("ed")) ed = QtStrings.toInt(q.value("ed"))
-        if (q.has("headers")) {
-            headers = QtStrings.split(q.valueFully("headers"), "|")
-            if (headers.size % 2 != 0) headers.clear()
-        }
-        if (q.has("heartbeat_period")) heartbeatPeriod = QtStrings.toInt(q.value("heartbeat_period"))
+        ed = readQueryInt(q, "ed", ed)
+        if (q.has("headers")) headers = xrayLinkHeaders(q)
+        heartbeatPeriod = readQueryInt(q, "heartbeat_period", heartbeatPeriod)
         return true
     }
 
-    /** xrayStreamSetting.cpp:567-582. */
+    /** xrayWS::ParseFromJson. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("path")) {
@@ -492,7 +1043,7 @@ class XrayWs {
         return true
     }
 
-    /** xrayStreamSetting.cpp:584-604. */
+    /** xrayWS::ParseFromClash. */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         val opts = ClashWsOptions(proxy)
         opts.path?.let { path = it }
@@ -502,7 +1053,7 @@ class XrayWs {
         return true
     }
 
-    /** xrayStreamSetting.cpp:606-614: a bare "/" path is not written. */
+    /** xrayWS::ExportToLink: a bare "/" path is not written. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         if (host.isNotEmpty()) q.add("host" to host)
@@ -513,7 +1064,7 @@ class XrayWs {
         return q
     }
 
-    /** xrayStreamSetting.cpp:616-627. */
+    /** xrayWS::ExportToJson. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (path.isNotEmpty()) {
@@ -527,11 +1078,11 @@ class XrayWs {
         return obj
     }
 
-    /** xrayStreamSetting.cpp:629-631. */
+    /** xrayWS::Build. */
     fun build(ctx: BuildContext): JsonObject = exportToJson()
 }
 
-/** xrayHttpUpgrade (xrayStreamSetting.h:116-129, xrayStreamSetting.cpp:633-709). */
+/** xrayHttpUpgrade (xrayStreamSetting.h, xrayStreamSetting.cpp). */
 class XrayHttpUpgrade {
     @JvmField var path: String = ""
     @JvmField var ed: Int = 0
@@ -540,21 +1091,18 @@ class XrayHttpUpgrade {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:633-646. */
+    /** xrayHttpUpgrade::ParseFromLink. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
         if (q.has("host")) host = q.value("host")
         if (q.has("path")) path = q.valueFully("path")
-        if (q.has("ed")) ed = QtStrings.toInt(q.value("ed"))
-        if (q.has("headers")) {
-            headers = QtStrings.split(q.valueFully("headers"), "|")
-            if (headers.size % 2 != 0) headers.clear()
-        }
+        ed = readQueryInt(q, "ed", ed)
+        if (q.has("headers")) headers = xrayLinkHeaders(q)
         return true
     }
 
-    /** xrayStreamSetting.cpp:648-662. */
+    /** xrayHttpUpgrade::ParseFromJson. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("path")) {
@@ -570,7 +1118,7 @@ class XrayHttpUpgrade {
         return true
     }
 
-    /** xrayStreamSetting.cpp:664-684. */
+    /** xrayHttpUpgrade::ParseFromClash. */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         val opts = ClashWsOptions(proxy)
         opts.path?.let { path = it }
@@ -580,7 +1128,7 @@ class XrayHttpUpgrade {
         return true
     }
 
-    /** xrayStreamSetting.cpp:686-693. */
+    /** xrayHttpUpgrade::ExportToLink. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         if (host.isNotEmpty()) q.add("host" to host)
@@ -590,7 +1138,7 @@ class XrayHttpUpgrade {
         return q
     }
 
-    /** xrayStreamSetting.cpp:695-705. */
+    /** xrayHttpUpgrade::ExportToJson. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (path.isNotEmpty()) {
@@ -603,11 +1151,11 @@ class XrayHttpUpgrade {
         return obj
     }
 
-    /** xrayStreamSetting.cpp:707-709. */
+    /** xrayHttpUpgrade::Build. */
     fun build(ctx: BuildContext): JsonObject = exportToJson()
 }
 
-/** xrayGRPC (xrayStreamSetting.h:131-143, xrayStreamSetting.cpp:711-752). */
+/** xrayGRPC (xrayStreamSetting.h, xrayStreamSetting.cpp). */
 class XrayGrpc {
     @JvmField var authority: String = ""
     @JvmField var serviceName: String = ""
@@ -615,7 +1163,7 @@ class XrayGrpc {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:711-719. */
+    /** xrayGRPC::ParseFromLink. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
@@ -625,7 +1173,7 @@ class XrayGrpc {
         return true
     }
 
-    /** xrayStreamSetting.cpp:721-727. */
+    /** xrayGRPC::ParseFromJson. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("authority")) authority = obj.string("authority")
@@ -634,14 +1182,14 @@ class XrayGrpc {
         return true
     }
 
-    /** xrayStreamSetting.cpp:729-732. */
+    /** xrayGRPC::ParseFromClash. */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         val name = proxy.obj("grpc-opts").string("grpc-service-name")
         if (name.isNotEmpty()) serviceName = name
         return true
     }
 
-    /** xrayStreamSetting.cpp:734-740. */
+    /** xrayGRPC::ExportToLink. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         if (authority.isNotEmpty()) q.add("authority" to authority)
@@ -650,7 +1198,7 @@ class XrayGrpc {
         return q
     }
 
-    /** xrayStreamSetting.cpp:742-748. */
+    /** xrayGRPC::ExportToJson. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (authority.isNotEmpty()) obj["authority"] = Hosts.toAceHost(authority)
@@ -659,11 +1207,14 @@ class XrayGrpc {
         return obj
     }
 
-    /** xrayStreamSetting.cpp:750-752. */
+    /** xrayGRPC::Build. */
     fun build(ctx: BuildContext): JsonObject = exportToJson()
 }
 
-/** xrayStreamSetting (xrayStreamSetting.h:145-165, xrayStreamSetting.cpp:754-925). Field `TLS` is named `tls` here. */
+/**
+ * xrayStreamSetting (xrayStreamSetting.h, xrayStreamSetting.cpp). Field `TLS` is named `tls` here. The desktop's
+ * `sockopt` is not modelled: binding and DNS are wired by the core.
+ */
 class XrayStreamSetting {
     @JvmField var network: String = "raw"
     @JvmField var security: String = "none"
@@ -678,18 +1229,31 @@ class XrayStreamSetting {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayStreamSetting.cpp:754-795; false when the network is not one Xray knows. */
+    /** xrayStreamSetting::ParseFromLink; false (an import Error) when the network is not one Throne's Xray stream knows. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
         if (q.has("fm") || q.has("finalmask")) {
             val key = if (q.has("fm")) "fm" else "finalmask"
-            (JsonInput.parseObjectOrNull(q.valueFully(key)) ?: JsonInput.parseObjectOrNull(q.valueFormDecoded(key)))?.let { finalmask = it }
+            var text = q.valueFully(key)
+            var parsed = JsonTree.parse(text)
+            if (!parsed.ok) {
+                text = q.valueFormDecoded(key)
+                parsed = JsonTree.parse(text)
+            }
+            when {
+                !parsed.ok -> ParseDiag.warn(key, vtr(R.string.validation_xray_finalmask_json, parsed.error))
+                parsed.root?.type != JsonType.Object -> ParseDiag.warn(key, vtr(R.string.validation_xray_finalmask_object))
+                else -> JsonInput.parseObjectOrNull(text)?.let { finalmask = it }
+            }
         }
-        if (q.has("type")) network = q.value("type").replace("tcp", "raw")
-        // XHTTP's former name, which Xray still accepts (Android only)
-        if (network == "splithttp") network = "xhttp"
-        if (network !in xrayNetworks) return false
+        val type = q.value("type").trim()
+        if (type.isNotEmpty()) network = normalizeXrayNetwork(type)
+        if (network !in xrayNetworks) {
+            // A share link has no lossless fallback, unlike an Xray JSON outbound, which is then kept verbatim.
+            ParseDiag.error("type", XrayChecks.xrayNetwork(network), network)
+            return false
+        }
         if (network == "raw" && q.value("headerType") == "http") {
             val request = JsonObject()
             val paths = QtStrings.splitList(q.valueFully("path"))
@@ -702,7 +1266,8 @@ class XrayStreamSetting {
             if (request.isNotEmpty()) header["request"] = request
             rawSettings = jsonObjectOf("header" to header)
         }
-        if (q.has("security")) security = q.value("security")
+        // Xray matches security case-insensitively.
+        if (q.has("security")) security = q.value("security").trim().lowercase()
         if (security == "tls") tls.parseFromLink(url)
         else if (security == "reality") reality.parseFromLink(url)
         when (network) {
@@ -714,22 +1279,26 @@ class XrayStreamSetting {
         return true
     }
 
-    /** xrayStreamSetting.cpp:797-818. */
+    /** xrayStreamSetting::ParseFromJson; false lets the importer keep the outbound as a lossless custom Xray outbound. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("finalmask") && obj.isObject("finalmask")) finalmask = obj.obj("finalmask").copy()
         if (obj.contains("method")) network = obj.string("method")
         else if (obj.contains("network")) network = obj.string("network")
-        if (network == "tcp") network = "raw"
+        network = normalizeXrayNetwork(network)
         if (network !in xrayNetworks) return false
         if (network == "raw") {
             if (obj.isObject("rawSettings")) rawSettings = obj.obj("rawSettings").copy()
             else if (obj.isObject("tcpSettings")) rawSettings = obj.obj("tcpSettings").copy()
         }
-        if (obj.contains("security")) security = obj.string("security")
+        if (obj.contains("security")) security = obj.string("security").trim().lowercase()
         if (security == "tls" && obj.isObject("tlsSettings")) tls.parseFromJson(obj.obj("tlsSettings"))
         else if (security == "reality" && obj.isObject("realitySettings")) reality.parseFromJson(obj.obj("realitySettings"))
-        if (network == "xhttp" && obj.isObject("xhttpSettings")) xhttp.parseFromJson(obj.obj("xhttpSettings"))
+        if (network == "xhttp") {
+            // splithttpSettings is Xray's older key; xhttpSettings wins when both are set.
+            val settings = if (obj.isObject("xhttpSettings")) obj.obj("xhttpSettings") else obj["splithttpSettings"] as? JsonObject
+            if (settings != null) xhttp.parseFromJson(settings)
+        }
         if (network == "ws" && obj.isObject("wsSettings")) ws.parseFromJson(obj.obj("wsSettings"))
         if (network == "httpupgrade" && obj.isObject("httpupgradeSettings")) httpupgrade.parseFromJson(obj.obj("httpupgradeSettings"))
         if (network == "grpc" && obj.isObject("grpcSettings")) grpc.parseFromJson(obj.obj("grpcSettings"))
@@ -737,8 +1306,8 @@ class XrayStreamSetting {
     }
 
     /**
-     * xrayStreamSetting.cpp:820-843: only raw, ws, grpc and xhttp carry over; `tls` picks TLS or Reality by the
-     * public key. Clash's `tcp` is read as raw (Android only), as the link and JSON parsers do.
+     * xrayStreamSetting::ParseFromClash: only raw, ws, grpc and xhttp carry over (Clash's `tcp` is raw); `tls` picks
+     * TLS or Reality by the public key.
      */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         val clashNetwork = proxy.string("network")
@@ -766,7 +1335,7 @@ class XrayStreamSetting {
         return true
     }
 
-    /** xrayStreamSetting.cpp:845-869. */
+    /** xrayStreamSetting::ExportToLink. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         if (network.isNotEmpty()) q.add("type" to if (network == "raw") "tcp" else network)
@@ -792,7 +1361,7 @@ class XrayStreamSetting {
         return q
     }
 
-    /** xrayStreamSetting.cpp:871-884: network and security always, the active network's settings even when empty. */
+    /** xrayStreamSetting::ExportToJson: network and security always, the active network's settings even when empty. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["network"] = network
@@ -810,7 +1379,7 @@ class XrayStreamSetting {
         return obj
     }
 
-    /** xrayStreamSetting.cpp:886-899: no rawSettings, so subscription-rotated hosts and paths do not change the identity. */
+    /** xrayStreamSetting::ExportIdentity: no rawSettings, so subscription-rotated hosts and paths do not change the identity. */
     fun exportIdentity(): JsonObject {
         val obj = JsonObject()
         obj["network"] = network
@@ -826,12 +1395,92 @@ class XrayStreamSetting {
         return obj
     }
 
-    /** xrayStreamSetting.cpp:921-924: binding and DNS are wired by the core, not the config. */
+    /** xrayStreamSetting::Build: binding and DNS are wired by the core, not the config. */
     fun build(ctx: BuildContext): JsonObject = exportToJson()
+
+    /** xrayStreamSetting::Validate; [ctx] gives the global uTLS fingerprint an empty TLS fingerprint falls back to. */
+    fun validate(issues: MutableList<Issue>, serverAddress: String, ctx: BuildContext) {
+        val root = "streamSettings."
+        issues.addIssue(Severity.Error, root + "network", XrayChecks.xrayNetwork(network), network)
+        issues.addIssue(Severity.Error, root + "security", XrayChecks.xraySecurity(security), security)
+        issues.addIssue(Severity.Error, root + "security", XrayChecks.xrayRealityNetwork(security, network))
+
+        when (security.trim().lowercase()) {
+            "tls" -> {
+                val key = root + "tlsSettings."
+                val fingerprint = tls.fingerprint.ifEmpty { ctx.utlsFingerprint }
+                issues.addIssue(Severity.Warning, key + "serverName", CommonChecks.serverName(tls.serverName), tls.serverName)
+                issues.addIssue(Severity.Error, key + "fingerprint", XrayChecks.xrayFingerprint(tls.fingerprint, false), tls.fingerprint)
+                issues.addIssue(Severity.Error, key + "pinnedPeerCertSha256", XrayChecks.xrayPinnedSha256(tls.pinnedPeerCertSha256))
+                issues.addIssue(Severity.Warning, key + "cipherSuites", XrayChecks.xrayCipherSuites(tls.cipherSuites))
+                issues.addIssue(Severity.Warning, key + "cipherSuites", XrayChecks.xrayCipherSuitesNeedUnsafe(tls.cipherSuites, fingerprint))
+                issues.addIssue(
+                    Severity.Warning, key + "echConfigList",
+                    XrayChecks.xrayEchConfigList(tls.echConfigList, tls.serverName.ifEmpty { serverAddress }),
+                )
+            }
+
+            "reality" -> {
+                val key = root + "realitySettings."
+                issues.addIssue(Severity.Warning, key + "serverName", CommonChecks.serverName(reality.serverName), reality.serverName)
+                issues.addIssue(Severity.Error, key + "fingerprint", XrayChecks.xrayFingerprint(reality.fingerprint, true), reality.fingerprint)
+                issues.addIssue(Severity.Error, key + "password", TlsChecks.realityPublicKey(reality.password, true))
+                issues.addIssue(Severity.Error, key + "shortId", TlsChecks.realityShortId(reality.shortId))
+                issues.addIssue(Severity.Error, key + "spiderX", XrayChecks.xraySpiderX(reality.spiderX), reality.spiderX)
+                issues.addIssue(Severity.Error, key + "mldsa65Verify", XrayChecks.xrayMldsa65Verify(reality.mldsa65Verify))
+            }
+        }
+
+        val net = normalizeXrayNetwork(network)
+        if (net == "httpupgrade") {
+            issues.addIssue(Severity.Error, root + "httpupgradeSettings.headers", XrayChecks.xrayHeadersHost(httpupgrade.headers))
+        }
+        if (net != "xhttp") return
+        val x = xhttp
+        val extra = root + "xhttpSettings.extra."
+        issues.addIssue(Severity.Error, root + "xhttpSettings.mode", XrayChecks.xrayXHTTPMode(x.mode), x.mode)
+        issues.addIssue(Severity.Error, extra + "headers", XrayChecks.xrayHeadersHost(x.headers))
+        issues.addIssue(Severity.Error, extra + "xPaddingBytes", XrayChecks.xrayXPaddingBytes(x.xPaddingBytes), x.xPaddingBytes)
+        issues.addIssue(Severity.Error, extra + "xPaddingMethod", XrayChecks.xrayPaddingMethod(x.xPaddingMethod), x.xPaddingMethod)
+        issues.addIssue(Severity.Error, extra + "xPaddingPlacement", XrayChecks.xrayPaddingPlacement(x.xPaddingPlacement), x.xPaddingPlacement)
+        issues.addIssue(Severity.Error, extra + "uplinkHTTPMethod", XrayChecks.xrayUplinkMethod(x.uplinkHTTPMethod, x.mode), x.uplinkHTTPMethod)
+        issues.addIssue(Severity.Warning, extra + "uplinkHTTPMethod", Validation.httpToken(x.uplinkHTTPMethod), x.uplinkHTTPMethod)
+        issues.addIssue(
+            Severity.Error, extra + "uplinkDataPlacement",
+            XrayChecks.xrayUplinkDataPlacement(x.uplinkDataPlacement, x.mode), x.uplinkDataPlacement,
+        )
+        issues.addIssue(Severity.Error, extra + "sessionIDPlacement", XrayChecks.xrayMetaPlacement(x.sessionIDPlacement), x.sessionIDPlacement)
+        issues.addIssue(Severity.Error, extra + "seqPlacement", XrayChecks.xrayMetaPlacement(x.seqPlacement), x.seqPlacement)
+        issues.addIssue(Severity.Error, extra + "sessionIDTable", XrayChecks.xraySessionId(x.sessionIDTable, x.sessionIDLength))
+        if (x.serverMaxHeaderBytes < 0) {
+            issues.addIssue(
+                Severity.Error, extra + "serverMaxHeaderBytes",
+                Validation.int(x.serverMaxHeaderBytes.toString(), 0, Int.MAX_VALUE.toLong()),
+            )
+        }
+        for ((name, value) in listOf(
+            "sessionIDLength" to x.sessionIDLength,
+            "uplinkChunkSize" to x.uplinkChunkSize,
+            "scMaxEachPostBytes" to x.scMaxEachPostBytes,
+            "scMinPostsIntervalMs" to x.scMinPostsIntervalMs,
+            "scStreamUpServerSecs" to x.scStreamUpServerSecs,
+            "xmux.maxConcurrency" to x.maxConcurrency,
+            "xmux.maxConnections" to x.maxConnections,
+            "xmux.cMaxReuseTimes" to x.cMaxReuseTimes,
+            "xmux.hMaxRequestTimes" to x.hMaxRequestTimes,
+            "xmux.hMaxReusableSecs" to x.hMaxReusableSecs,
+        )) {
+            issues.addIssue(Severity.Error, extra + name, XrayChecks.xrayInt32Range(value), value)
+        }
+        issues.addIssue(Severity.Error, extra + "xmux.maxConnections", XrayChecks.xrayXmuxExclusive(x.maxConnections, x.maxConcurrency))
+        XrayChecks.xrayXHTTPDownloadLeg(
+            issues, "",
+            jsonObjectOf("streamSettings" to jsonObjectOf("network" to "xhttp", "xhttpSettings" to xhttp.exportToJson())),
+        )
+    }
 }
 
-// xrayStreamSetting.cpp:584-604 / 664-684: the `ws-opts` block as the ws and httpupgrade streams read it; a
-// `?ed=` suffix on the path is the early-data size.
+// xrayWS / xrayHttpUpgrade ParseFromClash: the `ws-opts` block; a `?ed=` suffix on the path is the early-data size.
 private class ClashWsOptions(proxy: ClashProxy) {
     var path: String? = null
     var ed: Int? = null
@@ -850,48 +1499,118 @@ private class ClashWsOptions(proxy: ClashProxy) {
                 path = wsPath
             }
         }
-        val wsHeaders = ws.stringMap("headers")
+        // clashWsHeaders: Host goes to the host field (Xray httpupgrade refuses it inside headers, ws deprecates it
+        // there); mihomo sends it as the HTTP Host and uses servername only for the SNI.
+        var headerHost = ""
+        for ((key, value) in ws.stringMap("headers")) {
+            if (key.equals("host", ignoreCase = true)) {
+                if (headerHost.isEmpty()) headerHost = value
+                continue
+            }
+            headers.add(key)
+            headers.add(value)
+        }
         val servername = proxy.string("servername")
-        host = if (servername.isNotEmpty()) servername else wsHeaders["Host"]
-        for ((key, value) in wsHeaders) headers.add("$key=$value")
+        host = if (headerHost.isNotEmpty()) headerHost else servername.ifEmpty { null }
     }
 }
 
-// buildDownloadSettingsObject (xrayStreamSetting.cpp:52-94): the Clash `download-settings` block as the Xray
-// downloadSettings object the profile stores as compact JSON.
-private fun clashDownloadSettings(settings: ClashProxy): JsonObject {
+// buildDownloadSettingsObject (xrayStreamSetting.cpp): the Clash `download-settings` block as the Xray downloadSettings
+// object the profile stores as compact JSON. mihomo takes every unset value from the proxy itself.
+private fun clashDownloadSettings(proxy: ClashProxy): JsonObject {
+    val opts = proxy.obj("xhttp-opts")
+    val settings = opts.obj("download-settings")
     val obj = JsonObject()
-    val server = settings.string("server")
+    // The upload leg has already read, and reported, the proxy's own tls and port.
+    val proxyTls = unreported { proxy.bool("tls") }
+    val server = Hosts.toAceHost((if (settings.present("server")) settings.string("server") else proxy.string("server")).trim())
     if (server.isNotEmpty()) obj["address"] = server
-    obj["port"] = settings.int("port")
+    obj["port"] = if (settings.present("port")) settings.int("port") else unreported { proxy.int("port") }
     obj["network"] = "xhttp"
-    val realityOpts = settings.obj("reality-opts")
-    val publicKey = realityOpts.string("public-key")
-    val servername = settings.string("servername")
-    val clientFingerprint = settings.string("client-fingerprint")
-    if (publicKey.isNotEmpty()) {
+
+    val proxyReality = proxy.obj("reality-opts")
+    val uploadReality = proxyTls && proxyReality.string("public-key").isNotEmpty()
+    val ownReality = settings.present("reality-opts")
+    // The upload leg uses its REALITY options only with tls on.
+    val downloadReality = when {
+        ownReality -> settings.obj("reality-opts")
+        proxyTls -> proxyReality
+        else -> ClashProxy(JsonObject())
+    }
+    val serverName = (if (settings.present("servername")) settings.string("servername") else proxy.string("servername").ifEmpty { proxy.string("sni") }).trim()
+    val ownFingerprint = settings.present("client-fingerprint")
+    val clientFingerprint = if (ownFingerprint) settings.string("client-fingerprint") else proxy.string("client-fingerprint")
+    // Unknown names are dropped as on the upload leg, which has already reported an inherited one it refuses too.
+    fun knownFingerprint(reality: Boolean): String {
+        val fingerprint = clientFingerprint.trim()
+        val message = XrayChecks.xrayFingerprint(fingerprint, reality)
+        if (message.isEmpty()) return fingerprint
+        if (ownFingerprint || !proxyTls || XrayChecks.xrayFingerprint(fingerprint, uploadReality).isEmpty()) {
+            acceptOptional(if (ownFingerprint) "xhttp-opts.download-settings.client-fingerprint" else "client-fingerprint", message, fingerprint)
+        }
+        return ""
+    }
+
+    val rawPublicKey = downloadReality.string("public-key")
+    if (rawPublicKey.isNotEmpty()) {
         obj["security"] = "reality"
         val reality = JsonObject()
         reality["show"] = false
-        if (servername.isNotEmpty()) reality["serverName"] = Hosts.toAceHost(servername)
-        if (clientFingerprint.isNotEmpty()) reality["fingerprint"] = clientFingerprint
+        if (serverName.isNotEmpty()) reality["serverName"] = Hosts.toAceHost(serverName)
+        // REALITY needs uTLS, so mihomo's "none" and Xray's "unsafe" leave Xray's default, as XrayReality.build does.
+        if (!isClashNoFingerprint(clientFingerprint)) {
+            val fingerprint = knownFingerprint(true)
+            if (fingerprint.isNotEmpty() && fingerprint.lowercase() != TLS_UNSAFE_FINGERPRINT) reality["fingerprint"] = fingerprint
+        }
+        val at = "xhttp-opts.download-settings.reality-opts."
+        val shortId = downloadReality.string("short-id").trim()
+        val publicKey: String
+        if (ownReality) {
+            publicKey = importRealityPublicKey(rawPublicKey, at + "public-key")
+            TlsChecks.realityPublicKey(publicKey, true).let { if (it.isNotEmpty()) ParseDiag.error(at + "public-key", it) }
+            TlsChecks.realityShortId(shortId).let { if (it.isNotEmpty()) ParseDiag.error(at + "short-id", it) }
+        } else {
+            // The upload leg has already reported and checked the key it lends.
+            publicKey = unreported { importRealityPublicKey(rawPublicKey, at + "public-key") }
+        }
         reality["publicKey"] = publicKey
-        val shortId = realityOpts.string("short-id")
         if (shortId.isNotEmpty()) reality["shortId"] = shortId
         obj["realitySettings"] = reality
-    } else if (settings.bool("tls")) {
+    } else if (if (settings.present("tls")) settings.bool("tls") else proxyTls) {
         obj["security"] = "tls"
         val tls = JsonObject()
-        if (servername.isNotEmpty()) tls["serverName"] = Hosts.toAceHost(servername)
-        val alpn = settings.strings("alpn")
-        if (alpn.isNotEmpty()) tls["alpn"] = JsonArray().also { array -> alpn.forEach { array.add(it) } }
-        if (clientFingerprint.isNotEmpty()) tls["fingerprint"] = clientFingerprint
+        if (serverName.isNotEmpty()) tls["serverName"] = Hosts.toAceHost(serverName)
+        val ownAlpn = settings.node.isString("alpn") || settings.node.isArray("alpn")
+        val alpn = JsonArray()
+        for (item in if (ownAlpn) settings.strings("alpn") else proxy.strings("alpn")) {
+            val protocol = item.trim()
+            if (protocol.isNotEmpty()) alpn.add(protocol)
+        }
+        if (alpn.isNotEmpty()) tls["alpn"] = alpn
+        if (isClashNoFingerprint(clientFingerprint)) {
+            tls["fingerprint"] = TLS_UNSAFE_FINGERPRINT
+        } else {
+            val fingerprint = knownFingerprint(false)
+            if (fingerprint.isNotEmpty()) tls["fingerprint"] = fingerprint
+        }
+        val ownPin = settings.present("fingerprint")
+        val pin = (if (ownPin) settings.string("fingerprint") else proxy.string("fingerprint")).trim()
+        if (pin.isNotEmpty()) {
+            tls["pinnedPeerCertSha256"] = pin
+            // An inherited pin on a TLS upload leg is already checked there by validate.
+            val uploadPinned = proxyTls && !uploadReality
+            val message = XrayChecks.xrayPinnedSha256(pin)
+            if (message.isNotEmpty() && (ownPin || !uploadPinned)) {
+                ParseDiag.error(if (ownPin) "xhttp-opts.download-settings.fingerprint" else "fingerprint", message)
+            }
+        }
         obj["tlsSettings"] = tls
     }
+
     val xhttp = JsonObject()
-    val host = settings.string("host")
+    val host = if (settings.present("host")) settings.string("host") else opts.string("host")
     if (host.isNotEmpty()) xhttp["host"] = Hosts.toAceHost(host)
-    val path = settings.string("path")
+    val path = if (settings.present("path")) settings.string("path") else opts.string("path")
     if (path.isNotEmpty()) xhttp["path"] = path
     xhttp["mode"] = settings.string("mode").ifEmpty { "auto" }
     val extra = JsonObject()

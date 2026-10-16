@@ -3,14 +3,20 @@ package io.nekohasekai.sagernet.group
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupRepo
+import io.nekohasekai.sagernet.database.GroupSort
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
+import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.SettingsMapper
+import io.nekohasekai.sagernet.database.SubUserInfo
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.outbound.Outbound
+import io.nekohasekai.sagernet.outbound.`import`.ImportReport
 import io.nekohasekai.sagernet.outbound.`import`.ProfileImport
+import io.nekohasekai.sagernet.validation.vplural
+import io.nekohasekai.sagernet.validation.vtr
 
 /** GroupUpdater::refresh, importDocuments and afterUrlTest (GroupUpdater.cpp:465-683) over the Room data layer. */
 internal object SubscriptionRefresh {
@@ -20,7 +26,16 @@ internal object SubscriptionRefresh {
     /** kInsertChunk (GroupUpdater.cpp:23). */
     private const val INSERT_CHUNK = 500
 
-    class ImportResult(@JvmField val gid: Long, @JvmField val count: Int)
+    private val BOM = Char(0xFEFF)
+
+    /** [reported]: the import box went out, so the caller's own count line is skipped (MwArg::Quiet). */
+    class ImportResult(@JvmField val gid: Long, @JvmField val count: Int, @JvmField val reported: Boolean = false)
+
+    /**
+     * GroupUpdater::Surface: where an update's problems go: the log only (automatic), the diff popup (manual
+     * refresh), or a report box (a new subscription's first update).
+     */
+    enum class Surface { Log, Diff, Report }
 
     private fun str(id: Int, vararg args: Any): String = app.getString(id, *args)
 
@@ -32,49 +47,72 @@ internal object SubscriptionRefresh {
         return sb.toString()
     }
 
-    /** refresh (GroupUpdater.cpp:479-656); [notifyErrors]: fetch failures also go to the callbacks. */
-    suspend fun refresh(gid: Long, showDiff: Boolean, notifyErrors: Boolean) {
+    /** reportTitle (GroupUpdater.cpp). */
+    private fun reportTitle(surface: Surface, groupName: String): String =
+        if (surface == Surface.Report) vtr(R.string.validation_import_title_new, groupName) else vtr(R.string.validation_import_title_update, groupName)
+
+    /** logImportReport (GroupUpdater.cpp). */
+    private fun logImportReport(report: ImportReport) = Logs.w(report.text())
+
+    /**
+     * refresh and applyRefresh (GroupUpdater.cpp); [notifyErrors]: fetch failures also go to the callbacks. The parse
+     * report goes to the log, and with [Surface.Diff] / [Surface.Report] to a popup.
+     */
+    suspend fun refresh(gid: Long, surface: Surface, notifyErrors: Boolean) {
         val group = GroupRepo.get(gid) ?: return
         if (group.archive) return
         val options = group.subOptions
+        val url = group.url.trim()
 
-        val fetched = SubscriptionFetch.fetch(group.url.trim(), group.name, RequestIdentity.resolve(group))
+        val fetched = SubscriptionFetch.fetch(url, group.name, RequestIdentity.resolve(group))
         if (fetched.error != null) {
-            if (notifyErrors) SubscriptionQueue.error(gid, fetched.error)
+            if (surface == Surface.Report) {
+                // The group is stored before the download: a failed one is fixed through its own TLS, HTTP and User Agent settings.
+                val report = ImportReport()
+                report.addFatal(vtr(R.string.validation_import_fetch_failed, fetched.error))
+                report.addFatal(vtr(R.string.validation_import_first_download_failed, group.name))
+                SubscriptionQueue.report(gid, reportTitle(surface, group.name), report.summary(), true)
+            } else if (notifyErrors) {
+                SubscriptionQueue.error(gid, fetched.error)
+            }
+            return
+        }
+        val current = GroupRepo.get(gid) ?: return
+        if (current.url.trim() != url) {
+            Logs.w(str(R.string.subs_url_changed, group.name))
             return
         }
         // A body without a single profile is far likelier a broken or blocked response than an emptied subscription:
         // abort before the first write (no deletion, no update time). Parsing writes nothing, so it runs first.
-        val parsed = parse(fetched.body)
+        val result = parse(fetched.body)
+        val parsed = result.outbounds
         if (parsed.isEmpty()) {
-            // GroupUpdater.cpp:746-752: panels answer a device or quota limit with an empty list and an announcement
-            // saying why.
+            val probe = result.report()
+            if (looksLikeWebPage(fetched.body)) probe.addFatal(str(R.string.subs_web_page))
+            // Panels answer a device or quota limit with an empty list and an announcement saying why.
             val info = fetched.subInfo
             if (info.valid) {
-                if (info.announce.isNotEmpty()) Logs.w(str(R.string.subs_announcement_from, group.name, info.announce))
-                SagerDatabase.groupDao.setSubscriptionMetadata(gid, info.toJsonString())
-                GroupRepo.postUpdate(gid)
+                if (info.announce.isNotEmpty()) probe.addFatal(str(R.string.subs_announcement_from, group.name, info.announce))
+                saveMetadata(group, info)
             }
             val message = str(R.string.subs_empty_aborted)
-            Logs.w("${group.name}: $message")
-            if (notifyErrors) SubscriptionQueue.error(gid, message)
+            probe.addFatal(message)
+            Logs.w("${group.name}: " + probe.text())
+            if (surface != Surface.Log) SubscriptionQueue.report(gid, reportTitle(surface, group.name), probe.text(), true)
+            else if (notifyErrors) SubscriptionQueue.error(gid, message)
             return
         }
         // Android-only (#53): filtered servers never enter the sink, so the diff deletes the ones already stored.
         val servers = SubscriptionNameFilter.apply(parsed, options, group.name)
         if (servers.isEmpty()) {
-            if (fetched.subInfo.valid) {
-                SagerDatabase.groupDao.setSubscriptionMetadata(gid, fetched.subInfo.toJsonString())
-                GroupRepo.postUpdate(gid)
-            }
+            if (fetched.subInfo.valid) saveMetadata(group, fetched.subInfo)
             val message = str(R.string.subs_filtered_all_aborted, parsed.size)
             Logs.w("${group.name}: $message")
             if (notifyErrors) SubscriptionQueue.error(gid, message)
             return
         }
 
-        SagerDatabase.groupDao.setSubscriptionInfo(gid, System.currentTimeMillis() / 1000, fetched.subInfo.toJsonString())
-        GroupRepo.postUpdate(gid)
+        val metadata = saveMetadata(group, fetched.subInfo)
 
         // Auto selectors are local state, not servers the remote sent: keep them out of the diff.
         val sticky = ProfileManager.members(gid).withIndex()
@@ -82,6 +120,11 @@ internal object SubscriptionRefresh {
             .map { it.index to it.value.id }
         val stickyIds = sticky.mapTo(HashSet()) { it.second }
         fun members(): List<ProxyEntity> = ProfileManager.members(gid).filter { it.id !in stickyIds }
+
+        val membersBefore = ProfileManager.memberIds(gid)
+        val routeNames = SubscriptionRouteRebind.referencedNames(members())
+        // Deleted for good, for the route rules that named them.
+        val removed = ArrayList<Long>()
 
         // Ids a running auto selector can no longer trust: deleted, or same id with new settings.
         val disturbed = ArrayList<Long>()
@@ -98,6 +141,7 @@ internal object SubscriptionRefresh {
                 return
             }
             disturbed.addAll(outcome.deleted)
+            removed.addAll(outcome.deleted)
             // A survivor still belongs to the subscription: fall through to the diff.
             cleared = members().isEmpty()
         }
@@ -117,6 +161,8 @@ internal object SubscriptionRefresh {
         for (outbound in servers) sink.add(outbound)
         sink.flush()
         Logs.i(">>>>>>>> " + str(R.string.subs_process_complete))
+        val report = result.report()
+        report.setImported(sink.stored())
 
         var changeText: String
         if (cleared) {
@@ -147,6 +193,7 @@ internal object SubscriptionRefresh {
             val outcome = ProfileManager.batchDeleteProfiles(stale)
             if (!outcome.ok) dbError(gid)
             disturbed.addAll(outcome.deleted)
+            removed.addAll(outcome.deleted)
 
             // Survivors of the deletion (the running profile, working ones) return to their previous position.
             fun restore(id: Long): Boolean {
@@ -195,32 +242,63 @@ internal object SubscriptionRefresh {
         val filtered = SubscriptionFilters.removeFlagged(gid, members(), options)
         changeText += filtered.report
         disturbed.addAll(filtered.deleted)
+        removed.addAll(filtered.deleted)
+
+        SubscriptionRouteRebind.rebind(gid, removed, routeNames)
+        // The subscription's own order replaced the group's above.
+        if (disturbed.isNotEmpty() || ProfileManager.memberIds(gid) != membersBefore) GroupSort.resortLater(gid)
+        // Stamped only once the update went through, so an interrupted one is retried instead of counting as fresh.
+        if (!urlChanged(gid, url)) {
+            SagerDatabase.groupDao.setSubscriptionInfo(gid, System.currentTimeMillis() / 1000, metadata)
+            GroupRepo.postUpdate(gid)
+        }
 
         Logs.i("<<<<<<<< " + str(R.string.subs_change_of_log, group.name) + "\n" + changeText)
-        SubscriptionQueue.report(
-            gid,
-            str(R.string.subs_change_of, group.name),
-            changeText.trim().ifEmpty { str(R.string.subs_nothing) },
-            showDiff && DataStore.subShowChangePopup,
-        )
+        if (report.hasProblems()) logImportReport(report)
+        val diffPopup = surface == Surface.Diff && DataStore.subShowChangePopup
+        var diffBody = changeText.trim().ifEmpty { str(R.string.subs_nothing) }
+        if (diffPopup && report.hasProblems()) diffBody += "\n\n" + vtr(R.string.validation_import_problems) + "\n" + report.text()
+        SubscriptionQueue.report(gid, str(R.string.subs_change_of, group.name), diffBody, diffPopup)
+        if (!diffPopup && surface != Surface.Log && report.hasProblems()) {
+            SubscriptionQueue.report(gid, reportTitle(surface, group.name), report.text(), true)
+        }
         SubscriptionQueue.groupChanged(gid, disturbed)
 
         if (options.urlTest) SubscriptionQueue.requestUrlTest(gid, members().map { it.id })
     }
 
-    /** importDocuments (GroupUpdater.cpp:465-477): a plain import into [gid] (<= 0: the current group). */
-    suspend fun importDocuments(gid: Long, documents: List<String>): ImportResult {
+    /**
+     * importDocuments (GroupUpdater.cpp): a plain import into [gid] (<= 0: the current group). With problems the
+     * import box goes out as a popup report; [emptyReason] replaces the generic "nothing found" when nothing is stored.
+     */
+    suspend fun importDocuments(gid: Long, documents: List<String>, emptyReason: String = ""): ImportResult {
         val target = if (gid > 0) gid else GroupRepo.currentId()
         val sink = ImportSink(target, null)
+        val report = ImportReport()
         Logs.i(">>>>>>>> " + str(R.string.subs_processing))
         for (document in documents) {
-            for (outbound in parse(document)) sink.add(outbound)
+            val result = parse(document)
+            report.addAll(result.reports)
+            for (outbound in result.outbounds) sink.add(outbound)
         }
         sink.flush()
         Logs.i(">>>>>>>> " + str(R.string.subs_process_complete))
-        val count = sink.entries.count { it.id > 0 }
-        Logs.i(str(R.string.subs_imported, count))
-        return ImportResult(target, count)
+        val count = sink.stored()
+        report.setImported(count)
+        val lost = sink.entries.size - count
+        if (lost > 0) report.addFatal(vplural(R.plurals.validation_import_not_saved, lost))
+        if (count == 0) {
+            if (emptyReason.isNotEmpty()) report.addFatal(emptyReason)
+            else if (!report.hasProblems()) report.addFatal(vtr(R.string.validation_import_none))
+        }
+        if (!report.hasProblems()) {
+            Logs.i(str(R.string.subs_imported, count))
+            return ImportResult(target, count)
+        }
+        // The logged summary already carries the count.
+        logImportReport(report)
+        SubscriptionQueue.report(target, vtr(R.string.validation_import_title), report.text(), true)
+        return ImportResult(target, count, reported = true)
     }
 
     /** afterUrlTest (GroupUpdater.cpp:669-683). */
@@ -239,17 +317,38 @@ internal object SubscriptionRefresh {
         SubscriptionQueue.groupChanged(gid, result.deleted)
     }
 
+    /** GroupUpdater.cpp:850-853: an edit of the group's URL meanwhile (or its deletion) makes the answer stale. */
+    private fun urlChanged(gid: Long, url: String): Boolean = GroupRepo.get(gid)?.url?.trim() != url
+
+    /** looksLikeWebPage (GroupUpdater.cpp:84-87): a CAPTCHA, bot check or block page instead of a subscription. */
+    internal fun looksLikeWebPage(body: String): Boolean {
+        val start = body.indexOfFirst { !it.isWhitespace() && it != BOM }
+        if (start < 0) return false
+        return body.startsWith("<!doctype html", start, ignoreCase = true) || body.startsWith("<html", start, ignoreCase = true)
+    }
+
+    /**
+     * Stores what the answer said about the subscription (no update time) and returns the column text; a changed
+     * profile-update-interval moves a group that follows it to another schedule.
+     */
+    private suspend fun saveMetadata(group: ProxyGroup, info: SubUserInfo): String {
+        val metadata = info.toJsonString()
+        SagerDatabase.groupDao.setSubscriptionMetadata(group.id, metadata)
+        GroupRepo.postUpdate(group.id)
+        if (info.serverInterval != group.subInfo.serverInterval && SubscriptionScheduler.followsServerInterval(group)) {
+            SubscriptionScheduler.schedule()
+        }
+        return metadata
+    }
+
     internal fun dbError(gid: Long) {
         val message = str(R.string.subs_db_error_corrupted)
         Logs.e(message)
         SubscriptionQueue.error(gid, message)
     }
 
-    private fun parse(body: String): List<Outbound> {
-        val result = ProfileImport.parse(body, SettingsMapper.xrayVlessPreference())
-        for (message in result.messages) Logs.w(message)
-        return result.outbounds
-    }
+    private fun parse(body: String): ProfileImport.Result =
+        ProfileImport.parse(body, SettingsMapper.xrayVlessPreference(), SettingsMapper.buildContext())
 
     /** The stored JSON of a type this build cannot parse is kept as is (re-exporting would drop its fields). */
     private fun contentKey(profile: ProxyEntity): String = SubscriptionReconcile.contentKey(
@@ -263,6 +362,9 @@ internal object SubscriptionRefresh {
     private class ImportSink(private val gid: Long, private val index: ContentIndex?) {
         val entries = ArrayList<NewEntry>()
         private val chunk = ArrayList<Outbound>()
+
+        /** stored (GroupUpdater.cpp): rows that really reached the database, added or reused from the group. */
+        fun stored(): Int = entries.count { it.id > 0 }
         private val entryIndex = ArrayList<Int>()
 
         suspend fun add(outbound: Outbound) {

@@ -6,4 +6,12 @@
         app:title="@string/profile_name"
         app:useSimpleSummaryProvider="true" />
 
+    <!-- the chain editor's hop list below; ChainSettingsActivity shows the list's problems on this row -->
+    <Preference
+        app:icon="@drawable/ic_baseline_link_24"
+        app:key="chainHops"
+        app:persistent="false"
+        app:selectable="false"
+        app:title="@string/validation_chain_hops" />
+
 </PreferenceScreen>

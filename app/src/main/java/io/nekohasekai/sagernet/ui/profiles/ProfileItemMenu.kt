@@ -58,7 +58,7 @@ class ProfileItemMenu(private val host: ConfigurationFragment) {
         val menu = popup.menu
         // the compact card has no edit / share buttons
         menu.findItem(R.id.action_edit).isVisible = adapter.isCompact
-        menu.findItem(R.id.action_share).isVisible = adapter.isCompact && !profile.isChain()
+        menu.findItem(R.id.action_share).isVisible = adapter.isCompact
         // positions of the stored order: a filtered list says nothing about it (like the desktop's drag and drop)
         val index = adapter.memberIds.indexOf(profile.id)
         val movable = !adapter.isFiltered && index >= 0
@@ -119,10 +119,14 @@ class ProfileItemMenu(private val host: ConfigurationFragment) {
     }
 
     fun showShare(anchor: View, profile: ProxyEntity) {
-        if (host.select || profile.isChain()) return
+        if (host.select) return
         val popup = PopupMenu(anchor.context, anchor)
         popup.menuInflater.inflate(R.menu.profile_share_menu, popup.menu)
-        if (profile.exportLink().isEmpty()) {
+        // a chain has no link of its own, only the config it starts (bf89f273)
+        if (profile.isChain()) {
+            popup.menu.removeItem(R.id.action_group_qr)
+            popup.menu.removeItem(R.id.action_group_clipboard)
+        } else if (profile.exportLink().isEmpty()) {
             popup.menu.findItem(R.id.action_group_qr).subMenu?.removeItem(R.id.action_standard_qr)
             popup.menu.findItem(R.id.action_group_clipboard).subMenu?.removeItem(R.id.action_standard_clipboard)
         }

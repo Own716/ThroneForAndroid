@@ -196,11 +196,13 @@ object SubscribeFlows {
         }
     }
 
-    /** ImportText into the group, then "Imported N profile(s)". */
+    /** ImportText into the group, then "Imported N profile(s)" unless MainActivity's report popup already said so. */
     private fun importInto(activity: FragmentActivity, content: String, gid: Long) {
         runOnDefaultDispatcher {
             val message = try {
-                activity.getString(R.string.grp_imported_count, SubscriptionClient.importText(content, gid))
+                val result = SubscriptionClient.importText(content, gid)
+                if (result.reported && activity is MainActivity) return@runOnDefaultDispatcher
+                activity.getString(R.string.grp_imported_count, result.count)
             } catch (e: Exception) {
                 Logs.w(e)
                 e.readableMessage

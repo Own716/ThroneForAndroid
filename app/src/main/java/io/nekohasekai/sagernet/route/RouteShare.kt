@@ -1,20 +1,20 @@
 package io.nekohasekai.sagernet.route
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonInput
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
 import io.nekohasekai.sagernet.outbound.json.JsonWriter
 import io.nekohasekai.sagernet.outbound.link.Base64Strict
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.vtr
 
-/** The desktop's route share formats (RouteProfile.cpp:438-627). */
+/** The desktop's route share formats (RouteProfile.cpp). */
 object RouteShare {
     const val ROUTE_LINK_PREFIX = "throne://route/"
     const val REMOTE_ROUTE_LINK_PREFIX = "throne://remoteroute/"
     private const val KIND = "throne-route-profile"
-
-    /** Keys whose numbers the desktop writes (port lists, ip_version, override_port) and must read back (D12). */
-    private val NUMERIC_KEYS = setOf("port", "source_port", "ip_version", "override_port")
 
     /** The keys a rule object may carry: name, type and outbound besides the ones [setField] reads. */
     private val RULE_KEYS = setOf(
@@ -22,15 +22,16 @@ object RouteShare {
         "domain_keyword", "domain_regex", "source_ip_cidr", "source_ip_is_private", "ip_cidr", "ip_is_private",
         "source_port", "source_port_range", "port", "port_range", "process_name", "process_path", "process_path_regex",
         "package_name", "package_name_regex", "network_type", "network_is_expensive", "wifi_ssid", "wifi_bssid",
-        "rule_set", "invert", "method", "reject_method", "no_drop", "override_address", "override_port", "tls_spoof",
-        "tls_spoof_method", "override_destination", "strategy", "sniffers",
+        "rule_set", "invert", "method", "reject_method", "no_drop", "override_address", "override_port", "tls_fragment",
+        "tls_fragment_fallback_delay", "tls_record_fragment", "tls_spoof", "tls_spoof_method", "override_destination",
+        "strategy", "sniffers",
     )
 
     class Imported(val profile: RouteProfile?, val fatal: String, val warnings: List<String>, val legacyArray: Boolean)
 
     class RemoteEntry(val url: String, val name: String)
 
-    /** ToShareObject (RouteProfile.cpp:438-483) for a structured profile; rules whose server is missing are left out. */
+    /** ToShareObject for a structured profile; rules whose server is missing are left out. */
     fun toShareObject(p: RouteProfile, profileName: (Long) -> String?): JsonObject {
         val root = JsonObject()
         root["kind"] = KIND
@@ -57,12 +58,13 @@ object RouteShare {
         ROUTE_LINK_PREFIX + Base64Strict.encode(JsonWriter.write(toShareObject(p, profileName)), urlSafe = true, padding = false)
 
     /**
-     * FromShareInput (RouteProfile.cpp:491-586): a throne://route link (any case), share JSON, base64url or standard
-     * base64 of it with or without padding, or a legacy rule array. Raw profiles are refused; endpoints and endpoint
-     * rules are dropped with a warning (D11), as are rules with fields Android does not support ([parseRuleObject]).
-     * Rule outbound names resolve through [profileIdByName].
+     * FromShareInput: a throne://route link (any case), share JSON, base64url or standard base64 of it with or without
+     * padding, or a legacy rule array. Raw profiles are refused; endpoints and endpoint rules are dropped with a
+     * warning (D11), as are rules with fields Android does not support ([parseRuleObject]). Rule outbound names
+     * resolve through [profileIdByName]; [env] gives the rule-set list and the profiles the rules are validated
+     * against (the default reads them, so call this off the main thread).
      */
-    fun fromShareInput(text: String, profileIdByName: (String) -> Long?): Imported {
+    fun fromShareInput(text: String, profileIdByName: (String) -> Long?, env: RuleEnv = RuleEnv.stored()): Imported {
         var input = text.trim()
         if (input.isEmpty()) return failure("Empty input")
         if (input.startsWith(ROUTE_LINK_PREFIX, ignoreCase = true)) {
@@ -75,15 +77,15 @@ object RouteShare {
             ?: return failure("Input is not valid JSON, base64, or a Throne route link")
         val warnings = ArrayList<String>()
         return when (doc) {
-            is JsonObject -> fromObject(doc, warnings, profileIdByName)
-            is JsonArray -> fromLegacyArray(doc, warnings, profileIdByName)
+            is JsonObject -> fromObject(doc, warnings, profileIdByName, env)
+            is JsonArray -> fromLegacyArray(doc, warnings, profileIdByName, env)
             else -> failure("Unsupported input")
         }
     }
 
     /**
-     * FromRemoteRoutesLink (RouteProfile.cpp:588-627): null when [text] is not a throne://remoteroute link; for an
-     * invalid one an [IllegalArgumentException] carries the desktop's error text, so a returned list is never empty.
+     * FromRemoteRoutesLink: null when [text] is not a throne://remoteroute link; for an invalid one an
+     * [IllegalArgumentException] carries the desktop's error text, so a returned list is never empty.
      */
     fun fromRemoteRoutesLink(text: String): List<RemoteEntry>? {
         val input = text.trim()
@@ -115,23 +117,30 @@ object RouteShare {
         return if (value is JsonObject || value is JsonArray) value else null
     }
 
-    private fun fromObject(root: JsonObject, warnings: MutableList<String>, profileIdByName: (String) -> Long?): Imported {
+    private fun fromObject(root: JsonObject, warnings: MutableList<String>, profileIdByName: (String) -> Long?, env: RuleEnv): Imported {
         if (root.string("kind") != KIND) return failure("Unrecognized route object")
         if (root.bool("raw")) return failure("raw routing profiles are not supported on Android")
         val profile = RouteProfile()
         profile.name = root.string("name")
-        profile.default_outbound_id = OutboundIds.fromName(root.string("default_outbound")) ?: OutboundIds.PROXY
+        val defaultOutbound = root.string("default_outbound")
+        profile.default_outbound_id = OutboundIds.fromName(defaultOutbound) ?: OutboundIds.PROXY
+        if (defaultOutbound.isNotEmpty() && OutboundIds.toName(profile.default_outbound_id) != defaultOutbound) {
+            warnings.add(vtr(R.string.validation_route_default_outbound, defaultOutbound))
+        }
         if (root.array("endpoints").isNotEmpty()) warnings.add("endpoints are not supported on Android and were dropped")
         var fallbackNum = 1
         for ((i, value) in root.array("rules").withIndex()) {
-            if (value !is JsonObject) continue
+            if (value !is JsonObject) {
+                warnings.add(vtr(R.string.validation_route_rule_not_object, (i + 1).toString()))
+                continue
+            }
             val type = RuleType.ofToken(value.string("type"))
             val name = value.string("name")
             if (type == RuleType.ENDPOINT_PREFERRED_BY) {
                 warnings.add("endpoint rule \"$name\" dropped: endpoints are not supported on Android")
                 continue
             }
-            val rule = parseRuleObject(value, name.ifEmpty { "#${i + 1}" }, warnings, profileIdByName) ?: continue
+            val rule = parseRuleObject(value, name.ifEmpty { "#${i + 1}" }, warnings, profileIdByName, env) ?: continue
             rule.type = type.id
             rule.name = name.ifEmpty { "rule_" + fallbackNum++ }
             profile.rules.add(rule)
@@ -140,17 +149,17 @@ object RouteShare {
     }
 
     /**
-     * parseJsonArray (RouteProfile.cpp:258-288): the legacy bare rule array; every rule is custom. An array is nothing
-     * but its rules, so one whose rules are all dropped fails like an empty one.
+     * parseJsonArray: the legacy bare rule array. An array is nothing but its rules, so one whose rules are all
+     * dropped fails like an empty one.
      */
-    private fun fromLegacyArray(arr: JsonArray, warnings: MutableList<String>, profileIdByName: (String) -> Long?): Imported {
+    private fun fromLegacyArray(arr: JsonArray, warnings: MutableList<String>, profileIdByName: (String) -> Long?, env: RuleEnv): Imported {
         if (arr.isEmpty()) return failure("Input is not a valid json array")
         val profile = RouteProfile()
         var ruleId = 1
         for ((i, item) in arr.withIndex()) {
             if (item !is JsonObject) return failure("expected array of json objects but have member of type '${qtJsonType(item)}'")
             val name = item.string("name")
-            val rule = parseRuleObject(item, name.ifEmpty { "#${i + 1}" }, warnings, profileIdByName) ?: continue
+            val rule = parseRuleObject(item, name.ifEmpty { "#${i + 1}" }, warnings, profileIdByName, env) ?: continue
             rule.name = name.ifEmpty { "imported rule #" + ruleId++ }
             profile.rules.add(rule)
         }
@@ -159,15 +168,16 @@ object RouteShare {
     }
 
     /**
-     * parse_rule_object (RouteProfile.cpp:215-256) plus the D12 fixes: numbers, warp-bypass/block names, reject_method.
-     * Import policy: a rule with a key outside [RULE_KEYS] or a network_type sing-box does not know is dropped whole,
-     * with a warning naming it by [label], and null returned: importing it without that field would widen its match.
+     * parse_rule_object plus the D12 fixes: warp-bypass/block names, reject_method. A rule with a key outside
+     * [RULE_KEYS] is dropped whole, with a warning naming it by [label], and null returned: importing it without that
+     * field would widen its match. The parsed rule is then validated ([checkImportedRule]).
      */
     private fun parseRuleObject(
         obj: JsonObject,
         label: String,
         warnings: MutableList<String>,
         profileIdByName: (String) -> Long?,
+        env: RuleEnv,
     ): RouteRule? {
         val keys = obj.sortedKeys()
         keys.firstOrNull { it !in RULE_KEYS }?.let {
@@ -175,58 +185,142 @@ object RouteShare {
             return null
         }
         val rule = RouteRule()
-        val notes = ArrayList<String>()
+        // The caller sets it too; validation needs it now, since simple rules have fixed actions.
+        rule.type = RuleType.ofToken(obj.string("type")).id
         for (key in keys) {
             if (key == "name" || key == "type") continue
-            when (val value = obj[key]) {
-                is JsonArray -> if (key != "outbound") setField(rule, key, value.map { itemText(key, it) })
-                is String -> if (key == "outbound") {
-                    rule.outbound_id = OutboundIds.fromName(value) ?: profileIdByName(value) ?: run {
-                        notes.add("outbound \"$value\" not found, using proxy")
-                        OutboundIds.PROXY
-                    }
-                } else {
-                    setField(rule, key, listOf(value))
-                }
-
-                is Boolean -> if (key != "outbound") setField(rule, key, listOf(if (value) "true" else "false"))
-                is Long, is Double -> if (key == "outbound") {
-                    val id = JsonValues.toInt(value).toLong()
-                    rule.outbound_id = when (id) {
+            val value = obj[key]
+            if (key == "outbound") {
+                rule.outbound_id = when (value) {
+                    is Long, is Double -> when (val id = JsonValues.toInt(value).toLong()) {
                         OutboundIds.PROXY, OutboundIds.DIRECT, OutboundIds.BLOCK, OutboundIds.WARP_BYPASS -> id
                         else -> {
-                            notes.add("outbound id $id not found, using proxy")
+                            warnings.add("outbound id $id not found, using proxy")
                             OutboundIds.PROXY
                         }
                     }
-                } else if (key in NUMERIC_KEYS) {
-                    setField(rule, key, listOf(numberText(value)))
-                }
 
-                else -> {}
+                    is String -> OutboundIds.fromName(value) ?: profileIdByName(value) ?: run {
+                        warnings.add("outbound \"$value\" not found, using proxy")
+                        OutboundIds.PROXY
+                    }
+
+                    else -> {
+                        warnings.add(vtr(R.string.validation_route_rule_outbound_type, label))
+                        OutboundIds.PROXY
+                    }
+                }
+                continue
             }
+            val items = ArrayList<String>()
+            var usable = true
+            if (value is JsonArray) {
+                for (item in value) {
+                    val text = scalarText(item)
+                    if (text == null) {
+                        usable = false
+                        break
+                    }
+                    items.add(text)
+                }
+            } else {
+                val text = scalarText(value)
+                if (text == null) usable = false else items.add(text)
+            }
+            val member = memberOf(key)
+            if (!usable) {
+                if (RouteRule.isMatchAttribute(member)) {
+                    warnings.add(vtr(R.string.validation_route_rule_dropped_type, label, key))
+                    return null
+                }
+                warnings.add(vtr(R.string.validation_route_rule_ignored_type, label, key))
+                continue
+            }
+            if (items.size > 1 && !RouteRule.isListAttribute(member)) {
+                warnings.add(vtr(R.string.validation_route_rule_single_value, label, key, items.first()))
+            }
+            setField(rule, key, items)
         }
-        rule.network_type.firstOrNull { it !in RouteRule.NETWORK_TYPES }?.let {
-            warnings.add("rule \"$label\" dropped: unsupported network_type \"$it\"")
-            return null
-        }
-        warnings.addAll(notes)
+        if (!checkImportedRule(rule, label, warnings, env)) return null
         return rule
     }
 
-    private fun itemText(key: String, item: Any): String = when {
-        item is String -> item
-        (item is Long || item is Double) && key in NUMERIC_KEYS -> numberText(item)
-        else -> ""
+    /**
+     * routeProfileCheckImportedRule: a bad condition drops the rule, which would otherwise match more; a bad option
+     * is cleared to the core's default.
+     */
+    private fun checkImportedRule(rule: RouteRule, label: String, warnings: MutableList<String>, env: RuleEnv): Boolean {
+        // Each pass repairs one error, and every repair removes it.
+        for (pass in 0 until 64) {
+            val issues = rule.validate(env)
+            val error = issues.firstOrNull { it.severity == Severity.Error }
+            if (error == null) {
+                for (issue in issues) warnings.add(vtr(R.string.validation_route_rule_warning, label, issueText(issue)))
+                return true
+            }
+            // Without invert one item less only narrows the rule; a custom rule whose condition loses every item would match more.
+            if (!rule.invert && RouteRule.isListAttribute(error.attr) && error.value.isNotEmpty()) {
+                val kept = ArrayList<String>()
+                val removed = ArrayList<RuleIssue>()
+                for (item in rule.currentValues(error.attr)) {
+                    val issue = RouteRule.checkValue(error.attr, item, env.catalog)
+                    if (issue == null || issue.severity != Severity.Error) kept.add(item) else removed.add(issue)
+                }
+                if (kept.isEmpty() && rule.type == RuleType.CUSTOM.id && RouteRule.isMatchAttribute(error.attr)) {
+                    warnings.add(vtr(R.string.validation_route_rule_dropped, label, issueText(error)))
+                    return false
+                }
+                for (issue in removed) warnings.add(vtr(R.string.validation_route_rule_item_removed, label, issueText(issue)))
+                rule.setValues(error.attr, kept)
+                continue
+            }
+            if (error.attr == "action" || RouteRule.isMatchAttribute(error.attr)) {
+                warnings.add(vtr(R.string.validation_route_rule_dropped, label, issueText(error)))
+                return false
+            }
+            if (error.attr == "outbound_id") {
+                rule.outbound_id = OutboundIds.PROXY
+                warnings.add(vtr(R.string.validation_route_rule_proxy, label, error.message))
+            } else {
+                rule.clearAttribute(error.attr)
+                warnings.add(vtr(R.string.validation_route_rule_cleared, label, shareKey(error.attr), error.message))
+            }
+        }
+        return false
     }
 
-    private fun numberText(value: Any): String = when (value) {
+    /** routeProfileIssueText, naming the attribute by its share key. */
+    private fun issueText(issue: RuleIssue): String {
+        if (issue.value.isEmpty()) return vtr(R.string.validation_route_issue, shareKey(issue.attr), issue.message)
+        val value = if (issue.value.length > 60) issue.value.take(59) + "…" else issue.value
+        return vtr(R.string.validation_route_issue_value, shareKey(issue.attr), value, issue.message)
+    }
+
+    /** The member [setField] fills from a share [key]. */
+    private fun memberOf(key: String): String = when (key) {
+        "method", "reject_method" -> "reject_method"
+        "override_destination" -> "sniff_override_dest"
+        else -> key
+    }
+
+    /** The share key of a member, as the imported JSON names it. */
+    private fun shareKey(attr: String): String = when (attr) {
+        "reject_method" -> "method"
+        "sniff_override_dest" -> "override_destination"
+        "outbound_id" -> "outbound"
+        else -> attr
+    }
+
+    /** routeProfileScalarText: objects and null carry no value a rule field can hold. */
+    private fun scalarText(value: Any?): String? = when (value) {
+        is Boolean -> if (value) "true" else "false"
+        is String -> value
         is Long -> value.toString()
         is Double -> JsonWriter.formatDouble(value)
-        else -> ""
+        else -> null
     }
 
-    /** set_field_value (RouteRule.cpp:480-600) plus Android's package_name_regex, network_type and network_is_expensive. */
+    /** set_field_value plus Android's package_name_regex, network_type and network_is_expensive. */
     private fun setField(rule: RouteRule, key: String, values: List<String>) {
         val scalar = values.firstOrNull()?.trim() ?: ""
         val list = values.map { it.trim() }.filterTo(ArrayList()) { it.isNotEmpty() }
@@ -259,11 +353,15 @@ object RouteShare {
             "sniffers" -> rule.sniffers = list
             "rule_set" -> rule.rule_set = list
             "invert" -> rule.invert = scalar == "true"
-            "action" -> rule.action = scalar
+            // The core reads an empty action as route, which get_rule_json would emit without its outbound.
+            "action" -> rule.action = scalar.ifEmpty { "route" }
             "method", "reject_method" -> rule.reject_method = scalar
             "no_drop" -> rule.no_drop = scalar == "true"
             "override_address" -> rule.override_address = scalar
             "override_port" -> rule.override_port = scalar
+            "tls_fragment" -> rule.tls_fragment = scalar == "true"
+            "tls_fragment_fallback_delay" -> rule.tls_fragment_fallback_delay = scalar
+            "tls_record_fragment" -> rule.tls_record_fragment = scalar == "true"
             "tls_spoof" -> rule.tls_spoof = scalar
             "tls_spoof_method" -> rule.tls_spoof_method = scalar
             "override_destination" -> rule.sniff_override_dest = scalar == "true"

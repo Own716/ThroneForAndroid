@@ -88,8 +88,8 @@ class NativeInterface : PlatformInterface {
     override fun packageNamesByUid(uid: Int): StringIterator = packageNamesOf(uid).toStringIterator()
 
     private fun packageNamesOf(uid: Int): List<String> {
-        if (uid <= 1000) return listOf("android")
-        return PackageCache.snapshot().uidMap[uid].orEmpty()
+        if (uid % PackageCache.PER_USER_RANGE <= 1000) return listOf("android")
+        return PackageCache.snapshot().packagesOf(uid)
     }
 
     // Registered synchronously so DefaultInterface() is populated before the box's first dial.

@@ -11,6 +11,7 @@ import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.database.SortInput
 import io.nekohasekai.sagernet.database.SubscriptionOptions
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
@@ -21,7 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.net.InetAddress
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /** The post-update filters (GroupUpdater.cpp:183-296) and the manual group actions that need the core. */
 internal object SubscriptionFilters {
@@ -140,7 +141,7 @@ internal object SubscriptionFilters {
             val address = profile.outbound.getAddress()
             !profile.outbound.invalid && address.isNotEmpty() && !address.isIpAddress()
         }
-        val resolved = AtomicInteger()
+        val resolved = ConcurrentLinkedQueue<Long>()
         val permits = Semaphore(RESOLVE_PARALLELISM)
         coroutineScope {
             for (profile in targets) launch(Dispatchers.IO) {
@@ -155,12 +156,13 @@ internal object SubscriptionFilters {
                     profile.putOutbound(outbound)
                     if (profile.outboundJson == before) return@withPermit
                     SagerDatabase.proxyDao.updateOutbound(profile.id, profile.type, profile.name, profile.outboundJson)
-                    resolved.incrementAndGet()
+                    resolved.add(profile.id)
                 }
             }
         }
+        GroupSort.repositionLater(mapOf(gid to resolved.toList()), SortInput.CONFIG)
         GroupRepo.postReload(gid)
-        val report = app.getString(R.string.subs_resolved, resolved.get(), targets.size)
+        val report = app.getString(R.string.subs_resolved, resolved.size, targets.size)
         Logs.i(report)
         return report
     }

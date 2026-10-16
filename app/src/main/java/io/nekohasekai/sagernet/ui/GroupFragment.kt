@@ -24,6 +24,7 @@ import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.databinding.LayoutGroupItemBinding
 import io.nekohasekai.sagernet.group.SubscriptionClient
+import io.nekohasekai.sagernet.group.SubscriptionScheduler
 import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.confirmAction
@@ -160,7 +161,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group), Toolbar.OnMenuItem
     /** GroupItem::on_remove_clicked: never the last group; a running profile of the group is stopped first. */
     private fun confirmRemove(group: ProxyGroup) {
         requireContext().confirmAction(getString(R.string.confirm_remove_group), group.displayName(), R.string.delete) {
-            runOnDefaultDispatcher { GroupRepo.delete(group.id) }
+            runOnDefaultDispatcher { if (GroupRepo.delete(group.id)) SubscriptionScheduler.schedule() }
         }
     }
 

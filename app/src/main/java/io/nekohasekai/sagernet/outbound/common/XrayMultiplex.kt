@@ -2,10 +2,10 @@ package io.nekohasekai.sagernet.outbound.common
 
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.import.ClashProxy
-import io.nekohasekai.sagernet.outbound.QtStrings
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.link.LinkParser
 import io.nekohasekai.sagernet.outbound.link.ParsedLink
+import io.nekohasekai.sagernet.validation.readQueryInt
 
 /** xrayMultiplex (include/configs/common/xrayMultiplex.h, src/configs/common/xrayMultiplex.cpp). `useDefault` true means "Keep Default". */
 class XrayMultiplex {
@@ -16,7 +16,7 @@ class XrayMultiplex {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** xrayMultiplex.cpp:6-15. */
+    /** xrayMultiplex::ParseFromLink (xrayMultiplex.cpp): any whole number is kept, negative ones included. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
@@ -24,12 +24,12 @@ class XrayMultiplex {
             enabled = q.value("mux").replace("1", "true") == "true"
             useDefault = false
         }
-        if (q.has("mux_concurrency")) concurrency = QtStrings.toInt(q.value("mux_concurrency"))
-        if (q.has("mux_xudp_concurrency")) xudpConcurrency = QtStrings.toInt(q.value("mux_xudp_concurrency"))
+        concurrency = readQueryInt(q, "mux_concurrency", concurrency, Int.MIN_VALUE)
+        xudpConcurrency = readQueryInt(q, "mux_xudp_concurrency", xudpConcurrency, Int.MIN_VALUE)
         return true
     }
 
-    /** xrayMultiplex.cpp:17-23. */
+    /** xrayMultiplex::ParseFromJson (xrayMultiplex.cpp). */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("enabled")) {
@@ -41,7 +41,7 @@ class XrayMultiplex {
         return true
     }
 
-    /** xrayMultiplex.cpp:25-32. */
+    /** xrayMultiplex::ParseFromClash (xrayMultiplex.cpp). */
     fun parseFromClash(proxy: ClashProxy): Boolean {
         val smux = proxy.obj("smux")
         enabled = smux.bool("enabled")
@@ -51,7 +51,7 @@ class XrayMultiplex {
         return true
     }
 
-    /** xrayMultiplex.cpp:34-43. */
+    /** xrayMultiplex::ExportToLink (xrayMultiplex.cpp). */
     fun exportToLink(): List<Pair<String, String>> {
         if (useDefault) return emptyList()
         val q = ArrayList<Pair<String, String>>()
@@ -63,7 +63,7 @@ class XrayMultiplex {
         return q
     }
 
-    /** xrayMultiplex.cpp:45-54. */
+    /** xrayMultiplex::ExportToJson (xrayMultiplex.cpp). */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (useDefault) return obj
@@ -74,7 +74,7 @@ class XrayMultiplex {
         return obj
     }
 
-    /** xrayMultiplex.cpp:56-63. */
+    /** xrayMultiplex::Build (xrayMultiplex.cpp). */
     fun build(ctx: BuildContext): JsonObject {
         val obj = exportToJson()
         if (useDefault && ctx.xrayMuxDefaultOn) obj["enabled"] = true

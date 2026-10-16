@@ -37,11 +37,14 @@ object ExitIp {
     var info: Info? = null
         private set
 
-    /** The stats bar on screen; told about every change of [info]. */
+    /** The stats bar on screen; told about every change of [info] or [refreshing]. */
     var listener: (() -> Unit)? = null
 
     private var generation = 0
     private var job: Job? = null
+
+    /** A lookup runs; [info] keeps the previous result until it ends. */
+    val refreshing: Boolean get() = job != null
 
     /** Once per connection: nothing while a result is held or a lookup runs. */
     fun ensure() {
@@ -65,6 +68,7 @@ object ExitIp {
             job = null
             update(result)
         }
+        listener?.invoke()
     }
 
     fun clear() {
@@ -75,7 +79,6 @@ object ExitIp {
     }
 
     private fun update(value: Info?) {
-        if (info === value) return
         info = value
         listener?.invoke()
     }

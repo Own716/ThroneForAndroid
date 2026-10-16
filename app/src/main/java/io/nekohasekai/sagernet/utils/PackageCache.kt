@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicLong
 
 object PackageCache {
 
+    /** UserHandle.PER_USER_RANGE (hidden API). */
+    const val PER_USER_RANGE = 100000
+
     /**
      * One complete listing. A reload builds the next one aside and publishes it whole, so readers (the core's
      * connection owner lookups on Go threads among them) never see a half-built map and never wait for a reload.
@@ -28,6 +31,13 @@ object PackageCache {
         val uidMap: Map<Int, List<String>>,
     ) {
         private val labels = ConcurrentHashMap<String, String>()
+        private val appIdMap by lazy { uidMap.mapKeys { it.key % PER_USER_RANGE } }
+
+        /**
+         * The packages of [uid]. The listing holds this user's apps only, so a uid of another user or profile (a dual
+         * app, the work profile, the private space: userId * [PER_USER_RANGE] + appId) falls back to its app id.
+         */
+        fun packagesOf(uid: Int): List<String> = uidMap[uid] ?: appIdMap[uid % PER_USER_RANGE].orEmpty()
 
         fun loadLabel(packageName: String): String {
             labels[packageName]?.let { return it }

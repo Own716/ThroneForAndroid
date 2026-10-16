@@ -44,6 +44,8 @@ import io.nekohasekai.sagernet.database.GroupSort
 import io.nekohasekai.sagernet.database.GroupSortAction
 import io.nekohasekai.sagernet.database.GroupSortMethod
 import io.nekohasekai.sagernet.database.ProfileManager
+import io.nekohasekai.sagernet.database.TestBy
+import io.nekohasekai.sagernet.ui.profiles.GroupFields
 import io.nekohasekai.sagernet.ktx.confirmAction
 import io.nekohasekai.sagernet.ktx.nameList
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
@@ -844,11 +846,9 @@ class TestPanelController(
         val upload = s.speedMode == TestUiState.SPEED_MODE_UPLOAD
         runOnDefaultDispatcher {
             val sorted = if (bySpeed) {
-                // Fastest first; "N/A" (failed) sorts after untested like the desktop's bitrate key.
-                val order = ProfileManager.members(groupId)
-                    .sortedByDescending { GroupSort.bitrateToBps(if (upload) it.ulSpeed else it.dlSpeed) }
-                ProfileManager.setOrder(groupId, order.map { it.id })
-                true
+                // Kept like the latency sort, so the next stored result re-sorts instead of undoing the order.
+                GroupFields.update(groupId) { it.testSortBy = (if (upload) TestBy.UL_SPEED else TestBy.DL_SPEED).value }
+                GroupSort.sortProfiles(groupId, GroupSortAction(GroupSortMethod.BY_TEST_RESULT, descending = true))
             } else {
                 GroupSort.sortProfiles(groupId, GroupSortAction(GroupSortMethod.BY_LATENCY))
             }

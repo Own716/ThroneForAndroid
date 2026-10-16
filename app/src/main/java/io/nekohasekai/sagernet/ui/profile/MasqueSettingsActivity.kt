@@ -3,9 +3,11 @@ package io.nekohasekai.sagernet.ui.profile
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.types.Masque
+import io.nekohasekai.sagernet.ui.ValidationForm
 import io.nekohasekai.sagernet.ui.warp.WarpClient
 import io.nekohasekai.sagernet.ui.warp.WarpGenerate
 import io.nekohasekai.sagernet.ui.warp.setFieldText
+import io.nekohasekai.sagernet.validation.Validation
 
 /** MASQUE endpoint: the TLS camouflage (no Reality, masque.cpp strips it) and QUIC blocks; the rest through Raw JSON. */
 class MasqueSettingsActivity : BindingSettingsActivity<Masque>() {
@@ -25,6 +27,16 @@ class MasqueSettingsActivity : BindingSettingsActivity<Masque>() {
         pbm.bool("disable_version_fallback")
         TlsBlock.bind(pbm)
         QuicBlock.bind(pbm)
+    }
+
+    // edit_masque.cpp: comma-separated addresses are accepted too, and bare ones are saved with /32 or /128
+    override fun Masque.serialize() {
+        pbm.fromCacheAll(this)
+        address = Masque.hostPrefixed(address.flatMap { it.replace(" ", "").split(',') })
+    }
+
+    override fun ValidationForm.bindValidation() {
+        bind("mtu", Validation.Rules.int(0, Int.MAX_VALUE.toLong()))
     }
 
     override fun PreferenceFragmentCompat.onPreferencesCreated() {

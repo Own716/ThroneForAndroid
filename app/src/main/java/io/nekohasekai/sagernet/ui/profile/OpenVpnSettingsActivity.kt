@@ -3,8 +3,13 @@ package io.nekohasekai.sagernet.ui.profile
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.types.OpenVpn
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.validation.Validation
 
-/** OpenVPN endpoint: the primary fields on the screen, the full option set through the Raw JSON preference. */
+/**
+ * OpenVPN endpoint: the primary fields on the screen, the full option set through the Raw JSON preference. The
+ * desktop's Advanced dialog and table checks run in OpenVpn.validate; issues of fields without a row are listed at save.
+ */
 class OpenVpnSettingsActivity : BindingSettingsActivity<OpenVpn>() {
 
     override fun createEntity() = OpenVpn()
@@ -30,6 +35,11 @@ class OpenVpnSettingsActivity : BindingSettingsActivity<OpenVpn>() {
         numberInput("mtu")
         passwordSummary("password", "static_challenge")
         multilineInput("tls.certificate", "tls.client_certificate", "tls.client_key")
+    }
+
+    /** edit_openvpn.cpp bindValidation: everything else it binds is checked by OpenVpn.validate. */
+    override fun ValidationForm.bindValidation() {
+        bind("mtu", Validation.Rules.int(0, 65535))
     }
 
 }

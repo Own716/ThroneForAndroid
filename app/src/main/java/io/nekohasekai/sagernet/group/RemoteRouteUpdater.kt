@@ -53,7 +53,25 @@ object RemoteRouteUpdater {
         } catch (e: Exception) {
             return e.readableMessage
         }
+        refreshRuleSetList()
         return applyContent(p, body, warnings, fetched = true)
+    }
+
+    private const val RULE_SET_LIST_MAX_AGE_MS = 10 * 60 * 1000L
+    private val ruleSetListLock = Any()
+    private var ruleSetListCheckedAt = 0L
+
+    /**
+     * The fetched rules' rule-set names are checked against srslist.h, so a stale copy would drop the rules that name
+     * newly published sets. Refreshed at most once per [RULE_SET_LIST_MAX_AGE_MS] per process; a failure keeps the old copy.
+     */
+    private fun refreshRuleSetList() {
+        synchronized(ruleSetListLock) {
+            val now = System.currentTimeMillis()
+            if (now - ruleSetListCheckedAt < RULE_SET_LIST_MAX_AGE_MS) return
+            ruleSetListCheckedAt = now
+            RouteRepo.refresh()?.let { Logs.w("routeprofiles refresh before a remote route update: $it") }
+        }
     }
 
     /** [fetchInto] and save; returns the error, or null. A saved profile deleted meanwhile is not recreated. */
@@ -129,9 +147,9 @@ object RemoteRouteUpdater {
 
     /**
      * (Re)schedules the periodic update from route_auto_update, or cancels it below [MIN_INTERVAL_MINUTES]. Call it
-     * after the interval changes; [keepExisting] (app start) leaves an already scheduled update alone.
+     * after the interval changes and at app start: UPDATE registers the job again and keeps the current period's start.
      */
-    fun schedule(keepExisting: Boolean = false) {
+    fun schedule() {
         runOnDefaultDispatcher {
             val workManager = RemoteWorkManager.getInstance(app)
             val interval = DataStore.routeAutoUpdate
@@ -155,8 +173,7 @@ object RemoteRouteUpdater {
                             .build()
                     )
                     .build()
-                val policy = if (keepExisting) ExistingPeriodicWorkPolicy.KEEP else ExistingPeriodicWorkPolicy.UPDATE
-                workManager.enqueueUniquePeriodicWork(WORK_NAME, policy, request).await()
+                workManager.enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, request).await()
             } catch (e: Throwable) {
                 Logs.w("RemoteRouteUpdater: scheduling failed", e)
             }

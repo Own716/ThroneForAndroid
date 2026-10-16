@@ -1,6 +1,9 @@
 package io.nekohasekai.sagernet.route
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.json.JsonObject
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.vtr
 
 /**
  * A RouteProfile (include/database/entities/RouteProfile.h). [id] 0 means not saved yet. The desktop's raw profile
@@ -149,6 +152,31 @@ class RouteProfile {
 
     companion object {
         private val RULE_IDS = Regex("-?\\d+")
+
+        /** The member each Basic-tab "prefix:value" line fills (add_simple_address_rule / add_simple_process_rule). */
+        private val SIMPLE_RULE_ATTRS = mapOf(
+            "domain" to "domain", "suffix" to "domain_suffix", "keyword" to "domain_keyword", "regex" to "domain_regex",
+            "ruleset" to "rule_set", "ip" to "ip_cidr", "processName" to "process_name", "processPath" to "process_path",
+        )
+
+        /**
+         * RouteProfile::CheckSimpleRule: one "prefix:value" line of the desktop's Basic tab on its own, null when
+         * acceptable. Android edits no simple rules, so nothing here applies them (UpdateSimpleRules, AppendSimpleRule).
+         */
+        @JvmStatic
+        @JvmOverloads
+        fun checkSimpleRule(rawLine: String, catalog: RuleSetCatalog? = null): RuleIssue? {
+            val line = rawLine.trim()
+            if (line.isEmpty()) return null
+            val colon = line.indexOf(':')
+            val prefix = if (colon < 0) "" else line.substring(0, colon).trim()
+            val attr = SIMPLE_RULE_ATTRS[prefix] ?: return RuleIssue(Severity.Error, "", vtr(R.string.validation_route_simple_prefix))
+            var value = line.substring(colon + 1).trim()
+            if (value.isEmpty()) return RuleIssue(Severity.Error, attr, vtr(R.string.validation_route_simple_value, prefix))
+            // Stored lowercased by add_simple_address_rule.
+            if (prefix == "domain" || prefix == "suffix" || prefix == "keyword") value = value.lowercase()
+            return RouteRule.checkValue(attr, value, catalog)
+        }
 
         /** GetDefaultChain (RouteProfile.cpp:661-670). */
         fun defaultProfile(): RouteProfile = RouteProfile().apply {

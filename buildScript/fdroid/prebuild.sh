@@ -44,6 +44,7 @@ curl -fsSL --retry 3 https://codeload.github.com/SagerNet/sing-box-dashboard/tar
 find "$DASHBOARD" -type f -name '.*' -delete
 test -z "$(find "$DASHBOARD" -type d -name '_*')"
 test -s "$DASHBOARD/index.html"
+python3 buildScript/dashboard_css.py "$DASHBOARD"
 
 # F-Droid builds stable tags: the same versionCode as the GitHub release (VERSION_CODE * 1000 + 999).
 grep -q '^throne.build=' gradle.properties || printf '\nthrone.build=999\n' >> gradle.properties

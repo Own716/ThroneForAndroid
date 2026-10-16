@@ -1,8 +1,10 @@
 package io.nekohasekai.sagernet.outbound
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.common.DialFields
 import io.nekohasekai.sagernet.outbound.common.Multiplex
 import io.nekohasekai.sagernet.outbound.common.QuicFields
+import io.nekohasekai.sagernet.outbound.common.TLS_UNSAFE_FINGERPRINT
 import io.nekohasekai.sagernet.outbound.common.Tls
 import io.nekohasekai.sagernet.outbound.common.Transport
 import io.nekohasekai.sagernet.outbound.common.XrayMultiplex
@@ -15,6 +17,15 @@ import io.nekohasekai.sagernet.outbound.link.Hosts
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
 import io.nekohasekai.sagernet.outbound.link.ParsedLink
+import io.nekohasekai.sagernet.outbound.types.Juicity
+import io.nekohasekai.sagernet.outbound.types.Masque
+import io.nekohasekai.sagernet.outbound.types.Naive
+import io.nekohasekai.sagernet.outbound.types.TrustTunnel
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
 
 /** BuildResult (baseConfig.h:9-12). */
 class BuildResult(@JvmField val json: JsonObject, @JvmField val error: String = "") {
@@ -27,7 +38,8 @@ enum class SecurityLevel { Unknown, None, Weak, Secure }
 /**
  * Outbound.h:30-45; labels are the desktop's untranslated source strings. [caVerified]: Secure only through the CA
  * check, which the global skip_cert setting turns off. [compromised]: weakened by that global setting rather than by
- * the profile itself.
+ * the profile itself. [publicLeg]: set by a weaker leg to a public server, which a private profile address does not
+ * make moot.
  */
 data class SecurityInfo(
     @JvmField val label: String = "",
@@ -35,6 +47,7 @@ data class SecurityInfo(
     @JvmField val level: SecurityLevel = SecurityLevel.Unknown,
     @JvmField val caVerified: Boolean = false,
     @JvmField val compromised: Boolean = false,
+    @JvmField val publicLeg: Boolean = false,
 ) {
     val isDangerous: Boolean get() = level == SecurityLevel.None || level == SecurityLevel.Weak
 
@@ -42,12 +55,78 @@ data class SecurityInfo(
     val isInsecure: Boolean get() = isDangerous && !compromised
 }
 
-/** WithPrivateServer (Outbound.cpp:49-57): traffic to a private address never crosses the internet. */
+/** WithPrivateServer (Outbound.cpp): traffic to a private address never crosses the internet. */
 fun withPrivateServer(info: SecurityInfo, host: String): SecurityInfo {
-    if (info.isDangerous && Hosts.isPrivateHost(host)) {
+    if (info.isDangerous && !info.publicLeg && Hosts.isPrivateHost(host)) {
         return info.copy(label = "Private", level = SecurityLevel.Secure, compromised = false)
     }
     return info
+}
+
+/** The Checks of Outbound.h: the global custom TLS fragment settings. */
+object OutboundChecks {
+    /** sing-box common/dialer/fragment.go: chunks go through a 1024-byte buffer, five of them into a 2048-byte queue. */
+    private const val FRAGMENT_MAX_CHUNK = 1019L
+    private const val FRAGMENT_SAFE_CHUNK = 400L
+
+    /** The larger bound of a spec that already passed intOrRange. */
+    private fun fragmentMax(spec: String): Long {
+        val t = spec.trim()
+        return Validation.toInt(t.substring(t.indexOf('-') + 1)) ?: 0
+    }
+
+    /** "n" or "min-max" bytes: a max of 0 never advances, one above 1019 panics the core. */
+    @JvmStatic
+    fun tlsFragmentSize(spec: String): String {
+        Validation.intOrRange(spec, 0, FRAGMENT_MAX_CHUNK).let { if (it.isNotEmpty()) return it }
+        if (spec.isNotBlank() && fragmentMax(spec) == 0L) return vtr(R.string.validation_fragment_size_zero)
+        return ""
+    }
+
+    /** A warning for a max above 400: five chunks can then overflow the core's 2048-byte queue on a very large ClientHello. */
+    @JvmStatic
+    fun tlsFragmentSizeLarge(spec: String): String {
+        if (tlsFragmentSize(spec).isNotEmpty() || fragmentMax(spec) <= FRAGMENT_SAFE_CHUNK) return ""
+        return vtr(R.string.validation_fragment_size_large)
+    }
+
+    @JvmStatic
+    fun tlsFragmentSleep(spec: String): String = Validation.intOrRange(spec, 0, Long.MAX_VALUE)
+
+    @JvmStatic
+    fun fragmentSize(ctx: BuildContext): String = ctx.fragmentSize.trim().ifEmpty { "10-100" }
+
+    @JvmStatic
+    fun fragmentSleep(ctx: BuildContext): String = ctx.fragmentSleep.trim().ifEmpty { "2-5" }
+
+    /** FragmentSettingsError (Outbound.cpp): why the global custom TLS-fragment settings fail every fragmenting TCP build. */
+    @JvmStatic
+    fun fragmentSettingsError(ctx: BuildContext): String {
+        if (ctx.fragmentImplementation != "custom") return ""
+        val size = fragmentSize(ctx)
+        val sleep = fragmentSleep(ctx)
+        tlsFragmentSize(size).let { if (it.isNotEmpty()) return vtr(R.string.validation_fragment_size_setting, size, it) }
+        tlsFragmentSleep(sleep).let { if (it.isNotEmpty()) return vtr(R.string.validation_fragment_sleep_setting, sleep, it) }
+        return ""
+    }
+
+    /** The dialer-level fragment wraps only TCP dials (sing-box common/dialer/extended_tcp.go). */
+    private fun dialsTcp(out: Outbound): Boolean {
+        // warpmasque falls back to HTTP/2 over TCP unless that is turned off.
+        if (out is Masque) return out.http_version == 2 || !out.disable_version_fallback
+        if (out.hasQuic() || out is Juicity) return false
+        if (out is TrustTunnel) return !out.quic
+        if (out is Naive) return !out.quic
+        return !out.hasTransport() || out.getTransport().type != "quic"
+    }
+
+    /** CustomFragmentApplies (Outbound.cpp): whether the base build emits the dialer-level fragment, which also drops tcp_fast_open. */
+    @JvmStatic
+    fun customFragmentApplies(out: Outbound, ctx: BuildContext): Boolean {
+        if (!out.hasTls() || ctx.fragmentImplementation != "custom") return false
+        val tls = out.getTls()
+        return tls.enabled && tls.fragmentEffectivelyOn(ctx) && dialsTcp(out)
+    }
 }
 
 /** DisplayTransportName (Outbound.cpp:5-16). */
@@ -171,6 +250,82 @@ abstract class Outbound(@JvmField var type: String) {
     open fun stripCredentials() {}
     open fun buildXray(ctx: BuildContext): BuildResult = BuildResult(JsonObject())
 
+    /** Owns the stream [getXrayStream] returns; a custom Xray outbound runs on Xray but has none. */
+    open fun hasXrayStream(): Boolean = false
+
+    /** Base validate's server checks: types without a server of their own, and inputs (port ranges, realm, server lists) that supply it. */
+    open fun hasServerEndpoint(): Boolean = true
+    open fun serverPortOptional(): Boolean = false
+    open fun serverAddressOptional(): Boolean = false
+
+    /**
+     * outbound::Validate (Outbound.cpp): runs after every import parse, where an Error issue refuses the profile, and
+     * backs the editors' field errors. Overrides call super first and never mutate. [ctx] carries the globals the
+     * desktop reads from SettingsRepo (fragment implementation, multiplex default).
+     */
+    open fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        val address = getAddress().trim()
+        if (hasServerEndpoint()) {
+            if (address.isEmpty()) {
+                if (!serverAddressOptional()) issues.addIssue(Severity.Error, "server", vtr(R.string.validation_server_missing))
+            } else {
+                issues.addIssue(Severity.Error, "server", Validation.host(address), address)
+            }
+            val port = getPort().trim()
+            if ((Validation.toInt(port) ?: 0L) == 0L) {
+                if (!serverPortOptional()) issues.addIssue(Severity.Error, "server_port", vtr(R.string.validation_server_port_missing))
+            } else {
+                issues.addIssue(Severity.Error, "server_port", Validation.port(port), port)
+            }
+        }
+
+        var tlsOn = false
+        var ownUtls = false
+        var realityOn = false
+        if (hasTls()) {
+            val tls = getTls()
+            tlsOn = tls.enabled || mustTls()
+            if (tlsOn) {
+                tls.validate(issues, address, limitedTls(), ctx)
+                val fingerprint = tls.utls.fingerPrint.trim()
+                ownUtls = tls.utls.supported && tls.utls.enabled && fingerprint.isNotEmpty() && fingerprint != TLS_UNSAFE_FINGERPRINT
+                realityOn = tls.reality.enabled || tls.reality.public_key.isNotEmpty()
+            }
+        }
+        if (hasTransport()) getTransport().validate(issues, tlsOn, ownUtls, realityOn)
+        if (hasQuic()) getQuic().validate(issues)
+        if (hasMux()) getMux().validate(issues, ctx)
+        dial.validate(issues)
+        if (hasXrayStream()) getXrayStream().validate(issues, address, ctx)
+    }
+
+    /** StripForeignState (Outbound.h): called on every import before [validate]; drops state that only means something on another installation or would run a program. */
+    open fun stripForeignState(issues: MutableList<Issue>) {}
+
+    /**
+     * The build errors the desktop's shared blocks return (outbound::Build's fragment settings, Reality::Build's short
+     * ID), checked once here instead of in every type's build. Empty when the profile builds.
+     */
+    fun sharedBuildError(ctx: BuildContext): String {
+        if (OutboundChecks.customFragmentApplies(this, ctx)) {
+            OutboundChecks.fragmentSettingsError(ctx).let { if (it.isNotEmpty()) return it }
+        }
+        // Masque drops the Reality block and naive builds its own TLS object, so neither returns its error.
+        if (hasTls() && this !is Masque && !limitedTls()) {
+            val tls = getTls()
+            if (tls.enabled || mustTls()) return tls.reality.buildError()
+        }
+        return ""
+    }
+
+    /** [build] with [sharedBuildError]: what the config generator and the validator call. */
+    fun buildChecked(ctx: BuildContext): BuildResult {
+        val result = build(ctx)
+        if (!result.ok) return result
+        val error = sharedBuildError(ctx)
+        return if (error.isEmpty()) result else BuildResult(result.json, error)
+    }
+
     /** ExportJsonLink (Outbound.h:153-162): the dedup key of the desktop (Profile.cpp:87-90). */
     @JvmOverloads
     fun exportJsonLink(stripMetadata: Boolean = false): String {
@@ -262,24 +417,22 @@ abstract class Outbound(@JvmField var type: String) {
     open fun build(ctx: BuildContext): BuildResult = BuildResult(baseBuild(ctx))
 
     /**
-     * outbound::Build (Outbound.cpp:146-167): server, port, dial fields, and with the "custom" fragment
-     * implementation the dialer-level tls_fragment block (which the core rejects next to tcp_fast_open).
+     * outbound::Build (Outbound.cpp): server, port, dial fields, and with the "custom" fragment implementation on a
+     * TCP dial the dialer-level tls_fragment block (which the core rejects next to tcp_fast_open). Unusable fragment
+     * settings are reported by [sharedBuildError].
      */
     protected fun baseBuild(ctx: BuildContext): JsonObject {
         val obj = JsonObject()
         if (server.isNotEmpty()) obj["server"] = server
         if (serverPort > 0) obj["server_port"] = serverPort
         obj.merge(dial.build(ctx))
-        if (hasTls()) {
-            val t = getTls()
-            if (t.enabled && t.fragmentEffectivelyOn(ctx) && ctx.fragmentImplementation == "custom") {
-                obj.remove("tcp_fast_open")
-                obj["tls_fragment"] = jsonObjectOf(
-                    "enabled" to true,
-                    "size" to ctx.fragmentSize.ifEmpty { "10-100" },
-                    "sleep" to ctx.fragmentSleep.ifEmpty { "2-5" },
-                )
-            }
+        if (OutboundChecks.customFragmentApplies(this, ctx)) {
+            obj.remove("tcp_fast_open")
+            obj["tls_fragment"] = jsonObjectOf(
+                "enabled" to true,
+                "size" to OutboundChecks.fragmentSize(ctx),
+                "sleep" to OutboundChecks.fragmentSleep(ctx),
+            )
         }
         return obj
     }

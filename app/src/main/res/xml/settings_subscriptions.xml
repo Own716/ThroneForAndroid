@@ -15,6 +15,20 @@
             app:persistent="false"
             app:title="@string/grp_sub_auto_update_interval" />
         <SwitchPreference
+            app:key="sub_respect_server_interval"
+            app:summary="@string/sub_respect_server_interval_tip"
+            app:title="@string/sub_respect_server_interval_title" />
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:entries="@array/sub_tls_version_entries"
+            app:entryValues="@array/int_array_3"
+            app:key="sub_tls_version"
+            app:title="@string/sub_tls_version_title" />
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:entries="@array/sub_http_version_entries"
+            app:entryValues="@array/int_array_2"
+            app:key="sub_http_version"
+            app:title="@string/sub_http_version_title" />
+        <SwitchPreference
             app:icon="@drawable/baseline_delete_sweep_24"
             app:key="sub_clear"
             app:title="@string/grp_sub_clear" />

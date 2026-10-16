@@ -66,12 +66,20 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
     }
 
     override fun close() {
-        AutoSelectorRuntime.onClosed(this)
         var closeError: Throwable? = null
+        try {
+            AutoSelectorRuntime.onClosed(this)
+        } catch (error: Throwable) {
+            closeError = error
+        }
         try {
             super.close()
         } catch (error: Throwable) {
-            closeError = error
+            if (closeError == null) {
+                closeError = error
+            } else if (closeError !== error) {
+                closeError?.addSuppressed(error)
+            }
         }
         try {
             runBlocking {

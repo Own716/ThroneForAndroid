@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.import.ClashProxy
 import io.nekohasekai.sagernet.outbound.BuildResult
@@ -11,6 +12,21 @@ import io.nekohasekai.sagernet.outbound.json.JsonValues
 import io.nekohasekai.sagernet.outbound.link.Base64Strict
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
+
+/** The Checks of http.h. */
+object HttpChecks {
+    /** The core sends Proxy-Authorization only when a user name is set. */
+    @JvmStatic
+    fun httpAuth(username: String, password: String): String {
+        if (password.isEmpty() || username.isNotEmpty()) return ""
+        return vtr(R.string.validation_socks_username_missing)
+    }
+}
 
 /** http (include/configs/outbounds/http.h, src/configs/outbounds/http.cpp). */
 class Http : Outbound("http") {
@@ -23,7 +39,7 @@ class Http : Outbound("http") {
     override fun hasTls(): Boolean = true
     override fun getTls(): Tls = tls
 
-    /** http.cpp:9-42. */
+    /** http::ParseFromLink (http.cpp). */
     override fun parseFromLink(link: String): Boolean {
         val url = LinkParser.parse(link)
         if (!url.isValid) return false
@@ -42,7 +58,14 @@ class Http : Outbound("http") {
         // some providers set only the password (http://:token@host); the username must equal it
         if (username.isEmpty() && password.isNotEmpty()) username = password
         if (q.has("path")) path = q.value("path")
-        if (q.has("headers")) headers = QtStrings.split(q.value("headers"), ",")
+        val rawHeaders = q.value("headers")
+        if (rawHeaders.isNotEmpty()) {
+            headers = QtStrings.split(rawHeaders, ",")
+            if (headers.size % 2 != 0) {
+                ParseDiag.warn("headers", vtr(R.string.validation_http_headers_unpaired))
+                headers = ArrayList()
+            }
+        }
         if (url.scheme == "https" || q.value("security") == "tls") {
             tls.parseFromLink(url)
             tls.enabled = true
@@ -51,18 +74,18 @@ class Http : Outbound("http") {
         return true
     }
 
-    /** http.cpp:54-63. */
+    /** http::ParseFromClash (http.cpp). */
     override fun parseFromClash(node: JsonObject): Boolean {
         val proxy = ClashProxy(node)
         if (proxy.type != "http") return false
         baseParseFromClash(proxy)
         username = proxy.string("username")
         password = proxy.string("password")
-        tls.parseFromClash(proxy)
+        tls.parseFromClash(node, clashTlsOn(proxy))
         return true
     }
 
-    /** http.cpp:43-53. */
+    /** http::ParseFromJson (http.cpp). */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("type") != "http") return false
         super.parseFromJson(obj)
@@ -74,7 +97,7 @@ class Http : Outbound("http") {
         return true
     }
 
-    /** http.cpp:64-80. */
+    /** http::ExportToLink (http.cpp). */
     override fun exportToLink(): String {
         val url = LinkBuilder(if (tls.enabled) "https" else "http")
         url.host = server
@@ -89,7 +112,7 @@ class Http : Outbound("http") {
         return url.build()
     }
 
-    /** http.cpp:81-92. */
+    /** http::ExportToJson (http.cpp). */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["type"] = "http"
@@ -104,7 +127,7 @@ class Http : Outbound("http") {
         return obj
     }
 
-    /** http.cpp:93-104. */
+    /** http::Build (http.cpp). */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "http"
@@ -119,6 +142,12 @@ class Http : Outbound("http") {
         return BuildResult(obj)
     }
 
-    /** http.cpp:106-109. */
+    /** http::DisplayType (http.cpp). */
     override fun displayType(): String = "HTTP"
+
+    /** http::Validate (http.cpp). */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Warning, "password", HttpChecks.httpAuth(username, password))
+    }
 }

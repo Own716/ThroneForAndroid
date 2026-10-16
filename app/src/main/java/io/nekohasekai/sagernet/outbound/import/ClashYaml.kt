@@ -17,10 +17,17 @@ object ClashYaml {
      * errors propagate as exceptions (the caller reports them like the desktop's "YAML Exception" warning).
      */
     @JvmStatic
-    fun proxies(text: String): List<JsonObject>? {
-        val root = Yaml(SafeConstructor()).load<Any?>(sanitize(text)) as? Map<*, *> ?: return null
-        val proxies = root["proxies"] as? List<*> ?: return null
-        return proxies.map { (convert(it) as? JsonObject) ?: JsonObject() }
+    fun proxies(text: String): List<JsonObject>? = document(text).proxies
+
+    /** The parsed document: [proxies] null without a `proxies` sequence; [proxyProviders] whether the mapping lists `proxy-providers`. */
+    class Document(@JvmField val proxies: List<JsonObject>?, @JvmField val mapping: Boolean, @JvmField val proxyProviders: Boolean)
+
+    /** [proxies] with what Parser::clash reports about a document without proxies. YAML errors propagate as exceptions. */
+    @JvmStatic
+    fun document(text: String): Document {
+        val root = Yaml(SafeConstructor()).load<Any?>(sanitize(text)) as? Map<*, *> ?: return Document(null, false, false)
+        val proxies = (root["proxies"] as? List<*>)?.map { (convert(it) as? JsonObject) ?: JsonObject() }
+        return Document(proxies, true, root.containsKey("proxy-providers"))
     }
 
     // sanitizeClashYaml (SubscriptionParser.cpp:242-247): NULs and a leading BOM confuse the YAML reader.

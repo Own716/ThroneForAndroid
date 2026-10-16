@@ -1,5 +1,8 @@
 package io.nekohasekai.sagernet.outbound.config
 
+import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.validation.vtr
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.QtStrings
 import io.nekohasekai.sagernet.outbound.json.JsonObject
@@ -10,17 +13,163 @@ import io.nekohasekai.sagernet.outbound.link.Hosts
 internal fun directDomainResolver(ctx: BuildContext): JsonObject =
     jsonObjectOf("server" to Tags.DNS_DIRECT, "strategy" to ctx.directDomainStrategy())
 
-/** The desktop's DNS address syntax (buildDnsObj, generate.cpp:780-841) and the DoH upgrade table (:843-863). */
-internal object DnsServers {
+/** DnsAddress (generate.h): [port] 0 means the type's default; [iface] is empty for dhcp://auto. */
+class DnsAddress(
+    @JvmField val type: String,
+    @JvmField val server: String = "",
+    @JvmField val port: Int = 0,
+    @JvmField val path: String = "",
+    @JvmField val iface: String = "",
+)
+
+/** ParseDnsAddress's result: [address], or null with the reason in [why]. */
+class DnsAddressParse(@JvmField val address: DnsAddress?, @JvmField val why: String)
+
+/** The desktop's DNS address syntax (ParseDnsAddress and buildDnsObj, generate.cpp) and the DoH upgrade table. */
+object DnsServers {
+
+    private val IFACE = Regex("^[^\\s/]+$")
+    private val IPV4_LIKE = Regex("^[0-9.]+$")
+    private val HOSTNAME = Regex(
+        "^(?=.{1,253}\\.?$)[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?(?:\\.[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*\\.?$"
+    )
+    private val PORT = Regex("^[0-9]{1,5}$")
+    private val PLAIN_SCHEMES = setOf("udp", "tcp", "tls", "quic")
+    private val PATH_SCHEMES = setOf("https", "h3")
+
+    private fun isCanonicalDecimal(text: String, maxDigits: Int): Boolean {
+        if (text.isEmpty() || text.length > maxDigits) return false
+        if (text.length > 1 && text.startsWith('0')) return false
+        return text.all { it in '0'..'9' }
+    }
+
+    /** isCanonicalIPv4 (generate.cpp): Go netip, where QHostAddress also takes "10.1" or "010.0.0.1". */
+    private fun isCanonicalIPv4(text: String): Boolean {
+        val octets = text.split('.')
+        return octets.size == 4 && octets.all { isCanonicalDecimal(it, 3) && it.toInt() <= 255 }
+    }
+
+    /** isIPv6Literal (generate.cpp): QHostAddress's IPv6 parse, a zone allowed only with [allowZone]. */
+    private fun isIPv6Literal(text: String, allowZone: Boolean): Boolean {
+        if (!text.contains(':') || (!allowZone && text.contains('%'))) return false
+        val pct = text.indexOf('%')
+        if (pct == text.length - 1) return false
+        return Hosts.parseIpv6(if (pct >= 0) text.substring(0, pct) else text) != null
+    }
 
     /**
-     * `local*` -> local; `dhcp://<ifc|auto>` -> dhcp; `tcp://`, `tls://`, `quic://`, `https://`, `h3://` set the
-     * type (default udp, `udp://` stripped), the HTTP forms split a `path` at the first `/`, and `host:port` splits
-     * `server_port`.
-     * The `underlying` variant only exists for tun + systemd-resolved on Linux (:782-784), never on Android.
+     * routeExcludePrefix (generate.cpp): the core decodes route_exclude_address as netip.Prefix, so a bare address
+     * gets its full length; empty when unparsable.
      */
     @JvmStatic
-    fun buildDnsObj(address: String): JsonObject {
+    fun routeExcludePrefix(range: String): String {
+        val text = range.trim()
+        val slash = text.indexOf('/')
+        val addr = if (slash < 0) text else text.substring(0, slash)
+        val maxBits = if (isCanonicalIPv4(addr)) 32 else if (isIPv6Literal(addr, false)) 128 else -1
+        if (maxBits < 0) return ""
+        if (slash < 0) return "$addr/$maxBits"
+        val bits = text.substring(slash + 1)
+        if (!isCanonicalDecimal(bits, 3) || bits.toInt() > maxBits) return ""
+        return text
+    }
+
+    /**
+     * ParseDnsAddress (generate.cpp): "local...", "dhcp://auto|<iface>", "udp|tcp|tls|quic://host[:port]",
+     * "https|h3://host[:port][/path]" or a bare "host[:port]" (udp).
+     */
+    @JvmStatic
+    fun parseDnsAddress(text: String): DnsAddressParse {
+        fun fail(reason: String) = DnsAddressParse(null, reason)
+        val address = text.trim()
+        if (address.isEmpty()) return fail(vtr(R.string.validation_dns_empty))
+        if (address.startsWith("local", ignoreCase = true)) return DnsAddressParse(DnsAddress("local"), "")
+
+        val schemeEnd = address.indexOf("://")
+        val scheme = if (schemeEnd < 0) "udp" else address.substring(0, schemeEnd).lowercase()
+        var rest = if (schemeEnd < 0) address else address.substring(schemeEnd + 3)
+
+        if (scheme == "dhcp") {
+            if (rest.isEmpty()) return fail(vtr(R.string.validation_dns_dhcp_interface))
+            if (!IFACE.matches(rest)) return fail(vtr(R.string.validation_dns_bad_interface, rest))
+            return DnsAddressParse(DnsAddress("dhcp", iface = if (rest.equals("auto", ignoreCase = true)) "" else rest), "")
+        }
+
+        if (scheme !in PLAIN_SCHEMES && scheme !in PATH_SCHEMES) return fail(vtr(R.string.validation_dns_scheme, scheme))
+
+        var path = ""
+        val slash = rest.indexOf('/')
+        if (slash >= 0) {
+            if (scheme !in PATH_SCHEMES) return fail(vtr(R.string.validation_dns_path))
+            path = rest.substring(slash)
+            rest = rest.substring(0, slash)
+        }
+
+        var host = rest
+        var portText = ""
+        var hasPort = false
+        if (rest.startsWith('[')) {
+            val close = rest.indexOf(']')
+            if (close < 0) return fail(vtr(R.string.validation_dns_bracket))
+            host = rest.substring(1, close)
+            val tail = rest.substring(close + 1)
+            if (tail.isNotEmpty()) {
+                if (!tail.startsWith(':')) return fail(vtr(R.string.validation_dns_after_bracket))
+                portText = tail.substring(1)
+                hasPort = true
+            }
+            if (!isIPv6Literal(host, true)) return fail(vtr(R.string.validation_dns_ipv6, host))
+        } else if (rest.count { it == ':' } > 1) {
+            // A bare IPv6 cannot carry a port: its last group would read as one.
+            if (!isIPv6Literal(rest, true)) return fail(vtr(R.string.validation_dns_ipv6_brackets, rest))
+        } else {
+            val colon = rest.indexOf(':')
+            if (colon >= 0) {
+                host = rest.substring(0, colon)
+                portText = rest.substring(colon + 1)
+                hasPort = true
+            }
+            if (host.isEmpty()) return fail(vtr(R.string.validation_dns_server_missing))
+            if (IPV4_LIKE.matches(host)) {
+                if (!isCanonicalIPv4(host)) return fail(vtr(R.string.validation_dns_ipv4, host))
+            } else if (!HOSTNAME.matches(Hosts.toAceHost(host))) {
+                return fail(vtr(R.string.validation_dns_host, host))
+            }
+        }
+
+        var port = 0
+        if (hasPort) {
+            if (portText.isEmpty()) return fail(vtr(R.string.validation_dns_port_missing))
+            port = if (PORT.matches(portText)) portText.toInt() else 0
+            if (port < 1 || port > 65535) return fail(vtr(R.string.validation_dns_port, portText))
+        }
+        return DnsAddressParse(DnsAddress(scheme, Hosts.toAceHost(host), port, path), "")
+    }
+
+    /**
+     * buildDnsObj (generate.cpp): the parsed address, or for one [parseDnsAddress] refuses the pre-ParseDnsAddress
+     * split (so a saved value builds as it always did), logged by real builds only ([forTest] repeats per batch).
+     * The `underlying` variant only exists for tun + systemd-resolved on Linux, never on Android.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun buildDnsObj(address: String, forTest: Boolean = false): JsonObject {
+        val parsed = parseDnsAddress(address)
+        val dns = parsed.address
+        if (dns == null) {
+            if (!forTest) Logs.w("DNS address \"$address\" is invalid: ${parsed.why}")
+            return legacyDnsObj(address)
+        }
+        if (dns.type == "local") return jsonObjectOf("type" to "local")
+        if (dns.type == "dhcp") return jsonObjectOf("type" to "dhcp", "interface" to dns.iface)
+        val res = jsonObjectOf("type" to dns.type, "server" to dns.server)
+        if (dns.port > 0) res["server_port"] = dns.port
+        if (dns.path.isNotEmpty()) res["path"] = dns.path
+        return res
+    }
+
+    /** legacyDnsObj (generate.cpp): the old split, kept for refused addresses. */
+    private fun legacyDnsObj(address: String): JsonObject {
         if (address.startsWith("local")) return JsonObject().also { it["type"] = "local" }
         if (address.startsWith("dhcp://")) {
             var ifcName = address.replace("dhcp://", "")
@@ -78,14 +227,11 @@ internal object DnsServers {
         return res
     }
 
-    private val ECH_RESOLVER_SCHEMES = setOf("udp", "tcp", "tls", "https", "quic", "h3")
-
-    /** usableEchResolver (generate.cpp:1395-1401): a resolver [buildDnsObj] cannot express falls back to dns-direct like an unset one. */
+    /** usableEchResolver (generate.cpp): a resolver [parseDnsAddress] refuses, or a dhcp one, falls back to dns-direct like an unset one. */
     @JvmStatic
     fun usableEchResolver(resolver: String): Boolean {
-        if (resolver.isEmpty()) return false
-        if (!resolver.contains("://")) return true
-        return resolver.substringBefore("://").lowercase() in ECH_RESOLVER_SCHEMES
+        val parsed = parseDnsAddress(resolver).address ?: return false
+        return parsed.type != "dhcp"
     }
 
     private val KNOWN_DOH = mapOf(

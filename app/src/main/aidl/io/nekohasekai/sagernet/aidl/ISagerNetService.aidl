@@ -1,6 +1,7 @@
 package io.nekohasekai.sagernet.aidl;
 
 import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback;
+import io.nekohasekai.sagernet.aidl.LiveStatsBatch;
 
 interface ISagerNetService {
   int getState();
@@ -22,4 +23,7 @@ interface ISagerNetService {
   String autoSelectorStatus(boolean withMembers);
   void autoSelectorRecheck();
   void autoSelectorSelect(long memberProfileId);
+
+  // The live graphs' points after afterSerial of session (bg.LiveStatsRecorder); another session returns them all.
+  LiveStatsBatch liveStats(long session, long afterSerial);
 }

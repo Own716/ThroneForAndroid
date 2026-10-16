@@ -3,6 +3,16 @@ package io.nekohasekai.sagernet.widget
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.RippleDrawable
 import android.text.format.Formatter
 import android.util.AttributeSet
 import android.view.View
@@ -13,6 +23,9 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.whenStarted
 import com.google.android.material.bottomappbar.BottomAppBar
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.shape.MaterialShapeDrawable
+import com.google.android.material.shape.ShapeAppearancePathProvider
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.database.DataStore
@@ -79,6 +92,16 @@ class StatsBar @JvmOverloads constructor(
 
     init {
         alpha = 0f
+        // Replaces the rectangular content ripple and stats_focus, which also filled the FAB cradle (#92).
+        (background as? MaterialShapeDrawable)?.let { shape ->
+            val highlight = MaterialColors.getColor(this, R.attr.colorControlHighlight, 0x33FFFFFF)
+            val stroke = MaterialColors.getColor(this, R.attr.whiteOrTextPrimary, 0xFFFFFFFF.toInt())
+            foreground = RippleDrawable(
+                ColorStateList.valueOf(highlight),
+                ShapeFocusDrawable(shape, stroke, 2 * resources.displayMetrics.density),
+                ShapeMaskDrawable(shape),
+            )
+        }
     }
 
     override fun getBehavior(): YourBehavior {
@@ -113,8 +136,18 @@ class StatsBar @JvmOverloads constructor(
         }
     }
 
+    // The ripple renders its mask once and keeps it until invalidated. A cradle animation (FAB hide/show interpolation,
+    // offsets) invalidates the background shape, so that drops the ripple's mask too; the mask is only redrawn while a
+    // ripple shows.
+    override fun invalidateDrawable(drawable: Drawable) {
+        super.invalidateDrawable(drawable)
+        if (drawable === background) foreground?.invalidateSelf()
+    }
+
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
+        // BottomAppBar places the cradle here, not always through an invalidation of the shape.
+        foreground?.invalidateSelf()
         val transition = pendingTransition
         if (transition != null) {
             pendingTransition = null
@@ -159,9 +192,15 @@ class StatsBar @JvmOverloads constructor(
     /** runningCountryInfo (mainwindow_view.cpp:151-165): the exit's flag and country, no IP or city. */
     private fun showExit() {
         val view = exitText ?: return
-        val info = ExitIp.info?.takeIf { currentState == BaseService.State.Connected }
+        val connected = currentState == BaseService.State.Connected
+        val info = ExitIp.info?.takeIf { connected }
+        // A running lookup dims the previous exit, or holds a placeholder when there is none yet.
+        val refreshing = connected && ExitIp.refreshing
+        view.alpha = if (refreshing) 0.5f else 1f
         if (info == null) {
-            view.isVisible = false
+            view.text = "…"
+            view.contentDescription = null
+            view.isVisible = refreshing
         } else {
             val country = if (TestFormat.isCountryCode(info.countryCode)) {
                 TestFormat.countryName(info.countryCode)
@@ -408,4 +447,77 @@ class StatsBar @JvmOverloads constructor(
         }
     }
 
+}
+
+/** The bar background's live outline (cradle included) for the same bounds. */
+private class BarOutline(private val shape: MaterialShapeDrawable) {
+    private val provider = ShapeAppearancePathProvider()
+    private val rect = RectF()
+    private val path = Path()
+
+    fun of(bounds: Rect): Path {
+        rect.set(bounds)
+        path.rewind()
+        provider.calculatePath(shape.shapeAppearanceModel, shape.interpolation, rect, path)
+        return path
+    }
+}
+
+/** The ripple's mask; translucent, since RippleDrawable only clips to the bounds for an opaque one. */
+private class ShapeMaskDrawable(shape: MaterialShapeDrawable) : Drawable() {
+    private val outline = BarOutline(shape)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun draw(canvas: Canvas) {
+        canvas.drawPath(outline.of(bounds), paint)
+    }
+
+    override fun setAlpha(alpha: Int) {}
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {}
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = PixelFormat.TRANSLUCENT
+}
+
+/** The focus stroke of stats_focus, inside the outline; the ripple draws the focused fill. */
+private class ShapeFocusDrawable(shape: MaterialShapeDrawable, strokeColor: Int, strokeWidthPx: Float) : Drawable() {
+    private val outline = BarOutline(shape)
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = strokeColor
+        // Clipped to the outline, so only the inner half shows.
+        strokeWidth = strokeWidthPx * 2
+    }
+    private var focused = false
+
+    override fun isStateful() = true
+
+    override fun onStateChange(state: IntArray): Boolean {
+        val now = android.R.attr.state_focused in state
+        if (now == focused) return false
+        focused = now
+        invalidateSelf()
+        return true
+    }
+
+    override fun draw(canvas: Canvas) {
+        if (!focused) return
+        val path = outline.of(bounds)
+        val save = canvas.save()
+        canvas.clipPath(path)
+        canvas.drawPath(path, paint)
+        canvas.restoreToCount(save)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        paint.alpha = alpha
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        paint.colorFilter = colorFilter
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = PixelFormat.TRANSLUCENT
 }

@@ -97,8 +97,8 @@ class SagerNet : Application(),
             }
             // The icon pack of the removed custom icon feature; a no-op once it is gone.
             runOnDefaultDispatcher { File(filesDir, "custom_icon").deleteRecursively() }
-            RemoteRouteUpdater.schedule(keepExisting = true)
-            SubscriptionScheduler.schedule(keepExisting = true)
+            RemoteRouteUpdater.schedule()
+            SubscriptionScheduler.schedule()
             Widgets.watchSelection(this)
         }
 
@@ -120,9 +120,11 @@ class SagerNet : Application(),
         updateNotificationChannels()
     }
 
+    // Enqueueing (RemoteWorkManagerService) and SystemJobService live in the main process, so the reschedule after a
+    // reboot, force-stop or update (ForceStopRunnable, default process only) must run there too; workers hop to :bg.
     override fun getWorkManagerConfiguration(): WorkConfiguration {
         return WorkConfiguration.Builder()
-            .setDefaultProcessName("${BuildConfig.APPLICATION_ID}:bg")
+            .setDefaultProcessName(BuildConfig.APPLICATION_ID)
             .build()
     }
 

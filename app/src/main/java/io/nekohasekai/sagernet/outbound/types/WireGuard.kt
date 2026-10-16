@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -9,12 +10,161 @@ import io.nekohasekai.sagernet.outbound.SecurityLevel
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
+import io.nekohasekai.sagernet.outbound.link.Base64Strict
 import io.nekohasekai.sagernet.outbound.link.Hosts
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
 import io.nekohasekai.sagernet.outbound.link.ParsedLink
+import io.nekohasekai.sagernet.validation.Empty
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Rule
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.acceptOptional
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.jsonStringList
+import io.nekohasekai.sagernet.validation.vtr
 
-/** Peer (wireguard.h:6-25, wireguard.cpp:21-122): the single peer of a wireguard endpoint. */
+private const val WIREGUARD_INT_MAX = 2147483647L
+private const val WIREGUARD_UINT32_MAX = 4294967295L
+
+/** Without a diagnostics scope (DB loads, clones) a parse keeps every value as it always did. */
+private fun wireguardKeep(field: String, value: String, rule: Rule): Boolean =
+    !ParseDiag.active() || acceptOptional(field, rule(value), value)
+
+/** S1-S4 must match the server's, so a bad one refuses the profile; Jc, Jmin and Jmax only shape what this side sends. */
+private fun wireguardAmneziaInt(field: String, value: String, max: Long, mustMatchServer: Boolean): Int {
+    val message = Validation.int(value, 0, max)
+    if (message.isEmpty()) return QtStrings.toInt(value.trim())
+    if (mustMatchServer) ParseDiag.error(field, message, value) else acceptOptional(field, message, value)
+    return 0
+}
+
+/** Call after fixAddress(): what is left without a valid prefix the core cannot decode. */
+private fun wireguardDropBadAddresses(addresses: MutableList<String>): MutableList<String> {
+    if (!ParseDiag.active()) return addresses
+    return addresses.filterTo(ArrayList()) { acceptOptional("address", Validation.cidr(it), it) }
+}
+
+/** The Checks of wireguard.h, shared by the WireGuard editors (field text) and [WireGuard.validate] (profile fields). */
+object WireGuardChecks {
+
+    /** Three bytes separated by ',' or '-', as the editor and links write them; [bytes] receives them, or is cleared. */
+    @JvmStatic
+    @JvmOverloads
+    fun wireguardReserved(text: String, bytes: MutableList<Int>? = null): String {
+        bytes?.clear()
+        val t = text.trim()
+        if (t.isEmpty()) return ""
+        val values = ArrayList<Int>()
+        for (part in QtStrings.splitSkipEmpty(t.replace('-', ','), ",")) {
+            val value = Validation.toInt(part)
+            if (value == null || value < 0 || value > 255) {
+                values.clear()
+                break
+            }
+            values.add(value.toInt())
+        }
+        if (values.size != 3) return vtr(R.string.validation_wg_reserved)
+        bytes?.addAll(values)
+        return ""
+    }
+
+    /** Seconds, or an AmneziaWG range such as 22-30. */
+    @JvmStatic
+    fun wireguardKeepalive(text: String): String = Validation.intOrRange(text, 0, WIREGUARD_INT_MAX)
+
+    /** wireguard-go UintRange: n or lo-hi, both uint32. */
+    @JvmStatic
+    fun amneziaRange(text: String): String = Validation.intOrRange(text, 0, WIREGUARD_UINT32_MAX)
+
+    /** H1-H4 in order; unset ones are 1, 2, 3 and 4 in wireguard-go. Silent while one of them is not a range. */
+    @JvmStatic
+    fun amneziaHeaders(headers: List<String>): String {
+        val ranges = ArrayList<Pair<Long, Long>>()
+        for (i in 0 until 4) {
+            val text = headers.getOrElse(i) { "" }.trim()
+            if (text.isEmpty()) {
+                ranges.add(Pair(i + 1L, i + 1L))
+                continue
+            }
+            if (amneziaRange(text).isNotEmpty()) return ""
+            val dash = text.indexOf('-')
+            val lo = Validation.toInt(if (dash < 0) text else text.substring(0, dash)) ?: return ""
+            val hi = if (dash < 0) lo else Validation.toInt(text.substring(dash + 1)) ?: return ""
+            ranges.add(Pair(lo, hi))
+        }
+        for (i in ranges.indices) {
+            for (j in i + 1 until ranges.size) {
+                if (ranges[i].first <= ranges[j].second && ranges[j].first <= ranges[i].second) {
+                    return vtr(R.string.validation_wg_headers_overlap, (i + 1).toString(), (j + 1).toString())
+                }
+            }
+        }
+        return ""
+    }
+
+    @JvmStatic
+    fun amneziaHeaderProtection(key: String, paddings: List<Long>): String {
+        if (key.isBlank()) return ""
+        for ((i, padding) in paddings.withIndex()) {
+            if (padding < 12) return vtr(R.string.validation_wg_header_protection_padding, (i + 1).toString(), padding.toString())
+        }
+        return ""
+    }
+
+    @JvmStatic
+    fun amneziaJunkSizes(jmin: Long, jmax: Long): String = if (jmin <= jmax) "" else vtr(R.string.validation_wg_junk_sizes)
+
+    /** wireguard-go newObfChain: <b 0xHEX>, <r N>, <rc N>, <rd N>, <dz N>, <t>, <d>, <ds>; text outside tags is ignored. */
+    @JvmStatic
+    fun amneziaSignature(spec: String): String {
+        var start = spec.indexOf('<')
+        while (start >= 0) {
+            val end = spec.indexOf('>', start)
+            if (end < 0) return vtr(R.string.validation_wg_signature_unclosed)
+            val parts = words(spec.substring(start + 1, end))
+            start = spec.indexOf('<', end + 1)
+            if (parts.isEmpty()) return vtr(R.string.validation_wg_signature_empty)
+            val tag = parts[0]
+            val argument = parts.getOrElse(1) { "" }
+            when (tag) {
+                "b" -> {
+                    val hex = if (argument.startsWith("0x")) argument.substring(2) else argument
+                    if (hex.isEmpty() || Validation.hex(hex, 0, 0).isNotEmpty()) return vtr(R.string.validation_wg_signature_hex)
+                }
+
+                "r", "rc", "rd", "dz" -> {
+                    val length = Validation.toInt(if (argument.startsWith('+')) argument.substring(1) else argument)
+                    if (length == null || length < 0) return vtr(R.string.validation_wg_signature_length, tag)
+                }
+
+                "t", "d", "ds" -> {}
+                else -> return vtr(R.string.validation_wg_signature_unknown, tag)
+            }
+        }
+        return ""
+    }
+
+    /** QString::simplified().split(' ', Qt::SkipEmptyParts). */
+    private fun words(text: String): List<String> {
+        val words = ArrayList<String>()
+        val word = StringBuilder()
+        for (c in text) {
+            if (!c.isWhitespace()) {
+                word.append(c)
+                continue
+            }
+            if (word.isNotEmpty()) words.add(word.toString())
+            word.setLength(0)
+        }
+        if (word.isNotEmpty()) words.add(word.toString())
+        return words
+    }
+}
+
+/** Peer (wireguard.h, wireguard.cpp): the single peer of a wireguard endpoint. */
 class WireGuardPeer {
     @JvmField var address: String = ""
     @JvmField var port: Int = 0
@@ -27,7 +177,7 @@ class WireGuardPeer {
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
-    /** wireguard.cpp:21-53; values are FullyDecoded because PrettyDecoded keeps %2F/%2B/%2C and corrupts base64 keys. */
+    /** Peer::ParseFromLink; values are FullyDecoded because PrettyDecoded keeps %2F/%2B/%2C and corrupts base64 keys. */
     fun parseFromLink(url: ParsedLink): Boolean {
         if (!url.isValid) return false
         val q = url.query
@@ -46,37 +196,55 @@ class WireGuardPeer {
         }
         if (q.has("reserved")) {
             val raw = q.valueFully("reserved")
-            if (raw.isNotEmpty()) {
-                for (item in QtStrings.splitSkipEmpty(raw.replace(',', '-'), "-")) {
-                    val value = QtStrings.toIntOrNull(item) ?: continue
-                    if (value in 0..255) reserved.add(value)
-                }
-            }
+            // The core needs all three bytes, so a partial list is dropped rather than kept.
+            val message = WireGuardChecks.wireguardReserved(raw, reserved)
+            if (message.isNotEmpty()) acceptOptional("reserved", message, raw)
         }
-        when {
-            q.has("persistent_keepalive_interval") -> persistent_keepalive = q.valueFully("persistent_keepalive_interval")
-            q.has("persistent_keepalive") -> persistent_keepalive = q.valueFully("persistent_keepalive")
-            q.has("keepalive") -> persistent_keepalive = q.valueFully("keepalive")
+        for (key in KEEPALIVE_KEYS) {
+            if (!q.has(key)) continue
+            val value = q.valueFully(key).trim()
+            if (wireguardKeep(key, value) { WireGuardChecks.wireguardKeepalive(it) }) persistent_keepalive = value
+            break
         }
         return true
     }
 
-    /** wireguard.cpp:55-69: the keepalive accepts a number or a range string. */
+    /** Peer::ParseFromJson: the keepalive accepts a number or a range string, reserved a base64 string or a byte list. */
     fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("address")) address = obj.string("address")
         if (obj.contains("port")) port = obj.int("port")
         if (obj.contains("public_key")) public_key = obj.string("public_key")
         if (obj.contains("pre_shared_key")) pre_shared_key = obj.string("pre_shared_key")
-        if (obj.contains("reserved")) reserved = obj.array("reserved").mapTo(ArrayList()) { JsonValues.toInt(it) }
+        if (obj.contains("reserved")) {
+            val value = obj["reserved"]
+            var text = ""
+            if (value is String) {
+                // Go decodes a JSON string into []uint8 as base64.
+                text = value
+                if (Validation.base64Key(text, 3).isEmpty()) {
+                    reserved = Base64Strict.decodeLenient(text).mapTo(ArrayList()) { it.toInt() and 0xFF }
+                }
+            } else {
+                reserved = obj.array("reserved").mapTo(ArrayList()) { JsonValues.toInt(it) }
+            }
+            if (ParseDiag.active() && (reserved.isNotEmpty() || text.isNotEmpty())) {
+                val bytes = if (reserved.isNotEmpty()) reserved.joinToString(",") else text
+                val message = WireGuardChecks.wireguardReserved(bytes, reserved)
+                if (message.isNotEmpty()) acceptOptional("reserved", message, bytes)
+            }
+        }
         if (obj.contains("persistent_keepalive_interval")) {
-            persistent_keepalive = if (obj.isString("persistent_keepalive_interval")) obj.string("persistent_keepalive_interval")
+            val text = if (obj.isString("persistent_keepalive_interval")) obj.string("persistent_keepalive_interval")
             else obj.int("persistent_keepalive_interval").toString()
+            if (wireguardKeep("persistent_keepalive_interval", text) { WireGuardChecks.wireguardKeepalive(it) }) {
+                persistent_keepalive = text
+            }
         }
         return true
     }
 
-    /** wireguard.cpp:71-84. */
+    /** Peer::ExportToLink. */
     fun exportToLink(): List<Pair<String, String>> {
         val q = ArrayList<Pair<String, String>>()
         if (public_key.isNotEmpty()) q.add("public_key" to public_key)
@@ -86,7 +254,7 @@ class WireGuardPeer {
         return q
     }
 
-    /** wireguard.cpp:86-95. */
+    /** Peer::ExportToJson. */
     fun exportToJson(): JsonObject {
         val obj = JsonObject()
         if (address.isNotEmpty()) obj["address"] = address
@@ -98,7 +266,7 @@ class WireGuardPeer {
         return obj
     }
 
-    /** wireguard.cpp:97-107: ExportToJson plus the catch-all allowed_ips. */
+    /** Peer::Build: ExportToJson plus the catch-all allowed_ips. */
     fun build(ctx: BuildContext): JsonObject {
         val obj = exportToJson()
         obj["allowed_ips"] = JsonValues.stringArray(listOf("0.0.0.0/0", "::/0"))
@@ -111,7 +279,7 @@ class WireGuardPeer {
         return arr
     }
 
-    // wireguard.cpp:110-122: a range must be a string and a plain interval a number; anything else makes the core
+    // Peer::WriteKeepalive: a range must be a string and a plain interval a number; anything else makes the core
     // refuse to start, so a value that is neither is dropped.
     private fun writeKeepalive(obj: JsonObject) {
         if (persistent_keepalive.isEmpty()) return
@@ -125,6 +293,7 @@ class WireGuardPeer {
 
     companion object {
         private val KEEPALIVE_RANGE = Regex("^\\d+-\\d+$")
+        private val KEEPALIVE_KEYS = listOf("persistent_keepalive_interval", "persistent_keepalive", "keepalive")
     }
 }
 
@@ -175,8 +344,8 @@ class WireGuard : Outbound("wireguard") {
     @JvmField var disable_cookies: Boolean = false
 
     /**
-     * wireguard.cpp:124-245: wg-quick / AmneziaWG INI text, or a wg:// / wireguard:// / awg:// URL. The scheme is not
-     * checked, and awg:// alone does not enable AmneziaWG; only its parameters do, as on the desktop.
+     * wireguard::ParseFromLink: wg-quick / AmneziaWG INI text, or a wg:// / wireguard:// / awg:// URL. The scheme is
+     * not checked, and awg:// alone does not enable AmneziaWG; only its parameters do, as on the desktop.
      */
     override fun parseFromLink(link: String): Boolean {
         if (link.contains("[Interface]") && link.contains("[Peer]")) return parseIni(link)
@@ -202,17 +371,25 @@ class WireGuard : Outbound("wireguard") {
             q.has("ip") -> address = QtStrings.splitSkipEmpty(q.valueFully("ip").replace(" ", ""), ",")
         }
 
-        if (q.has("mtu")) mtu = QtStrings.toInt(q.valueFully("mtu"))
+        if (q.has("mtu")) {
+            val value = q.valueFully("mtu").trim()
+            if (wireguardKeep("mtu", value, Validation.Rules.int(0, WIREGUARD_INT_MAX))) mtu = QtStrings.toInt(value)
+        }
+        if (q.has("workers")) {
+            val value = q.valueFully("workers").trim()
+            if (wireguardKeep("workers", value, Validation.Rules.int(0, WIREGUARD_INT_MAX))) worker_count = QtStrings.toInt(value)
+        }
         if (q.has("use_system_interface")) system = q.valueFully("use_system_interface") == "true"
-        if (q.has("workers")) worker_count = QtStrings.toInt(q.valueFully("workers"))
-        if (q.has("udp_timeout")) udp_timeout = q.valueFully("udp_timeout")
+        if (q.has("udp_timeout")) {
+            val value = q.valueFully("udp_timeout").trim()
+            if (wireguardKeep("udp_timeout", value, Validation.Rules.duration())) udp_timeout = value
+        }
 
         if (q.valueFully("enable_amnezia") == "true") enable_amnezia = true
-        fun intKey(key: String, set: (Int) -> Unit): Boolean {
-            if (!q.has(key)) return false
-            set(QtStrings.toInt(q.valueFully(key)))
+        fun intKey(key: String, max: Long, mustMatchServer: Boolean, set: (Int) -> Unit) {
+            if (!q.has(key)) return
+            set(wireguardAmneziaInt(key, q.valueFully(key), max, mustMatchServer))
             enable_amnezia = true
-            return true
         }
         fun strKey(key: String, set: (String) -> Unit): Boolean {
             if (!q.has(key)) return false
@@ -220,17 +397,17 @@ class WireGuard : Outbound("wireguard") {
             enable_amnezia = true
             return true
         }
-        intKey("jc") { jc = it }
-        intKey("jmin") { jmin = it }
-        intKey("jmax") { jmax = it }
-        intKey("s1") { s1 = it }
-        intKey("s2") { s2 = it }
-        intKey("s3") { s3 = it }
-        intKey("s4") { s4 = it }
-        strKey("h1") { h1 = it }
-        strKey("h2") { h2 = it }
-        strKey("h3") { h3 = it }
-        strKey("h4") { h4 = it }
+        intKey("jc", WIREGUARD_INT_MAX, false) { jc = it }
+        intKey("jmin", WIREGUARD_INT_MAX, false) { jmin = it }
+        intKey("jmax", WIREGUARD_INT_MAX, false) { jmax = it }
+        intKey("s1", 65535, true) { s1 = it }
+        intKey("s2", 65535, true) { s2 = it }
+        intKey("s3", 65535, true) { s3 = it }
+        intKey("s4", 65535, true) { s4 = it }
+        strKey("h1") { h1 = it.trim() }
+        strKey("h2") { h2 = it.trim() }
+        strKey("h3") { h3 = it.trim() }
+        strKey("h4") { h4 = it.trim() }
         strKey("i1") { i1 = it }
         strKey("i2") { i2 = it }
         strKey("i3") { i3 = it }
@@ -247,26 +424,39 @@ class WireGuard : Outbound("wireguard") {
         strKey("disable_cookies") { disable_cookies = parseAmneziaBool(it) }
 
         fixAddress()
+        address = wireguardDropBadAddresses(address)
         return !(private_key.isEmpty() || peer.public_key.isEmpty() || server.isEmpty())
     }
 
-    // wireguard.cpp:125-184: keys are matched lower-cased; no base parse, so the name and dial fields stay untouched.
+    // The INI half of wireguard::ParseFromLink: keys are matched lower-cased and reported as written; no base parse,
+    // so the name and dial fields stay untouched.
     private fun parseIni(text: String): Boolean {
+        var peers = 0
+        val allowedIps = ArrayList<String>()
         for (line in QtStrings.split(text, "\n")) {
-            val trimmed = line.trim()
-            if (trimmed.isEmpty() || trimmed.startsWith('#')) continue
-            if (trimmed == "[Peer]" || trimmed == "[Interface]") continue
+            // wg and wg-quick cut every line at '#'; keys and signature tags never contain one.
+            val comment = line.indexOf('#')
+            val trimmed = (if (comment < 0) line else line.substring(0, comment)).trim()
+            if (trimmed.isEmpty() || trimmed.startsWith(';')) continue
+            if (trimmed == "[Peer]") {
+                peers++
+                continue
+            }
+            if (trimmed == "[Interface]") continue
             val eqIdx = trimmed.indexOf('=')
             if (eqIdx < 0) continue
-            val key = trimmed.substring(0, eqIdx).trim().lowercase()
+            val rawKey = trimmed.substring(0, eqIdx).trim()
+            val key = rawKey.lowercase()
             val value = trimmed.substring(eqIdx + 1).trim()
             when (key) {
                 "privatekey" -> private_key = value
-                "address" -> address = QtStrings.splitSkipEmpty(value.replace(" ", ""), ",")
-                "mtu" -> mtu = QtStrings.toInt(value)
+                // wg-quick allows the key to repeat, e.g. one line per address family.
+                "address" -> address.addAll(QtStrings.splitSkipEmpty(value.replace(" ", ""), ","))
+                "mtu" -> if (wireguardKeep(rawKey, value, Validation.Rules.int(0, WIREGUARD_INT_MAX))) mtu = QtStrings.toInt(value)
                 "publickey" -> peer.public_key = value
                 "presharedkey", "preshared_key", "psk" -> peer.pre_shared_key = value
-                "persistentkeepalive", "persistent_keepalive" -> peer.persistent_keepalive = value
+                "persistentkeepalive", "persistent_keepalive" ->
+                    if (wireguardKeep(rawKey, value) { WireGuardChecks.wireguardKeepalive(it) }) peer.persistent_keepalive = value
                 "endpoint" -> {
                     val lastColon = value.lastIndexOf(':')
                     if (lastColon != -1) {
@@ -274,20 +464,23 @@ class WireGuard : Outbound("wireguard") {
                         if (host.startsWith('[') && host.endsWith(']')) {
                             host = if (host.length >= 2) host.substring(1, host.length - 1) else ""
                         }
-                        val port = QtStrings.toInt(value.substring(lastColon + 1).trim())
+                        val portText = value.substring(lastColon + 1).trim()
+                        val message = Validation.port(portText)
+                        if (message.isNotEmpty()) ParseDiag.error(rawKey, message, value)
+                        val port = QtStrings.toInt(portText)
                         peer.address = host
                         peer.port = if (port > 0) port else 51820
                         server = peer.address
                         serverPort = peer.port
                     }
                 }
-                "jc" -> { jc = QtStrings.toInt(value); enable_amnezia = true }
-                "jmin" -> { jmin = QtStrings.toInt(value); enable_amnezia = true }
-                "jmax" -> { jmax = QtStrings.toInt(value); enable_amnezia = true }
-                "s1" -> { s1 = QtStrings.toInt(value); enable_amnezia = true }
-                "s2" -> { s2 = QtStrings.toInt(value); enable_amnezia = true }
-                "s3" -> { s3 = QtStrings.toInt(value); enable_amnezia = true }
-                "s4" -> { s4 = QtStrings.toInt(value); enable_amnezia = true }
+                "jc" -> { jc = wireguardAmneziaInt(rawKey, value, WIREGUARD_INT_MAX, false); enable_amnezia = true }
+                "jmin" -> { jmin = wireguardAmneziaInt(rawKey, value, WIREGUARD_INT_MAX, false); enable_amnezia = true }
+                "jmax" -> { jmax = wireguardAmneziaInt(rawKey, value, WIREGUARD_INT_MAX, false); enable_amnezia = true }
+                "s1" -> { s1 = wireguardAmneziaInt(rawKey, value, 65535, true); enable_amnezia = true }
+                "s2" -> { s2 = wireguardAmneziaInt(rawKey, value, 65535, true); enable_amnezia = true }
+                "s3" -> { s3 = wireguardAmneziaInt(rawKey, value, 65535, true); enable_amnezia = true }
+                "s4" -> { s4 = wireguardAmneziaInt(rawKey, value, 65535, true); enable_amnezia = true }
                 "h1" -> { h1 = value; enable_amnezia = true }
                 "h2" -> { h2 = value; enable_amnezia = true }
                 "h3" -> { h3 = value; enable_amnezia = true }
@@ -306,32 +499,57 @@ class WireGuard : Outbound("wireguard") {
                 "maxhandshakeattempts", "max_handshake_attempts" -> { max_handshake_attempts = value; enable_amnezia = true }
                 "randomtrailers", "random_trailers" -> { random_trailers = parseAmneziaBool(value); enable_amnezia = true }
                 "disablecookies", "disable_cookies" -> { disable_cookies = parseAmneziaBool(value); enable_amnezia = true }
+                "dns" -> ParseDiag.warn(rawKey, vtr(R.string.validation_wg_dns_ignored), value)
+                "allowedips" -> allowedIps.addAll(QtStrings.splitSkipEmpty(value.replace(" ", ""), ","))
+                "listenport", "table", "fwmark", "saveconfig", "preup", "postup", "predown", "postdown" -> {}
+                else -> ParseDiag.warn(rawKey, vtr(R.string.validation_wg_unknown_setting))
             }
         }
+        if (peers > 1) ParseDiag.warn("[Peer]", vtr(R.string.validation_wg_peer_sections, peers.toString()))
+        if (allowedIps.isNotEmpty() && "0.0.0.0/0" !in allowedIps) {
+            ParseDiag.warn("AllowedIPs", vtr(R.string.validation_wg_allowed_ips_ignored), allowedIps.joinToString(", "))
+        }
         fixAddress()
-        return private_key.isNotEmpty() && peer.public_key.isNotEmpty()
+        address = wireguardDropBadAddresses(address)
+        if (private_key.isEmpty() || peer.public_key.isEmpty()) return false
+        if (server.isEmpty()) {
+            ParseDiag.error("Endpoint", vtr(R.string.validation_wg_no_endpoint))
+            return false
+        }
+        return true
     }
 
-    /** wireguard.cpp:247-260. */
+    /** wireguard::ParseFromJson: the DB loader too, so only an import drops values. */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("type") != "wireguard") return false
         super.parseFromJson(obj)
         if (obj.contains("private_key")) private_key = obj.string("private_key")
         if (obj.contains("peers") && obj.isArray("peers")) {
             val peers = obj.array("peers")
-            if (peers.isNotEmpty()) peer.parseFromJson(peers[0] as? JsonObject ?: JsonObject())
+            if (peers.isNotEmpty()) {
+                peer.parseFromJson(peers[0] as? JsonObject ?: JsonObject())
+                if (peers.size > 1 && ParseDiag.active()) {
+                    ParseDiag.warn("peers", vtr(R.string.validation_wg_peers, peers.size.toString()))
+                }
+            }
         }
-        if (obj.contains("address")) address = obj.array("address").strings()
+        // Listable: the core accepts a bare string as well as an array.
+        if (obj.contains("address")) address = jsonStringList(obj["address"], "address")
         if (obj.contains("mtu")) mtu = obj.int("mtu")
         if (obj.contains("system")) system = obj.bool("system")
-        if (obj.contains("worker_count")) worker_count = obj.int("worker_count")
-        if (obj.contains("udp_timeout")) udp_timeout = obj.string("udp_timeout")
+        if (obj.contains("workers")) worker_count = obj.int("workers")
+        else if (obj.contains("worker_count")) worker_count = obj.int("worker_count")
+        if (obj.contains("udp_timeout")) {
+            val value = obj.string("udp_timeout").trim()
+            if (wireguardKeep("udp_timeout", value, Validation.Rules.duration())) udp_timeout = value
+        }
         if (obj.contains("amnezia_wg")) amneziaFromJson(obj.obj("amnezia_wg"))
         fixAddress()
+        address = wireguardDropBadAddresses(address)
         return true
     }
 
-    /** wireguard.cpp:262-312: `wg://<peer address>:<peer port>?...`, dial items before the peer items. */
+    /** wireguard::ExportToLink: `wg://<peer address>:<peer port>?...`, dial items before the peer items. */
     override fun exportToLink(): String {
         val url = LinkBuilder("wg")
         url.host = peer.address
@@ -379,42 +597,42 @@ class WireGuard : Outbound("wireguard") {
         return url.build()
     }
 
-    /** wireguard.cpp:314-335: no server/server_port; the peer carries them. */
+    /** wireguard::ExportToJson: no server/server_port; the peer carries them. */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["type"] = "wireguard"
         if (name.isNotEmpty()) obj["tag"] = name
         obj.merge(dial.exportToJson())
-        writeFields(obj)
+        writeFields(obj, "worker_count")
         val peerObj = peer.exportToJson()
         if (peerObj.isNotEmpty()) obj["peers"] = JsonArray.of(peerObj)
         return obj
     }
 
-    /** wireguard.cpp:337-357. */
+    /** wireguard::Build: the core's key for the worker count is `workers`. */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "wireguard"
         if (name.isNotEmpty()) obj["tag"] = name
         obj.merge(dial.build(ctx))
-        writeFields(obj)
+        writeFields(obj, "workers")
         val peerObj = peer.build(ctx)
         if (peerObj.isNotEmpty()) obj["peers"] = JsonArray.of(peerObj)
         return BuildResult(obj)
     }
 
-    private fun writeFields(obj: JsonObject) {
+    private fun writeFields(obj: JsonObject, workersKey: String) {
         if (private_key.isNotEmpty()) obj["private_key"] = private_key
         if (address.isNotEmpty()) obj["address"] = JsonValues.stringArray(address)
         if (mtu > 0) obj["mtu"] = mtu
         if (system) obj["system"] = system
-        if (worker_count > 0) obj["worker_count"] = worker_count
+        if (worker_count > 0) obj[workersKey] = worker_count
         if (udp_timeout.isNotEmpty()) obj["udp_timeout"] = udp_timeout
         val amnezia = amneziaToJson()
         if (amnezia.isNotEmpty()) obj["amnezia_wg"] = amnezia
     }
 
-    /** wireguard.cpp:359-373: the peer holds the address the profile list and the DNS resolver work with. */
+    /** wireguard::SetAddress and friends: the peer holds the address the profile list and the DNS resolver work with. */
     override fun setAddress(newAddr: String) {
         peer.address = newAddr
     }
@@ -427,19 +645,75 @@ class WireGuard : Outbound("wireguard") {
 
     override fun getPort(): String = peer.port.toString()
 
-    /** wireguard.cpp:375-377. */
+    /** wireguard::DisplayAddress. */
     override fun displayAddress(): String = Hosts.displayAddress(peer.address, peer.port)
 
-    /** wireguard.cpp:379-381. */
+    /** wireguard::DisplayType. */
     override fun displayType(): String = "WireGuard"
 
-    /** wireguard.cpp:383-385. */
+    /** wireguard::GetSecurity. */
     override fun security(): SecurityInfo = SecurityInfo("Encrypted", if (enable_amnezia) "AmneziaWG" else "", SecurityLevel.Secure)
 
-    /** wireguard.cpp:387-389. */
+    /** wireguard::IsEndpoint. */
     override fun isEndpoint(): Boolean = true
 
-    /** wireguard.cpp:391-420. */
+    /** wireguard::Validate: key lengths and every AmneziaWG value are only checked when the endpoint first dials, so this is the early signal. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Error, "private_key", Validation.base64Key(private_key, 32))
+        issues.addIssue(Severity.Error, "public_key", Validation.base64Key(peer.public_key, 32))
+        issues.addIssue(Severity.Error, "pre_shared_key", Validation.base64Key(peer.pre_shared_key, 32, empty = Empty.Allowed))
+        if (peer.reserved.isNotEmpty()) {
+            issues.addIssue(Severity.Error, "reserved", WireGuardChecks.wireguardReserved(peer.reserved.joinToString(",")))
+        }
+        issues.addIssue(
+            Severity.Error, "persistent_keepalive_interval", WireGuardChecks.wireguardKeepalive(peer.persistent_keepalive),
+            peer.persistent_keepalive,
+        )
+        if (address.isEmpty()) {
+            issues.addIssue(Severity.Error, "address", vtr(R.string.validation_wg_address_required))
+        } else {
+            issues.addIssue(
+                Severity.Error, "address",
+                Validation.eachItem(address.joinToString(","), Validation.Split.Comma, Validation.Rules.cidr()),
+            )
+        }
+        issues.addIssue(Severity.Error, "udp_timeout", Validation.duration(udp_timeout))
+        if (enable_amnezia) issues.addAll(amneziaIssues())
+    }
+
+    /** wireguard::AmneziaIssues: the AmneziaWG part of [validate], keyed by amnezia_wg field; it applies only with enable_amnezia. */
+    fun amneziaIssues(): MutableList<Issue> {
+        val issues = ArrayList<Issue>()
+        for ((field, value) in listOf("s1" to s1, "s2" to s2, "s3" to s3, "s4" to s4)) {
+            // Only positive values are emitted.
+            if (value > 65535) issues.addIssue(Severity.Error, field, Validation.int(value.toString(), 0, 65535))
+        }
+        val headers = listOf(h1, h2, h3, h4)
+        for ((i, header) in headers.withIndex()) {
+            issues.addIssue(Severity.Error, "h${i + 1}", WireGuardChecks.amneziaRange(header), header)
+        }
+        issues.addIssue(Severity.Error, "h1", WireGuardChecks.amneziaHeaders(headers))
+        for ((i, signature) in listOf(i1, i2, i3, i4, i5).withIndex()) {
+            issues.addIssue(Severity.Error, "i${i + 1}", WireGuardChecks.amneziaSignature(signature))
+        }
+        issues.addIssue(Severity.Error, "header_protection_key", Validation.base64Key(header_protection_key, 32, empty = Empty.Allowed))
+        issues.addIssue(
+            Severity.Error, "header_protection_key",
+            WireGuardChecks.amneziaHeaderProtection(header_protection_key, listOf(s1.toLong(), s2.toLong(), s3.toLong(), s4.toLong())),
+        )
+        for ((field, value) in listOf(
+            "content_padding_addition" to content_padding_addition, "rekey_after_time" to rekey_after_time,
+            "rekey_timeout" to rekey_timeout, "reject_after_time" to reject_after_time,
+            "keepalive_timeout" to keepalive_timeout, "max_handshake_attempts" to max_handshake_attempts,
+        )) {
+            issues.addIssue(Severity.Error, field, WireGuardChecks.amneziaRange(value), value)
+        }
+        issues.addIssue(Severity.Warning, "jmin", WireGuardChecks.amneziaJunkSizes(jmin.toLong(), jmax.toLong()))
+        return issues
+    }
+
+    /** wireguard::AmneziaToJson. */
     private fun amneziaToJson(): JsonObject {
         val obj = JsonObject()
         if (!enable_amnezia) return obj
@@ -471,7 +745,7 @@ class WireGuard : Outbound("wireguard") {
         return obj
     }
 
-    /** wireguard.cpp:422-450: any non-empty block switches AmneziaWG on. */
+    /** wireguard::AmneziaFromJson: any non-empty block switches AmneziaWG on. */
     private fun amneziaFromJson(obj: JsonObject) {
         if (obj.isEmpty()) return
         enable_amnezia = true
@@ -482,10 +756,10 @@ class WireGuard : Outbound("wireguard") {
         if (obj.contains("s2")) s2 = obj.int("s2")
         if (obj.contains("s3")) s3 = obj.int("s3")
         if (obj.contains("s4")) s4 = obj.int("s4")
-        if (obj.contains("h1")) h1 = obj.string("h1")
-        if (obj.contains("h2")) h2 = obj.string("h2")
-        if (obj.contains("h3")) h3 = obj.string("h3")
-        if (obj.contains("h4")) h4 = obj.string("h4")
+        if (obj.contains("h1")) h1 = obj.string("h1").trim()
+        if (obj.contains("h2")) h2 = obj.string("h2").trim()
+        if (obj.contains("h3")) h3 = obj.string("h3").trim()
+        if (obj.contains("h4")) h4 = obj.string("h4").trim()
         if (obj.contains("i1")) i1 = obj.string("i1")
         if (obj.contains("i2")) i2 = obj.string("i2")
         if (obj.contains("i3")) i3 = obj.string("i3")
@@ -502,14 +776,15 @@ class WireGuard : Outbound("wireguard") {
         if (obj.contains("disable_cookies")) disable_cookies = obj.bool("disable_cookies")
     }
 
-    /** wireguard.cpp:453-455: ranges are written as strings, but sing-box also accepts a bare number. */
+    /** wireguard::AmneziaRangeFromJson: ranges are written as strings, but sing-box also accepts a bare number. */
     private fun amneziaRange(value: Any?): String = value as? String ?: JsonValues.toInt(value).toString()
 
-    /** wireguard.cpp:457-470: bare IPs get their host prefix length (an empty item becomes "/32", as on the desktop). */
-    private fun fixAddress() {
+    /** wireguard::FixAddress: bare IPs get /32 or /128 (the core needs a prefix); empty items are dropped. */
+    fun fixAddress() {
         val fixed = ArrayList<String>(address.size)
         for (addr in address) {
             var trimmed = addr.trim()
+            if (trimmed.isEmpty()) continue
             if (!trimmed.contains("/")) trimmed += if (trimmed.contains(":")) "/128" else "/32"
             fixed.add(trimmed)
         }
@@ -517,7 +792,7 @@ class WireGuard : Outbound("wireguard") {
     }
 
     companion object {
-        /** wireguard.cpp:16-19. */
+        /** ParseAmneziaBool (wireguard.cpp). */
         @JvmStatic
         fun parseAmneziaBool(value: String): Boolean {
             val trimmed = value.trim().lowercase()

@@ -13,6 +13,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * The profile repository (the desktop's ProfilesRepo plus the list edits of Group.cpp) over `profiles`. A group's
  * members are its rows ordered by `user_order`, kept dense (0..n-1 = the desktop's `profiles_json` index).
+ * Writes that change what a kept group sort reads queue a [GroupSort] re-sort, as ProfilesRepo.cpp does.
  */
 object ProfileManager {
 
@@ -127,6 +128,7 @@ object ProfileManager {
             profile.id = dao.addProxy(profile)
         }
         iterator { onAdd(profile) }
+        GroupSort.repositionLater(mapOf(gid to listOf(profile.id)), SortInput.MEMBERSHIP)
         return profile
     }
 
@@ -150,6 +152,7 @@ object ProfileManager {
             added.addAll(rows)
         }
         GroupRepo.postReload(gid)
+        GroupSort.repositionLater(mapOf(gid to added.map { it.id }), SortInput.MEMBERSHIP)
         return added
     }
 
@@ -176,8 +179,10 @@ object ProfileManager {
         dao.updateOutbound(profile.id, profile.type, profile.name, profile.outboundJson)
         val stored = dao.getById(profile.id) ?: return false
         iterator { onUpdated(stored, false) }
-        return before == null || before.type != stored.type || before.name != stored.name ||
+        val changed = before == null || before.type != stored.type || before.name != stored.name ||
             before.outboundJson != stored.outboundJson
+        if (changed) GroupSort.repositionLater(mapOf(stored.groupId to listOf(stored.id)), SortInput.CONFIG)
+        return changed
     }
 
     suspend fun updateTraffic(profileId: Long, rx: Long, tx: Long) {
@@ -196,6 +201,7 @@ object ProfileManager {
     suspend fun resetTraffic(profileIds: LongArray) {
         if (profileIds.isEmpty()) return
         profileIds.toList().chunked(CHUNK).forEach { dao.resetTraffic(it.toLongArray()) }
+        GroupSort.repositionLater(profileIds.toList(), SortInput.TRAFFIC)
     }
 
     // ------------------------------------------------------------------------------------------------ delete
@@ -270,8 +276,10 @@ object ProfileManager {
     /**
      * Group::EmplaceProfile (the desktop's drag and drop): the row at [from] is inserted after the row at [to], so
      * it lands at [to] when moving down and at [to] + 1 when moving up. False when an index is out of range.
+     * A hand-placed row is a manual order, which a kept sort would undo: the group stops sorting.
      */
     suspend fun emplace(groupId: Long, from: Int, to: Int): Boolean {
+        GroupSort.setSort(groupId, GroupSortAction())
         val moved = SagerDatabase.instance.runInTransaction(Callable {
             val ids = ArrayList(dao.getIdsByGroup(groupId))
             if (from !in ids.indices || to !in ids.indices) return@Callable false
@@ -288,6 +296,7 @@ object ProfileManager {
     suspend fun moveToGroup(profileIds: List<Long>, groupId: Long) {
         if (GroupRepo.get(groupId) == null) return
         val sources = HashSet<Long>()
+        val moved = ArrayList<Long>()
         SagerDatabase.instance.runInTransaction {
             var order = dao.nextOrder(groupId)
             for (chunk in profileIds.distinct().chunked(CHUNK)) {
@@ -297,12 +306,14 @@ object ProfileManager {
                     if (row.groupId == groupId) continue
                     sources.add(row.groupId)
                     dao.setGroup(id, groupId, order++)
+                    moved.add(id)
                 }
             }
             sources.forEach(::compactLocked)
         }
         for (gid in sources) GroupRepo.postReload(gid)
         GroupRepo.postReload(groupId)
+        GroupSort.repositionLater(mapOf(groupId to moved), SortInput.MEMBERSHIP)
     }
 
     /** Renumbers the group's members 0..n-1 in their current order. */
@@ -361,6 +372,7 @@ object ProfileManager {
 
     fun clearTestResults(profileIds: List<Long>) {
         profileIds.chunked(CHUNK).forEach { dao.clearTestResults(it) }
+        GroupSort.repositionLater(profileIds, SortInput.TEST_RESULT)
     }
 
     fun clearGroupTestResults(groupId: Long) {

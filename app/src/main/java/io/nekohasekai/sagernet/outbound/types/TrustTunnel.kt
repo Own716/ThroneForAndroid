@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -11,6 +12,62 @@ import io.nekohasekai.sagernet.outbound.link.Base64Strict
 import io.nekohasekai.sagernet.outbound.link.Hosts
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.validation.CommonChecks
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.acceptOptional
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vplural
+import io.nekohasekai.sagernet.validation.vtr
+
+/** trusttunnel.h: sing-trusttunnel quic.go runs cubic and reno as such, every other name (and an unknown one) as BBR. */
+val trustTunnelCongestionControls = listOf("", "bbr", "cubic", "reno", "bbr_standard", "bbr2", "bbr_variant")
+
+/** The Checks of trusttunnel.h. */
+object TrustTunnelChecks {
+    /** TrustTunnelClientRandom: sing-box-throne protocol/trusttunnel/client_random.go parseClientRandom, hex prefix[/mask] of 1 to 32 bytes. */
+    @JvmStatic
+    fun trustTunnelClientRandom(text: String): String {
+        val value = text.trim()
+        if (value.isEmpty()) return ""
+        val slash = value.indexOf('/')
+        val prefix = if (slash < 0) value else value.substring(0, slash)
+        var ok = prefix.isNotEmpty() && Validation.hex(prefix, 2, 64).isEmpty()
+        if (ok && slash >= 0) {
+            val mask = value.substring(slash + 1)
+            ok = mask.length == prefix.length && Validation.hex(mask, 0, 0).isEmpty()
+        }
+        return if (ok) "" else vtr(R.string.validation_trusttunnel_client_random)
+    }
+
+    @JvmStatic
+    fun trustTunnelCredentials(username: String, password: String): String {
+        if (username.isNotBlank() && password.isNotEmpty()) return ""
+        return vtr(R.string.validation_trusttunnel_credentials)
+    }
+
+    /** TrustTunnelTlsConflict: client_random and custom_sni against the TLS settings; a QUIC build drops uTLS and REALITY. */
+    @JvmStatic
+    fun trustTunnelTlsConflict(
+        clientRandom: Boolean,
+        customSni: Boolean,
+        quic: Boolean,
+        ech: Boolean,
+        reality: Boolean,
+        disableSni: Boolean,
+        utlsFingerprint: String,
+    ): String {
+        if (clientRandom && ech) return vtr(R.string.validation_trusttunnel_client_random_ech)
+        if (customSni && ech) return vtr(R.string.validation_trusttunnel_custom_sni_ech)
+        if (customSni && disableSni) return vtr(R.string.validation_trusttunnel_custom_sni_disable_sni)
+        if (quic) return ""
+        if ((clientRandom || customSni) && reality) return vtr(R.string.validation_trusttunnel_reality)
+        if (clientRandom && utlsFingerprint == "custom") return vtr(R.string.validation_trusttunnel_client_random_utls)
+        return ""
+    }
+}
 
 /** trusttunnel (include/configs/outbounds/trusttunnel.h, src/configs/outbounds/trusttunnel.cpp). */
 class TrustTunnel : Outbound("trusttunnel") {
@@ -28,7 +85,7 @@ class TrustTunnel : Outbound("trusttunnel") {
     override fun getTls(): Tls = tls
 
     /**
-     * trusttunnel.cpp:51-105: the official deep link `tt://?<base64url TLV payload>` (DEEP_LINK.md in
+     * trusttunnel::ParseFromDeepLink: the official deep link `tt://?<base64url TLV payload>` (DEEP_LINK.md in
      * TrustTunnel/TrustTunnel). Tags: 0x00 version (at most 1), 0x01 SNI, 0x02 first `host[:port]`, 0x03 custom SNI,
      * 0x05/0x06 credentials, 0x07 insecure flag, 0x08 DER certificate chain, 0x09 QUIC when the byte is 2,
      * 0x0A anti-DPI (TLS fragment on), 0x0B client random, 0x0C name; has_ipv6, dns_upstreams and unknown tags are skipped.
@@ -37,6 +94,7 @@ class TrustTunnel : Outbound("trusttunnel") {
         val data = Base64Strict.decodeLenient(payload, urlSafe = true)
         if (data.isEmpty()) return false
         var haveAddress = false
+        var extraAddresses = 0
         val cursor = ByteCursor(data)
         while (cursor.pos < data.size) {
             val tag = cursor.readVarInt() ?: return false
@@ -54,7 +112,9 @@ class TrustTunnel : Outbound("trusttunnel") {
                 0x01L -> tls.server_name = text
                 0x02L -> {
                     // only the first address is kept: a profile has one server
-                    if (!haveAddress) {
+                    if (haveAddress) {
+                        extraAddresses++
+                    } else {
                         val address = LinkParser.parse("tt://$text")
                         if (!address.isValid || address.host.isEmpty()) return false
                         server = address.host
@@ -62,7 +122,7 @@ class TrustTunnel : Outbound("trusttunnel") {
                         haveAddress = true
                     }
                 }
-                0x03L -> custom_sni = text
+                0x03L -> custom_sni = text.trim()
                 0x05L -> username = text
                 0x06L -> password = text
                 0x07L -> tls.insecure = flag
@@ -73,15 +133,18 @@ class TrustTunnel : Outbound("trusttunnel") {
                 0x09L -> quic = value.isNotEmpty() && value[0].toInt() == 2
                 // anti_dpi slows the handshake writes down so the ClientHello spans several segments
                 0x0AL -> if (flag) tls.saveFragmentState(1)
-                0x0BL -> client_random = text
+                0x0BL -> client_random = text.trim()
                 0x0CL -> name = text
             }
+        }
+        if (extraAddresses > 0) {
+            ParseDiag.warn("address", vplural(R.plurals.validation_trusttunnel_extra_addresses, extraAddresses))
         }
         tls.enabled = true
         return haveAddress && tls.server_name.isNotEmpty() && username.isNotEmpty() && password.isNotEmpty()
     }
 
-    /** trusttunnel.cpp:107-132: a link without a host but with a query is the deep link. */
+    /** trusttunnel::ParseFromLink: a link without a host but with a query is the deep link. */
     override fun parseFromLink(link: String): Boolean {
         val url = LinkParser.parse(link)
         if (!url.isValid) return false
@@ -97,10 +160,10 @@ class TrustTunnel : Outbound("trusttunnel") {
         if (q.has("health_check")) health_check = q.value("health_check") == "true"
         if (q.has("congestion_control")) {
             quic = true
-            congestion_control = q.value("congestion_control")
+            congestion_control = importCongestion(q.value("congestion_control"))
         }
-        if (q.has("custom_sni")) custom_sni = q.value("custom_sni")
-        if (q.has("client_random")) client_random = q.value("client_random")
+        if (q.has("custom_sni")) custom_sni = q.value("custom_sni").trim()
+        if (q.has("client_random")) client_random = q.value("client_random").trim()
 
         tls.parseFromLink(url)
         tls.enabled = true
@@ -109,7 +172,7 @@ class TrustTunnel : Outbound("trusttunnel") {
         return !(username.isEmpty() || password.isEmpty() || server.isEmpty())
     }
 
-    /** trusttunnel.cpp:134-147. */
+    /** trusttunnel::ParseFromJson. */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("type") != "trusttunnel") return false
         super.parseFromJson(obj)
@@ -117,7 +180,7 @@ class TrustTunnel : Outbound("trusttunnel") {
         if (obj.contains("password")) password = obj.string("password")
         if (obj.contains("health_check")) health_check = obj.bool("health_check")
         if (obj.contains("quic")) quic = obj.bool("quic")
-        if (obj.contains("quic_congestion_control")) congestion_control = obj.string("quic_congestion_control")
+        if (obj.contains("quic_congestion_control")) congestion_control = importCongestion(obj.string("quic_congestion_control"))
         if (obj.contains("custom_sni")) custom_sni = obj.string("custom_sni")
         if (obj.contains("client_random")) client_random = obj.string("client_random")
         if (obj.contains("tls")) tls.parseFromJson(obj.obj("tls"))
@@ -149,17 +212,17 @@ class TrustTunnel : Outbound("trusttunnel") {
         val obj = JsonObject()
         obj["type"] = "trusttunnel"
         obj.merge(baseExportToJson())
-        writeFields(obj)
+        writeFields(obj, congestion_control)
         if (tls.enabled) obj["tls"] = tls.exportToJson()
         return obj
     }
 
-    /** trusttunnel.cpp:191-219. */
+    /** trusttunnel::Build: the congestion control in its canonical form. */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "trusttunnel"
         obj.merge(baseBuild(ctx))
-        writeFields(obj)
+        writeFields(obj, canonicalCongestion(congestion_control))
         if (tls.enabled) {
             val tlsObject = tls.build(ctx)
             // QUIC dials through qtls, which needs a std TLS config: uTLS and Reality fail there on every connection
@@ -176,13 +239,13 @@ class TrustTunnel : Outbound("trusttunnel") {
         return BuildResult(obj)
     }
 
-    private fun writeFields(obj: JsonObject) {
+    private fun writeFields(obj: JsonObject, congestion: String) {
         if (username.isNotEmpty()) obj["username"] = username
         if (password.isNotEmpty()) obj["password"] = password
         if (health_check) obj["health_check"] = health_check
         if (quic) {
             obj["quic"] = quic
-            if (congestion_control.isNotEmpty()) obj["quic_congestion_control"] = congestion_control
+            if (congestion.isNotEmpty()) obj["quic_congestion_control"] = congestion
         }
         if (custom_sni.isNotEmpty()) obj["custom_sni"] = Hosts.toAceHost(custom_sni)
         if (client_random.isNotEmpty()) obj["client_random"] = client_random
@@ -193,6 +256,22 @@ class TrustTunnel : Outbound("trusttunnel") {
 
     /** trusttunnel.cpp:226-229. */
     override fun security(): SecurityInfo = securityFromTls(if (quic) "QUIC" else "")
+
+    /** trusttunnel::Validate. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Error, "username", TrustTunnelChecks.trustTunnelCredentials(username, password))
+        issues.addIssue(Severity.Error, "custom_sni", CommonChecks.serverName(custom_sni), custom_sni)
+        // The server grants access by this prefix, so it is not echoed.
+        issues.addIssue(Severity.Error, "client_random", TrustTunnelChecks.trustTunnelClientRandom(client_random))
+        issues.addIssue(
+            Severity.Error, "tls",
+            TrustTunnelChecks.trustTunnelTlsConflict(
+                client_random.isNotEmpty(), custom_sni.isNotEmpty(), quic, tls.ech.enabled, tls.reality.enabled,
+                tls.disable_sni, if (tls.utls.enabled) tls.utls.fingerPrint else "",
+            ),
+        )
+    }
 
     /** A byte reader for the TLV payload; [readVarInt] is an RFC 9000 variable-length integer, null when truncated. */
     private class ByteCursor(private val data: ByteArray) {
@@ -212,6 +291,17 @@ class TrustTunnel : Outbound("trusttunnel") {
     }
 
     companion object {
+        /** canonicalTrustTunnelCongestion: older builds saved translated combo text ("CUBIC", "Reno"), which sing-trusttunnel silently ran as bbr. */
+        private fun canonicalCongestion(value: String): String = value.trim().lowercase().replace(' ', '_')
+
+        /** trustTunnelImportCongestion: an import drops an unknown name with a warning, since the core would run it as BBR. */
+        private fun importCongestion(value: String): String {
+            val congestion = canonicalCongestion(value)
+            val message = Validation.oneOf(congestion, trustTunnelCongestionControls)
+            if (!ParseDiag.active() || acceptOptional("quic_congestion_control", message, congestion)) return congestion
+            return ""
+        }
+
         /** QUrl::query() of the link: the text after the first '?' of the hierarchical part, up to '#'; null without a '?'. */
         private fun rawQuery(link: String): String? {
             val hash = link.indexOf('#')

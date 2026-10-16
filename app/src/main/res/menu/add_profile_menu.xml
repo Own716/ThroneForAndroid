@@ -179,7 +179,12 @@
                                     android:id="@+id/action_sort_descending"
                                     android:title="@string/profiles_sort_descending" />
                             </group>
-                            <group android:id="@+id/group_sort_methods">
+                            <group
+                                android:id="@+id/group_sort_methods"
+                                android:checkableBehavior="single">
+                                <item
+                                    android:id="@+id/action_sort_manual"
+                                    android:title="@string/profiles_sort_manual" />
                                 <item
                                     android:id="@+id/action_sort_type"
                                     android:title="@string/profiles_sort_type" />

@@ -11,9 +11,9 @@ import io.nekohasekai.sagernet.outbound.`import`.ProfileImport
  */
 object ProfileTextImport {
 
-    /** Every outbound found in [text]; empty when nothing parsed. The parser's notes (skipped nodes) go to the log. */
+    /** Every outbound found in [text] that passed the import checks; the parse report (refused items, warnings) goes to the log. */
     fun parse(text: String): List<Outbound> {
-        val result = ProfileImport.parse(text, SettingsMapper.xrayVlessPreference())
+        val result = ProfileImport.parse(text, SettingsMapper.xrayVlessPreference(), SettingsMapper.buildContext())
         for (message in result.messages) Logs.w(message)
         return result.outbounds
     }

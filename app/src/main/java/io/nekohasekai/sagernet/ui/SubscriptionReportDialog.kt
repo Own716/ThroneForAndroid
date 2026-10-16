@@ -13,6 +13,7 @@ import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.database.GroupRepo
 import io.nekohasekai.sagernet.group.SubscriptionClient
 import io.nekohasekai.sagernet.ktx.dp2px
+import io.nekohasekai.sagernet.ktx.needReload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,7 +43,8 @@ object SubscriptionReportDialog {
 
     /**
      * While [activity] is started: popup reports open the change window; errors of the requests made from the UI and
-     * untitled status lines (the result of "Add profiles to this group") show a snackbar. Titled reports without a
+     * untitled status lines (the result of "Add profiles to this group") show a snackbar, a refresh that re-pointed
+     * routes of the running config the reload hint. Titled reports without a
      * popup (automatic refreshes, URL-test follow-ups) are only logged, as on the desktop.
      */
     fun observe(activity: MainActivity) {
@@ -55,6 +57,8 @@ object SubscriptionReportDialog {
 
     private suspend fun handle(activity: MainActivity, report: SubscriptionClient.Report) {
         when {
+            report.reload -> activity.needReload()
+
             report.error -> {
                 val message = report.text.ifBlank { report.title }
                 val groupName = withContext(Dispatchers.IO) { GroupRepo.get(report.gid)?.displayName() }

@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -11,11 +12,186 @@ import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
 import io.nekohasekai.sagernet.outbound.link.Hosts
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.validation.CommonChecks
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Rule
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.acceptOptional
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.IOException
 import java.io.StringReader
+
+/** Import only: an optional value the core would refuse is dropped with a warning; DB loads and clones keep it. */
+private fun ocReadChecked(obj: JsonObject, key: String, current: String, rule: Rule): String {
+    if (!obj.contains(key)) return current
+    val value = obj.string(key).trim()
+    return if (!ParseDiag.active() || acceptOptional(key, rule(value), value)) value else current
+}
+
+private fun ocReadCheckedInt(obj: JsonObject, key: String, current: Int, rule: Rule): Int {
+    if (!obj.contains(key)) return current
+    val value = obj.int(key)
+    val text = value.toString()
+    return if (!ParseDiag.active() || acceptOptional(key, rule(text), text)) value else current
+}
+
+/** The Checks of openconnect.h, shared by the OpenConnect editor and [OpenConnect.validate]. */
+object OpenConnectChecks {
+    @JvmField
+    val FLAVORS: List<String> = listOf("anyconnect", "gp", "fortinet", "f5", "pulse", "nc")
+
+    /** sing-openconnect anyconnect_auth.go, gp_auth.go and pulse_auth.go share this list; the other flavors take anything. */
+    @JvmField
+    val REPORTED_OS: List<String> = listOf("linux", "linux-64", "win", "mac-intel", "android", "apple-ios")
+
+    @JvmField
+    val COMPRESSION_MODES: List<String> = listOf("stateless", "all")
+
+    @JvmField
+    val TOKEN_MODES: List<String> = listOf("totp", "hotp", "stoken", "oidc")
+
+    private fun hexDigit(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
+
+    /** The core parses [OpenConnect.composeServer] with net/url and refuses a query or fragment. */
+    @JvmStatic
+    fun openConnectServerPath(text: String): String {
+        val path = text.trim()
+        if (path.contains('?') || path.contains('#')) return vtr(R.string.validation_oc_server_path_query)
+        var i = path.indexOf('%')
+        while (i >= 0) {
+            if (i + 2 >= path.length || !hexDigit(path[i + 1]) || !hexDigit(path[i + 2])) {
+                return vtr(R.string.validation_oc_server_path_percent)
+            }
+            i = path.indexOf('%', i + 1)
+        }
+        return ""
+    }
+
+    /** Warning: the core raises a smaller MTU to 576. */
+    @JvmStatic
+    fun openConnectMtuFloor(text: String): String {
+        val value = Validation.toInt(text) ?: 0L
+        if (value <= 0 || value >= 576) return ""
+        return vtr(R.string.validation_oc_mtu_floor)
+    }
+
+    /** sing-openconnect parsePeerFingerprint. */
+    @JvmStatic
+    fun openConnectFingerprint(line: String): String {
+        val value = line.trim()
+        if (value.isEmpty()) return ""
+        var encoded = value
+        var maximum = 40
+        var base64 = false
+        when {
+            value.startsWith("sha1:") -> encoded = value.substring(5)
+            value.startsWith("sha256:") -> {
+                encoded = value.substring(7)
+                maximum = 64
+            }
+
+            value.startsWith("pin-sha256:") -> {
+                encoded = value.substring(11)
+                maximum = 44
+                base64 = true
+            }
+
+            value.contains(':') -> return vtr(R.string.validation_oc_fingerprint_colons)
+        }
+        var ok = encoded.length in 4..maximum
+        var i = 0
+        while (ok && i < encoded.length) {
+            val c = encoded[i]
+            val isBase64 = c in '0'..'9' || c in 'a'..'z' || c in 'A'..'Z' || c == '+' || c == '/' ||
+                (c == '=' && i >= encoded.length - 2)
+            ok = if (base64) isBase64 else hexDigit(c)
+            i++
+        }
+        if (ok && base64 && encoded.length == maximum) ok = Validation.base64Key(encoded, 32).isEmpty()
+        if (ok) return ""
+        if (base64) return vtr(R.string.validation_oc_fingerprint_pin)
+        return vtr(R.string.validation_oc_fingerprint_hex, maximum.toString())
+    }
+
+    @JvmStatic
+    fun openConnectReportedOs(flavor: String, os: String): String {
+        if (flavor.isNotEmpty() && flavor != "anyconnect" && flavor != "gp" && flavor != "pulse") return ""
+        return Validation.oneOf(os, REPORTED_OS)
+    }
+
+    /** Warning: sing-openconnect NewClient raises a shorter interval to 2s. */
+    @JvmStatic
+    fun openConnectDpdFloor(text: String): String {
+        val ns = Validation.parseDurationNs(text.trim()) ?: 0L
+        if (ns <= 0 || ns >= 2000000000L) return ""
+        return vtr(R.string.validation_oc_dpd_floor)
+    }
+
+    @JvmStatic
+    fun openConnectCertificatePair(certificate: List<String>, certificatePath: String, key: List<String>, keyPath: String): String {
+        val hasCertificate = certificate.isNotEmpty() || certificatePath.isNotBlank()
+        val hasKey = key.isNotEmpty() || keyPath.isNotBlank()
+        if (hasCertificate == hasKey) return ""
+        return vtr(if (hasCertificate) R.string.validation_oc_certificate_needs_key else R.string.validation_oc_key_needs_certificate)
+    }
+
+    @JvmStatic
+    fun openConnectFormEntry(formId: String, submissionKey: String, name: String, value: String, promote: Boolean): String {
+        if (submissionKey.isEmpty() && (formId.isEmpty() || name.isEmpty())) return vtr(R.string.validation_oc_form_entry_target)
+        if (promote && value.isNotEmpty()) return vtr(R.string.validation_oc_form_entry_promoted)
+        return ""
+    }
+
+    @JvmStatic
+    fun openConnectToken(profile: OpenConnect): String {
+        val token = profile.token
+        if (token.mode.isEmpty()) return ""
+        Validation.oneOf(token.mode, TOKEN_MODES).let { if (it.isNotEmpty()) return it }
+        if (token.secret.isNotEmpty() && token.secret_path.isNotEmpty()) return vtr(R.string.validation_oc_token_secret_both)
+        if (token.secret.isEmpty() && token.secret_path.isEmpty()) return vtr(R.string.validation_oc_token_secret_missing)
+        return ""
+    }
+
+    /** Warning: token fields set without a mode, which exportToJson drops together with the whole token. */
+    @JvmStatic
+    fun openConnectTokenUnused(profile: OpenConnect): String {
+        val token = profile.token
+        if (token.mode.isNotEmpty()) return ""
+        val used = token.secret.isNotEmpty() || token.secret_path.isNotEmpty() || token.pin.isNotEmpty() ||
+            token.password.isNotEmpty() || token.device_id.isNotEmpty() || token.counter > 0
+        if (!used) return ""
+        return vtr(R.string.validation_oc_token_unused)
+    }
+
+    /** Warning: only hotp tokens count. */
+    @JvmStatic
+    fun openConnectTokenCounter(profile: OpenConnect): String {
+        val token = profile.token
+        if (token.counter <= 0 || token.mode.isEmpty() || token.mode == "hotp") return ""
+        return vtr(R.string.validation_oc_token_counter)
+    }
+
+    /** build() emits all three as soon as one is set, and the core refuses an empty one. */
+    @JvmStatic
+    fun openConnectMobile(profile: OpenConnect): String {
+        val mobile = profile.mobile
+        val set = listOf(mobile.platform_version, mobile.device_type, mobile.device_unique_id).count { it.isNotEmpty() }
+        if (set == 0 || set == 3) return ""
+        return vtr(R.string.validation_oc_mobile_partial)
+    }
+
+    @JvmStatic
+    fun openConnectCompression(profile: OpenConnect): String {
+        if (!profile.compression_disabled || profile.compression_mode != "all") return ""
+        return vtr(R.string.validation_oc_compression_disabled)
+    }
+}
 
 /**
  * openconnect (include/configs/outbounds/openconnect.h, src/configs/outbounds/openconnect.cpp): a sing-box
@@ -25,7 +201,7 @@ import java.io.StringReader
  */
 class OpenConnect : Outbound("openconnect") {
 
-    /** OpenConnectToken (openconnect.h:6-20). */
+    /** OpenConnectToken (openconnect.h). */
     class Token {
         @JvmField var mode: String = ""
         @JvmField var secret: String = ""
@@ -35,10 +211,10 @@ class OpenConnect : Outbound("openconnect") {
         @JvmField var device_id: String = ""
         @JvmField var counter: Long = 0
 
-        /** openconnect.cpp:24-35. */
+        /** OpenConnectToken::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
-            if (obj.contains("mode")) mode = obj.string("mode")
+            if (obj.contains("mode")) mode = obj.string("mode").trim()
             if (obj.contains("secret")) secret = obj.string("secret")
             if (obj.contains("secret_path")) secret_path = obj.string("secret_path")
             if (obj.contains("pin")) pin = obj.string("pin")
@@ -48,7 +224,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:37-49. */
+        /** OpenConnectToken::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (mode.isEmpty()) return obj
@@ -62,17 +238,17 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:51-54. */
+        /** OpenConnectToken::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectMobile (openconnect.h:22-32). */
+    /** OpenConnectMobile (openconnect.h). */
     class Mobile {
         @JvmField var platform_version: String = ""
         @JvmField var device_type: String = ""
         @JvmField var device_unique_id: String = ""
 
-        /** openconnect.cpp:56-63. */
+        /** OpenConnectMobile::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("platform_version")) platform_version = obj.string("platform_version")
@@ -81,7 +257,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:65-73. */
+        /** OpenConnectMobile::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (platform_version.isEmpty() && device_type.isEmpty() && device_unique_id.isEmpty()) return obj
@@ -91,38 +267,38 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:75-78. */
+        /** OpenConnectMobile::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectWrapper (openconnect.h:34-43): the shared shape of the `csd` and `hip` objects. */
+    /** OpenConnectWrapper (openconnect.h): the shared shape of the `csd` and `hip` objects. */
     class Wrapper {
         @JvmField var wrapper_path: String = ""
 
-        /** openconnect.cpp:80-85. */
+        /** OpenConnectWrapper::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("wrapper_path")) wrapper_path = obj.string("wrapper_path")
             return true
         }
 
-        /** openconnect.cpp:87-92. */
+        /** OpenConnectWrapper::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (wrapper_path.isNotEmpty()) obj["wrapper_path"] = wrapper_path
             return obj
         }
 
-        /** openconnect.cpp:94-97. */
+        /** OpenConnectWrapper::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectTNCCCertificate (openconnect.h:45-54). */
+    /** OpenConnectTNCCCertificate (openconnect.h). */
     class TnccCertificate {
         @JvmField var certificate: MutableList<String> = ArrayList()
         @JvmField var certificate_path: String = ""
 
-        /** openconnect.cpp:99-105. */
+        /** OpenConnectTNCCCertificate::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("certificate")) certificate = VpnFileImport.listable(obj, "certificate")
@@ -130,7 +306,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:107-113. */
+        /** OpenConnectTNCCCertificate::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (certificate.isNotEmpty()) obj["certificate"] = JsonValues.stringArray(certificate)
@@ -138,11 +314,11 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:115-118. */
+        /** OpenConnectTNCCCertificate::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectTNCC (openconnect.h:56-69). */
+    /** OpenConnectTNCC (openconnect.h). */
     class Tncc {
         /** wrapper_path conflicts with every other field here. */
         @JvmField var wrapper_path: String = ""
@@ -151,7 +327,7 @@ class OpenConnect : Outbound("openconnect") {
         @JvmField var machine_identification_enabled: Boolean = false
         @JvmField var certificates: MutableList<TnccCertificate> = ArrayList()
 
-        /** openconnect.cpp:120-135. */
+        /** OpenConnectTNCC::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("wrapper_path")) wrapper_path = obj.string("wrapper_path")
@@ -168,7 +344,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:137-152. */
+        /** OpenConnectTNCC::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (wrapper_path.isNotEmpty()) obj["wrapper_path"] = wrapper_path
@@ -186,16 +362,16 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:154-157. */
+        /** OpenConnectTNCC::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectFortinetHostCheck (openconnect.h:71-80). */
+    /** OpenConnectFortinetHostCheck (openconnect.h). */
     class FortinetHostCheck {
         @JvmField var hostcheck: String = ""
         @JvmField var check_virtual_desktop: String = ""
 
-        /** openconnect.cpp:159-165. */
+        /** OpenConnectFortinetHostCheck::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("hostcheck")) hostcheck = obj.string("hostcheck")
@@ -203,7 +379,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:167-175: an empty hostcheck disables the feature, so the rest is meaningless alone. */
+        /** OpenConnectFortinetHostCheck::ExportToJson: an empty hostcheck disables the feature, so the rest is meaningless alone. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (hostcheck.isEmpty()) return obj
@@ -212,11 +388,11 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:177-180. */
+        /** OpenConnectFortinetHostCheck::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectFormEntry (openconnect.h:82-94). */
+    /** OpenConnectFormEntry (openconnect.h). */
     class FormEntry {
         @JvmField var form_id: String = ""
         @JvmField var submission_key: String = ""
@@ -224,7 +400,7 @@ class OpenConnect : Outbound("openconnect") {
         @JvmField var value: String = ""
         @JvmField var promote: Boolean = false
 
-        /** openconnect.cpp:182-191. */
+        /** OpenConnectFormEntry::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("form_id")) form_id = obj.string("form_id")
@@ -235,7 +411,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:193-203. */
+        /** OpenConnectFormEntry::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (submission_key.isEmpty() && (form_id.isEmpty() || name.isEmpty())) return obj
@@ -247,11 +423,11 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:205-208. */
+        /** OpenConnectFormEntry::Build. */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenConnectTLS (openconnect.h:96-121); not the sing-box TLS block, so [hasTls] stays false. */
+    /** OpenConnectTLS (openconnect.h); not the sing-box TLS block, so [hasTls] stays false. */
     class Tls {
         @JvmField var insecure: Boolean = false
         @JvmField var server_name: String = ""
@@ -272,7 +448,7 @@ class OpenConnect : Outbound("openconnect") {
         @JvmField var mca_key_path: String = ""
         @JvmField var mca_key_password: String = ""
 
-        /** openconnect.cpp:210-230. */
+        /** OpenConnectTLS::ParseFromJson. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("insecure")) insecure = obj.bool("insecure")
@@ -294,7 +470,7 @@ class OpenConnect : Outbound("openconnect") {
             return true
         }
 
-        /** openconnect.cpp:232-252. */
+        /** OpenConnectTLS::ExportToJson. */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (insecure) obj["insecure"] = true
@@ -316,8 +492,19 @@ class OpenConnect : Outbound("openconnect") {
             return obj
         }
 
-        /** openconnect.cpp:254-257. */
-        fun build(ctx: BuildContext): JsonObject = exportToJson()
+        /** OpenConnectTLS::Build: the core reads each fingerprint line verbatim, so they go out trimmed. */
+        fun build(ctx: BuildContext): JsonObject {
+            val obj = exportToJson()
+            if (peer_fingerprint.isNotEmpty()) {
+                val fingerprints = peer_fingerprint.map { it.trim() }.filter { it.isNotEmpty() }
+                if (fingerprints.isEmpty()) {
+                    obj.remove("peer_fingerprint")
+                } else {
+                    obj["peer_fingerprint"] = JsonValues.stringArray(fingerprints)
+                }
+            }
+            return obj
+        }
     }
 
     @JvmField var flavor: String = ""
@@ -327,7 +514,7 @@ class OpenConnect : Outbound("openconnect") {
     @JvmField var server_path: String = ""
     @JvmField var mtu: Int = 0
     @JvmField var tls: Tls = Tls()
-    /** Throne-only, never sent to the core (openconnect.h:133-136); Android has no OTP store, so it only round-trips. */
+    /** Throne-only, never sent to the core (openconnect.h); Android has no OTP store, so it only round-trips. */
     @JvmField var otp_profile_id: Int = -1
     @JvmField var only_advertised_routes: Boolean = true
     @JvmField var tunnel_dns: String = TUNNEL_DNS_PREFER
@@ -362,30 +549,30 @@ class OpenConnect : Outbound("openconnect") {
     @JvmField var queue_length: Int = 0
     @JvmField var allow_insecure_crypto: Boolean = false
     @JvmField var system: Boolean = false
-    /** sing-box "name" (system interface name); [name] is the tag (openconnect.h:168-169). */
+    /** sing-box "name" (system interface name); [name] is the tag (openconnect.h). */
     @JvmField var interface_name: String = ""
     @JvmField var udp_timeout: String = ""
     @JvmField var udp_mapping: String = ""
     @JvmField var udp_filtering: String = ""
     @JvmField var udp_nat_max: Int = 0
 
-    /** openconnect.cpp:259-262: the "link" is an openconnect command line, config file or AnyConnect profile. */
+    /** openconnect::ParseFromLink: the "link" is an openconnect command line, config file or AnyConnect profile. */
     override fun parseFromLink(link: String): Boolean = parseOpenConnectProfile(link, null)
 
-    /** openconnect.cpp:264-326. */
+    /** openconnect::ParseFromJson: the DB loader too, so only an import drops values. */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("type") != "openconnect") return false
         super.parseFromJson(obj)
         if (obj.contains("server")) setServerUrl(obj.string("server"))
         if (obj.contains("server_path")) server_path = obj.string("server_path")
 
-        if (obj.contains("flavor")) flavor = obj.string("flavor")
+        if (obj.contains("flavor")) flavor = obj.string("flavor").trim()
         if (obj.contains("username")) username = obj.string("username")
         if (obj.contains("password")) password = obj.string("password")
         if (obj.contains("auth_group")) auth_group = obj.string("auth_group")
         if (obj.contains("cookie")) cookie = obj.string("cookie")
         if (obj.contains("token")) token.parseFromJson(obj.obj("token"))
-        if (obj.contains("reported_os")) reported_os = obj.string("reported_os")
+        reported_os = ocReadChecked(obj, "reported_os", reported_os) { OpenConnectChecks.openConnectReportedOs(flavor, it) }
         if (obj.contains("user_agent")) user_agent = obj.string("user_agent")
         if (obj.contains("version")) version = obj.string("version")
         if (obj.contains("local_hostname")) local_hostname = obj.string("local_hostname")
@@ -395,9 +582,11 @@ class OpenConnect : Outbound("openconnect") {
         if (obj.contains("tncc")) tncc.parseFromJson(obj.obj("tncc"))
         if (obj.contains("fortinet_host_check")) fortinet_host_check.parseFromJson(obj.obj("fortinet_host_check"))
         if (obj.contains("no_udp")) no_udp = obj.bool("no_udp")
-        if (obj.contains("dtls_local_port")) dtls_local_port = obj.int("dtls_local_port")
+        dtls_local_port = ocReadCheckedInt(obj, "dtls_local_port", dtls_local_port) { if (it == "0") "" else Validation.port(it) }
         if (obj.contains("compression_disabled")) compression_disabled = obj.bool("compression_disabled")
-        if (obj.contains("compression_mode")) compression_mode = obj.string("compression_mode")
+        compression_mode = ocReadChecked(obj, "compression_mode", compression_mode) {
+            Validation.oneOf(it, OpenConnectChecks.COMPRESSION_MODES)
+        }
         if (obj.contains("ipv6_disabled")) ipv6_disabled = obj.bool("ipv6_disabled")
         if (obj.contains("http_keepalive_disabled")) http_keepalive_disabled = obj.bool("http_keepalive_disabled")
         if (obj.contains("xml_post_disabled")) xml_post_disabled = obj.bool("xml_post_disabled")
@@ -405,11 +594,13 @@ class OpenConnect : Outbound("openconnect") {
         if (obj.contains("password_authentication_disabled")) password_authentication_disabled = obj.bool("password_authentication_disabled")
         if (obj.contains("tcp_keep_alive_enabled")) tcp_keep_alive_enabled = obj.bool("tcp_keep_alive_enabled")
         if (obj.contains("pfs")) pfs = obj.bool("pfs")
-        if (obj.contains("mtu")) mtu = obj.int("mtu")
-        if (obj.contains("base_mtu")) base_mtu = obj.int("base_mtu")
-        if (obj.contains("dpd_interval")) dpd_interval = obj.string("dpd_interval")
-        if (obj.contains("reconnect_timeout")) reconnect_timeout = obj.string("reconnect_timeout")
-        if (obj.contains("trojan_interval")) trojan_interval = obj.string("trojan_interval")
+        val mtuRule: Rule = { Validation.int(it, 0, 65535) }
+        mtu = ocReadCheckedInt(obj, "mtu", mtu, mtuRule)
+        base_mtu = ocReadCheckedInt(obj, "base_mtu", base_mtu, mtuRule)
+        val durationRule: Rule = { Validation.duration(it) }
+        dpd_interval = ocReadChecked(obj, "dpd_interval", dpd_interval, durationRule)
+        reconnect_timeout = ocReadChecked(obj, "reconnect_timeout", reconnect_timeout, durationRule)
+        trojan_interval = ocReadChecked(obj, "trojan_interval", trojan_interval, durationRule)
         if (obj.contains("queue_length")) queue_length = obj.int("queue_length")
         if (obj.contains("allow_insecure_crypto")) allow_insecure_crypto = obj.bool("allow_insecure_crypto")
         if (obj.contains("tls")) tls.parseFromJson(obj.obj("tls"))
@@ -422,7 +613,7 @@ class OpenConnect : Outbound("openconnect") {
         }
         if (obj.contains("system")) system = obj.bool("system")
         if (obj.contains("name")) interface_name = obj.string("name")
-        if (obj.contains("udp_timeout")) udp_timeout = obj.string("udp_timeout")
+        udp_timeout = ocReadChecked(obj, "udp_timeout", udp_timeout, durationRule)
         if (obj.contains("udp_mapping")) udp_mapping = obj.string("udp_mapping")
         if (obj.contains("udp_filtering")) udp_filtering = obj.string("udp_filtering")
         if (obj.contains("udp_nat_max")) udp_nat_max = obj.int("udp_nat_max")
@@ -436,7 +627,73 @@ class OpenConnect : Outbound("openconnect") {
         return true
     }
 
-    /** openconnect.cpp:328-387. */
+    /**
+     * openconnect::Validate. The desktop's reminder about an unbound {otp} placeholder is left out: Android never
+     * substitutes it.
+     */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        fun report(field: String, message: String, value: String = "", severity: Severity = Severity.Error) =
+            issues.addIssue(severity, field, message, value)
+
+        report("flavor", Validation.oneOf(flavor, OpenConnectChecks.FLAVORS), flavor)
+        report("server_path", OpenConnectChecks.openConnectServerPath(server_path), server_path)
+        val mtuText = mtu.toString()
+        report("mtu", Validation.int(mtuText, 0, 65535), mtuText)
+        report("mtu", OpenConnectChecks.openConnectMtuFloor(mtuText), mtuText, Severity.Warning)
+        val baseMtuText = base_mtu.toString()
+        report("base_mtu", Validation.int(baseMtuText, 0, 65535), baseMtuText)
+        report("base_mtu", OpenConnectChecks.openConnectMtuFloor(baseMtuText), baseMtuText, Severity.Warning)
+        if (dtls_local_port != 0) {
+            val portText = dtls_local_port.toString()
+            report("dtls_local_port", Validation.port(portText), portText)
+        }
+        report("reported_os", OpenConnectChecks.openConnectReportedOs(flavor, reported_os), reported_os)
+        report("compression_mode", Validation.oneOf(compression_mode, OpenConnectChecks.COMPRESSION_MODES), compression_mode)
+        report("dpd_interval", Validation.duration(dpd_interval), dpd_interval)
+        report("dpd_interval", OpenConnectChecks.openConnectDpdFloor(dpd_interval), dpd_interval, Severity.Warning)
+        report("reconnect_timeout", Validation.duration(reconnect_timeout), reconnect_timeout)
+        report("trojan_interval", Validation.duration(trojan_interval), trojan_interval)
+        report("udp_timeout", Validation.duration(udp_timeout), udp_timeout)
+        report("tls.server_name", CommonChecks.serverName(tls.server_name), tls.server_name)
+        for (line in tls.peer_fingerprint) {
+            val message = OpenConnectChecks.openConnectFingerprint(line)
+            if (message.isNotEmpty()) {
+                report("tls.peer_fingerprint", message, line)
+                break
+            }
+        }
+
+        report("tls.certificate_authority", OpenVpnChecks.vpnMaterialConflict(tls.certificate_authority, tls.certificate_authority_path))
+        report("tls.client_certificate", OpenVpnChecks.vpnMaterialConflict(tls.client_certificate, tls.client_certificate_path))
+        report("tls.client_key", OpenVpnChecks.vpnMaterialConflict(tls.client_key, tls.client_key_path))
+        report("tls.mca_certificate", OpenVpnChecks.vpnMaterialConflict(tls.mca_certificate, tls.mca_certificate_path))
+        report("tls.mca_key", OpenVpnChecks.vpnMaterialConflict(tls.mca_key, tls.mca_key_path))
+        report(
+            "tls.client_certificate",
+            OpenConnectChecks.openConnectCertificatePair(tls.client_certificate, tls.client_certificate_path, tls.client_key, tls.client_key_path),
+        )
+        report(
+            "tls.mca_certificate",
+            OpenConnectChecks.openConnectCertificatePair(tls.mca_certificate, tls.mca_certificate_path, tls.mca_key, tls.mca_key_path),
+        )
+        for ((i, certificate) in tncc.certificates.withIndex()) {
+            report("tncc.certificates[$i]", OpenVpnChecks.vpnMaterialConflict(certificate.certificate, certificate.certificate_path))
+        }
+        report("token", OpenConnectChecks.openConnectToken(this), token.mode)
+        report("token", OpenConnectChecks.openConnectTokenUnused(this), severity = Severity.Warning)
+        report("token.counter", OpenConnectChecks.openConnectTokenCounter(this), severity = Severity.Warning)
+        report("mobile", OpenConnectChecks.openConnectMobile(this))
+        report("compression_mode", OpenConnectChecks.openConnectCompression(this), compression_mode)
+        for ((i, entry) in form_entries.withIndex()) {
+            report(
+                "form_entries[$i]",
+                OpenConnectChecks.openConnectFormEntry(entry.form_id, entry.submission_key, entry.name, entry.value, entry.promote),
+            )
+        }
+    }
+
+    /** openconnect::ExportToJson. */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["type"] = "openconnect"
@@ -505,7 +762,7 @@ class OpenConnect : Outbound("openconnect") {
         return obj
     }
 
-    /** openconnect.cpp:389-459. */
+    /** openconnect::Build. */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "openconnect"
@@ -575,7 +832,7 @@ class OpenConnect : Outbound("openconnect") {
         return BuildResult(obj)
     }
 
-    /** openconnect.cpp:461-471: `host[:port unless 443][/path]`. */
+    /** openconnect::ComposeServer: `host[:port unless 443][/path]`. */
     fun composeServer(): String {
         if (server.isEmpty()) return ""
         var url = OcImport.wrapIpv6Host(server)
@@ -586,7 +843,7 @@ class OpenConnect : Outbound("openconnect") {
         return url
     }
 
-    /** openconnect.cpp:473-489: a URL or bare host[:port][/path]; an unparsable value leaves the fields alone. */
+    /** openconnect::SetServerUrl: a URL or bare host[:port][/path]; an unparsable value leaves the fields alone. */
     fun setServerUrl(url: String) {
         var text = VpnFileImport.trimmed(url)
         if (text.isEmpty()) return
@@ -602,25 +859,28 @@ class OpenConnect : Outbound("openconnect") {
         if (server_path == "/") server_path = ""
     }
 
-    /** openconnect.cpp:491-494. */
+    /** openconnect::DisplayAddress. */
     override fun displayAddress(): String = composeServer()
 
-    /** openconnect.cpp:496-499. */
+    /** openconnect::DisplayType. */
     override fun displayType(): String = "OpenConnect"
 
-    /** openconnect.cpp:501-506: the core still checks a pinned fingerprint when insecure is set. */
+    /** openconnect::GetSecurity: the core still checks a pinned fingerprint when insecure is set. */
     override fun security(): SecurityInfo {
         if (tls.insecure && tls.peer_fingerprint.isEmpty()) return SecurityInfo("Insecure TLS", "", SecurityLevel.Weak)
         return SecurityInfo("TLS", "", SecurityLevel.Secure)
     }
 
-    /** openconnect.cpp:507-510. */
+    /** openconnect::IsEndpoint. */
     override fun isEndpoint(): Boolean = true
 
-    /** openconnect.cpp:512-515. */
+    /** composeServer leaves the port out, which means the HTTPS default, 443. */
+    override fun serverPortOptional(): Boolean = true
+
+    /** openconnect::SupportsCredentialStrip. */
     override fun supportsCredentialStrip(): Boolean = true
 
-    /** openconnect.cpp:517-541. */
+    /** openconnect::StripCredentials. */
     override fun stripCredentials() {
         username = ""
         password = ""
@@ -646,10 +906,31 @@ class OpenConnect : Outbound("openconnect") {
         for (cert in tncc.certificates) cert.certificate_path = ""
     }
 
+    /** openconnect::StripForeignState: the authenticator binding belongs to another installation, and each wrapper is an executable the core starts during authentication. */
+    override fun stripForeignState(issues: MutableList<Issue>) {
+        super.stripForeignState(issues)
+        if (otp_profile_id >= 0) {
+            otp_profile_id = -1
+            issues.add(Issue(Severity.Warning, "otp_profile_id", vtr(R.string.validation_oc_otp_removed)))
+        }
+        if (csd.wrapper_path.isNotEmpty()) {
+            issues.add(Issue(Severity.Warning, "csd.wrapper_path", vtr(R.string.validation_oc_csd_wrapper_removed), csd.wrapper_path))
+            csd.wrapper_path = ""
+        }
+        if (hip.wrapper_path.isNotEmpty()) {
+            issues.add(Issue(Severity.Warning, "hip.wrapper_path", vtr(R.string.validation_oc_hip_wrapper_removed), hip.wrapper_path))
+            hip.wrapper_path = ""
+        }
+        if (tncc.wrapper_path.isNotEmpty()) {
+            issues.add(Issue(Severity.Warning, "tncc.wrapper_path", vtr(R.string.validation_oc_tncc_wrapper_removed), tncc.wrapper_path))
+            tncc.wrapper_path = ""
+        }
+    }
+
     /**
-     * ParseOpenConnectProfile (vpnFileImport.cpp:1157-1236) applied to this profile: an AnyConnect XML profile
-     * (first usable host entry), an `openconnect ...` command line, or a config file of `option[=value]` lines.
-     * Every note the desktop would show is appended to [problems]; a fatal problem appends its reason too.
+     * ParseOpenConnectProfile (vpnFileImport.cpp) applied to this profile: an AnyConnect XML profile (first usable
+     * host entry), an `openconnect ...` command line, or a config file of `option[=value]` lines. Every note the
+     * desktop would show is appended to [problems]; a fatal problem appends its reason last.
      */
     @JvmOverloads
     fun parseOpenConnectProfile(text: String, problems: MutableList<String>? = null): Boolean {
@@ -659,7 +940,7 @@ class OpenConnect : Outbound("openconnect") {
         }
         val body = VpnFileImport.trimmed(text)
         if (body.isEmpty()) {
-            notes.add("Empty OpenConnect profile.")
+            notes.add(vtr(R.string.validation_oc_profile_empty))
             flush()
             return false
         }
@@ -675,7 +956,7 @@ class OpenConnect : Outbound("openconnect") {
                 flush()
                 return true
             }
-            notes.add("The AnyConnect profile has no host entry this endpoint can use.")
+            notes.add(vtr(R.string.validation_oc_anyconnect_no_usable_host))
             flush()
             return false
         }
@@ -705,14 +986,14 @@ class OpenConnect : Outbound("openconnect") {
             }
         }
         if (argv.isEmpty()) {
-            notes.add("No OpenConnect options found.")
+            notes.add(vtr(R.string.validation_oc_no_options))
             flush()
             return false
         }
         OcImport.walkArgs(argv, this, notes)
 
         if (server.isEmpty()) {
-            notes.add("No OpenConnect server address found.")
+            notes.add(vtr(R.string.validation_oc_no_server))
             flush()
             return false
         }
@@ -727,8 +1008,8 @@ class OpenConnect : Outbound("openconnect") {
 
     companion object {
         /**
-         * ParseAnyConnectXml (vpnFileImport.cpp:1141-1155): an AnyConnect / Cisco Secure Client XML profile lists one
-         * host per entry; one profile per usable entry is appended to [out]. True when at least one was produced.
+         * ParseAnyConnectXml (vpnFileImport.cpp): an AnyConnect / Cisco Secure Client XML profile lists one host per
+         * entry; one profile per usable entry is appended to [out]. True when at least one was produced.
          */
         @JvmStatic
         @JvmOverloads
@@ -749,9 +1030,9 @@ class OpenConnect : Outbound("openconnect") {
     }
 }
 
-/** The openconnect half of vpnFileImport.cpp's anonymous namespace (`vpnfiOc*`, `:745-1139`). */
+/** The openconnect half of vpnFileImport.cpp's anonymous namespace (`vpnfiOc*`). */
 private object OcImport {
-    /** kOpenConnectDefaultPort (openconnect.cpp:21). */
+    /** kOpenConnectDefaultPort (openconnect.cpp). */
     const val DEFAULT_PORT = 443
 
     class HostEntry {
@@ -762,11 +1043,11 @@ private object OcImport {
         @JvmField var fingerprints: MutableList<String> = ArrayList()
     }
 
-    /** WrapIPV6Host (Utils.hpp:182-185). */
+    /** WrapIPV6Host (Utils.hpp). */
     fun wrapIpv6Host(host: String): String =
         if (!Hosts.isIpv6Address(host)) host else "[" + host.replace("[", "").replace("]", "") + "]"
 
-    /** vpnfiOcOptionHasValue (vpnFileImport.cpp:745-757). */
+    /** vpnfiOcOptionHasValue. */
     val OPTION_HAS_VALUE: Set<String> = setOf(
         "authgroup", "base-mtu", "cafile", "cert-expire-warning", "certificate", "compression", "config",
         "cookie", "csd-user", "csd-wrapper", "dpd", "dtls-local-port", "force-dpd", "force-trojan",
@@ -777,7 +1058,7 @@ private object OcImport {
         "user-agent", "usergroup", "version-string", "xmlconfig",
     )
 
-    /** vpnfiOcIgnored (vpnFileImport.cpp:759-765). */
+    /** vpnfiOcIgnored. */
     val IGNORED: Set<String> = setOf(
         "authenticate", "background", "cert-expire-warning", "config", "cookie-on-stdin", "cookieonly",
         "csd-user", "deflate", "dump-http-traffic", "gnutls-debug", "gnutls-priority", "help", "interface",
@@ -786,16 +1067,13 @@ private object OcImport {
         "syslog", "timestamp", "verbose", "version", "xmlconfig",
     )
 
-    /** vpnfiOcFlags (vpnFileImport.cpp:768-771): kept apart so only an unknown option may swallow a detached argument. */
+    /** vpnfiOcFlags: kept apart so only an unknown option may swallow a detached argument. */
     val FLAGS: Set<String> = setOf(
         "allow-insecure-crypto", "disable-ipv6", "juniper", "no-compression", "no-dtls", "no-external-auth",
         "no-http-keepalive", "no-passwd", "no-system-trust", "no-xmlpost", "pfs",
     )
 
-    private val FLAVORS = setOf("anyconnect", "nc", "gp", "pulse", "f5", "fortinet")
-    private val REPORTED_OS = setOf("linux", "linux-64", "win", "mac-intel", "android", "apple-ios")
-
-    /** vpnfiOcLongName (vpnFileImport.cpp:773-801). */
+    /** vpnfiOcLongName. */
     fun longName(shortName: Char): String = when (shortName) {
         'b' -> "background"
         'C' -> "cookie"
@@ -823,13 +1101,13 @@ private object OcImport {
         else -> ""
     }
 
-    /** vpnfiApplyOcOption (vpnFileImport.cpp:803-1000). */
+    /** vpnfiApplyOcOption: a value the endpoint would refuse is dropped with a note ([VpnFileImport.accept]). */
     fun applyOption(out: OpenConnect, name: String, value: String, hasValue: Boolean, notes: MutableList<String>) {
         when (name) {
             "protocol" -> {
                 val flavor = value.lowercase()
-                if (flavor in FLAVORS) out.flavor = flavor
-                else notes.add("Unsupported OpenConnect protocol, ignored: $value")
+                if (flavor in OpenConnectChecks.FLAVORS) out.flavor = flavor
+                else notes.add(vtr(R.string.validation_oc_protocol_unsupported, value))
             }
             "juniper" -> out.flavor = "nc"
             "server" -> out.setServerUrl(value)
@@ -848,12 +1126,12 @@ private object OcImport {
             "no-system-trust" -> out.tls.system_trust_disabled = true
             "sni" -> out.tls.server_name = value
             "no-dtls" -> out.no_udp = true
-            "dtls-local-port" -> out.dtls_local_port = QtStrings.toInt(value)
+            "dtls-local-port" -> if (VpnFileImport.accept(name, value, Validation.port(value), notes)) out.dtls_local_port = QtStrings.toInt(value)
             "compression" -> {
                 val mode = value.lowercase()
                 if (mode == "none") out.compression_disabled = true
                 else if (mode == "stateless" || mode == "all") out.compression_mode = mode
-                else notes.add("Unknown compression mode, ignored: $value")
+                else notes.add(vtr(R.string.validation_oc_compression_unknown, value))
             }
             "no-compression" -> out.compression_disabled = true
             "disable-ipv6" -> out.ipv6_disabled = true
@@ -863,18 +1141,28 @@ private object OcImport {
             "no-passwd" -> out.password_authentication_disabled = true
             "pfs" -> out.pfs = true
             "allow-insecure-crypto" -> out.allow_insecure_crypto = true
-            "mtu" -> out.mtu = QtStrings.toInt(value)
-            "base-mtu" -> out.base_mtu = QtStrings.toInt(value)
-            "dpd", "force-dpd" -> out.dpd_interval = VpnFileImport.duration(value)
-            "reconnect-timeout" -> out.reconnect_timeout = VpnFileImport.duration(value)
-            "force-trojan" -> out.trojan_interval = VpnFileImport.duration(value)
-            "queue-len" -> out.queue_length = QtStrings.toInt(value)
+            "mtu" -> if (VpnFileImport.accept(name, value, Validation.int(value, 0, 65535), notes)) out.mtu = QtStrings.toInt(value)
+            "base-mtu" -> if (VpnFileImport.accept(name, value, Validation.int(value, 0, 65535), notes)) out.base_mtu = QtStrings.toInt(value)
+            "dpd", "force-dpd" -> {
+                val interval = VpnFileImport.duration(name, value, notes)
+                // The core raises a shorter interval to 2s itself.
+                val ns = Validation.parseDurationNs(interval) ?: 0L
+                if (ns > 0 && ns < 2000000000L) {
+                    notes.add(vtr(R.string.validation_oc_dpd_raised, name, value))
+                    out.dpd_interval = "2s"
+                } else {
+                    out.dpd_interval = interval
+                }
+            }
+            "reconnect-timeout" -> out.reconnect_timeout = VpnFileImport.duration(name, value, notes)
+            "force-trojan" -> out.trojan_interval = VpnFileImport.duration(name, value, notes)
+            "queue-len" -> if (VpnFileImport.accept(name, value, Validation.int(value, 0, 2147483647L), notes)) out.queue_length = QtStrings.toInt(value)
             "useragent", "user-agent" -> out.user_agent = value
             "version-string" -> out.version = value
             "local-hostname", "localname" -> out.local_hostname = value
             "os" -> {
-                if (value.lowercase() in REPORTED_OS) out.reported_os = value.lowercase()
-                else notes.add("Unknown reported OS, ignored: $value")
+                if (value.lowercase() in OpenConnectChecks.REPORTED_OS) out.reported_os = value.lowercase()
+                else notes.add(vtr(R.string.validation_oc_reported_os_unknown, value))
             }
             "csd-wrapper" -> out.csd.wrapper_path = value
             "token-mode" -> {
@@ -882,7 +1170,7 @@ private object OcImport {
                 val mode = value.lowercase()
                 if (mode == "rsa" || mode == "stoken") out.token.mode = "stoken"
                 else if (mode == "totp" || mode == "hotp" || mode == "oidc") out.token.mode = mode
-                else notes.add("Unsupported token mode, ignored: $value")
+                else notes.add(vtr(R.string.validation_oc_token_mode_unsupported, value))
             }
             "token-secret" -> {
                 if (value.startsWith('@')) out.token.secret_path = value.substring(1)
@@ -892,7 +1180,7 @@ private object OcImport {
                 val colon = value.indexOf(':')
                 val equals = value.indexOf('=', colon + 1)
                 if (colon < 0 || equals < 0) {
-                    notes.add("Expected --form-entry=FORM:OPTION=VALUE, ignored: $value")
+                    notes.add(vtr(R.string.validation_oc_form_entry_format, value))
                     return
                 }
                 val entry = OpenConnect.FormEntry()
@@ -901,15 +1189,15 @@ private object OcImport {
                 entry.value = value.substring(equals + 1)
                 out.form_entries.add(entry)
             }
-            "proxy", "proxy-auth", "http-auth" -> notes.add("Configure a proxy through Throne's chain instead, ignored: $name")
+            "proxy", "proxy-auth", "http-auth" -> notes.add(vtr(R.string.validation_oc_proxy_ignored, name))
             else -> {
                 if (name in IGNORED) return
-                notes.add("Unknown OpenConnect option, ignored: ${if (hasValue) "$name=$value" else name}")
+                notes.add(vtr(R.string.validation_oc_option_unknown, if (hasValue) "$name=$value" else name))
             }
         }
     }
 
-    /** vpnfiWalkOcArgs (vpnFileImport.cpp:1002-1053): GNU long options, bundled short options and the positional server. */
+    /** vpnfiWalkOcArgs: GNU long options, bundled short options and the positional server. */
     fun walkArgs(argv: List<String>, out: OpenConnect, notes: MutableList<String>) {
         var i = 0
         while (i < argv.size) {
@@ -944,7 +1232,7 @@ private object OcImport {
                 while (c < token.length) {
                     val name = longName(token[c])
                     if (name.isEmpty()) {
-                        notes.add("Unknown OpenConnect option, ignored: -${token[c]}")
+                        notes.add(vtr(R.string.validation_oc_option_unknown, "-${token[c]}"))
                         break
                     }
                     if (name !in OPTION_HAS_VALUE) {
@@ -969,11 +1257,11 @@ private object OcImport {
         }
     }
 
-    /** vpnfiLooksLikeXml (vpnFileImport.cpp:1055-1058). */
+    /** vpnfiLooksLikeXml. */
     fun looksLikeXml(text: String): Boolean =
         text.startsWith("<?xml") || text.contains("<AnyConnectProfile") || text.contains("<ServerList")
 
-    /** vpnfiIsOcCommandLine (vpnFileImport.cpp:1060-1068). */
+    /** vpnfiIsOcCommandLine. */
     fun isCommandLine(text: String): Boolean {
         for (line in text.split('\n')) {
             val item = VpnFileImport.trimmed(line)
@@ -999,7 +1287,7 @@ private object OcImport {
         return sb.toString()
     }
 
-    /** vpnfiReadAnyConnectHosts (vpnFileImport.cpp:1070-1115); untrusted input: a DTD is the only place entities are declared. */
+    /** vpnfiReadAnyConnectHosts; untrusted input: a DTD is the only place entities are declared. */
     fun readAnyConnectHosts(xml: String, out: MutableList<HostEntry>, notes: MutableList<String>): Boolean {
         try {
             val parser = XmlPullParserFactory.newInstance().newPullParser()
@@ -1020,7 +1308,7 @@ private object OcImport {
                     break
                 }
                 if (token == XmlPullParser.DOCDECL) {
-                    notes.add("An AnyConnect profile carrying a DTD is not accepted.")
+                    notes.add(vtr(R.string.validation_oc_anyconnect_dtd))
                     return false
                 }
                 if (token == XmlPullParser.END_TAG) depth--
@@ -1054,34 +1342,34 @@ private object OcImport {
                 }
             }
         } catch (e: XmlPullParserException) {
-            notes.add("Malformed AnyConnect profile: ${e.message}")
+            notes.add(vtr(R.string.validation_oc_anyconnect_malformed, e.message.orEmpty()))
             return false
         } catch (e: IOException) {
-            notes.add("Malformed AnyConnect profile: ${e.message}")
+            notes.add(vtr(R.string.validation_oc_anyconnect_malformed, e.message.orEmpty()))
             return false
         }
         if (out.isEmpty()) {
-            notes.add("The AnyConnect profile lists no host entry.")
+            notes.add(vtr(R.string.validation_oc_anyconnect_no_hosts))
             return false
         }
         return true
     }
 
-    /** vpnfiApplyHostEntry (vpnFileImport.cpp:1117-1138). */
+    /** vpnfiApplyHostEntry. */
     fun applyHostEntry(entry: HostEntry, out: OpenConnect, notes: MutableList<String>): Boolean {
         val address = if (entry.address.isEmpty()) entry.name else entry.address
         if (address.isEmpty()) {
-            notes.add("Skipped a host entry without an address.")
+            notes.add(vtr(R.string.validation_oc_host_no_address))
             return false
         }
         if (entry.protocol.equals("IPsec", ignoreCase = true)) {
-            notes.add("Skipped \"$address\": IKEv2/IPsec is not spoken by the OpenConnect endpoint.")
+            notes.add(vtr(R.string.validation_oc_host_ipsec, address))
             return false
         }
         out.flavor = "anyconnect"
         out.setServerUrl(address)
         if (out.server.isEmpty()) {
-            notes.add("Skipped an unreadable host address: $address")
+            notes.add(vtr(R.string.validation_oc_host_unreadable, address))
             return false
         }
         if (entry.group.isNotEmpty()) out.server_path = entry.group

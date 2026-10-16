@@ -12,6 +12,7 @@ import io.nekohasekai.sagernet.ktx.mkPort
 import io.nekohasekai.sagernet.ktx.readableMessage
 import io.nekohasekai.sagernet.outbound.config.AutoSelectorBuild
 import io.nekohasekai.sagernet.outbound.config.GeneratedConfig
+import io.nekohasekai.sagernet.outbound.config.PortLease
 import io.nekohasekai.sagernet.outbound.types.Custom
 import io.throneproj.mobile.Instance
 import io.throneproj.mobile.Mobile
@@ -33,6 +34,9 @@ abstract class BoxInstance(
     /** This start does not wait for remote rule-sets the core has no copy of ([DeferredRuleSets]). */
     var deferRuleSets = false
 
+    /** The bridge ports [config] listens on (Xray may bind them late), no other box's until [close]. */
+    private val ports = PortLease()
+
     fun isInitialized(): Boolean {
         return ::config.isInitialized && ::box.isInitialized
     }
@@ -49,7 +53,7 @@ abstract class BoxInstance(
         }
         // A custom full config keeps its own rule-sets as written.
         if (isCustomFullConfig()) deferRuleSets = false
-        config = CoreConfigs.buildMain(profile, deferRuleSets)
+        config = CoreConfigs.buildMain(profile, deferRuleSets, ports)
     }
 
     protected open suspend fun loadConfig() {
@@ -116,8 +120,12 @@ abstract class BoxInstance(
     private fun isCustomFullConfig(): Boolean = (profile.outbound as? Custom)?.isFullConfig() == true
 
     override fun close() {
-        boxOrNull?.let(CoreRuntime::detachRunning)
-        boxOrNull?.close()
+        try {
+            boxOrNull?.let(CoreRuntime::detachRunning)
+            boxOrNull?.close()
+        } finally {
+            ports.close()
+        }
     }
 
 }

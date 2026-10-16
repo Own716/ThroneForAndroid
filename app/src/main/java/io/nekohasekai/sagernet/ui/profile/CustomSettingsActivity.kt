@@ -21,6 +21,17 @@ class CustomSettingsActivity : BindingSettingsActivity<Custom>() {
         pbm.text("config", Key.SERVER_CONFIG)
     }
 
+    /**
+     * edit_custom.cpp binds the config text to Checks::CustomConfig, which Custom.validate runs on the untrimmed text;
+     * every issue but the subtype's is about the config, nested Xray paths included.
+     */
+    override fun issueKey(field: String): String? = if (field == "subtype") null else Key.SERVER_CONFIG
+
+    /** Custom.validate parses the whole config; only the subtype and the config change what it finds. */
+    override fun validationInputs(): Any = DataStore.profileCacheStore.let {
+        listOf(it.getString("subtype"), it.getString(Key.SERVER_CONFIG))
+    }
+
     private var editConfigPreference: EditConfigPreference? = null
 
     override fun PreferenceFragmentCompat.onPreferencesCreated() {

@@ -5,4 +5,6 @@ oneway interface ISubscriptionCallback {
   void onState(long gid, int state);
   void onReport(long gid, String title, String text, boolean popup);
   void onError(long gid, String message);
+  // A refresh re-pointed route references the running config was built from.
+  void onReloadNeeded(long gid);
 }

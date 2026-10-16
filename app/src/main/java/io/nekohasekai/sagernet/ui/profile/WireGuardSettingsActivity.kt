@@ -1,14 +1,32 @@
 package io.nekohasekai.sagernet.ui.profile
 
+import android.text.InputType
+import android.widget.FrameLayout
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.bg.CoreServiceClient
+import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.ktx.dp2px
+import io.nekohasekai.sagernet.outbound.json.JsonInput
 import io.nekohasekai.sagernet.outbound.types.WireGuard
+import io.nekohasekai.sagernet.outbound.types.WireGuardChecks
+import io.nekohasekai.sagernet.ui.ValidationForm
 import io.nekohasekai.sagernet.ui.warp.WarpClient
 import io.nekohasekai.sagernet.ui.warp.WarpGenerate
 import io.nekohasekai.sagernet.ui.warp.setFieldText
+import io.nekohasekai.sagernet.validation.Validation
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** WireGuard / AmneziaWG: the endpoint lives in `peer.*`, the interface in the top-level fields. */
 class WireGuardSettingsActivity : BindingSettingsActivity<WireGuard>() {
@@ -38,6 +56,35 @@ class WireGuardSettingsActivity : BindingSettingsActivity<WireGuard>() {
         )) pbm.text(field)
         pbm.bool("random_trailers")
         pbm.bool("disable_cookies")
+    }
+
+    /** edit_wireguard.cpp onEnd: reserved and addresses take commas as well as lines, bare addresses get /32 or /128. */
+    override fun WireGuard.serialize() {
+        pbm.fromCacheAll(this)
+        WireGuardChecks.wireguardReserved(reservedText(DataStore.profileCacheStore.getString("peer.reserved").orEmpty()), peer.reserved)
+        address = address.flatMapTo(ArrayList()) { it.split(',') }
+        fixAddress()
+    }
+
+    private fun reservedText(text: String) = text.replace('\n', ',')
+
+    override fun issueKey(field: String): String? = when (field) {
+        "server" -> "peer.address"
+        "server_port" -> "peer.port"
+        "public_key", "pre_shared_key", "reserved" -> "peer.$field"
+        "persistent_keepalive_interval" -> "peer.persistent_keepalive"
+        else -> null
+    }
+
+    /**
+     * edit_wireguard.cpp / edit_wireguard_amnezia.cpp bindValidation, for the text the bindings lose: reserved bytes
+     * and integers they would turn into 0. WireGuard.validate covers the rest, Amnezia rows included.
+     */
+    override fun ValidationForm.bindValidation() {
+        val intMax = Int.MAX_VALUE.toLong()
+        bind("peer.reserved") { WireGuardChecks.wireguardReserved(reservedText(it)) }
+        for (key in listOf("mtu", "worker_count", "jc", "jmin", "jmax")) bind(key, Validation.Rules.int(0, intMax))
+        for (key in listOf("s1", "s2", "s3", "s4")) bind(key, Validation.Rules.int(0, 65535))
     }
 
     override fun PreferenceFragmentCompat.onPreferencesCreated() {
@@ -76,6 +123,78 @@ class WireGuardSettingsActivity : BindingSettingsActivity<WireGuard>() {
             }
             setFieldText("peer.reserved", identity.reserved.joinToString("\n"))
         }
+
+        findPreference<Preference>(KEY_QUIC_SIGNATURE)?.setOnPreferenceClickListener { button ->
+            askSignatureDomain(this, button)
+            true
+        }
+    }
+
+    // edit_wireguard_amnezia.cpp generateSignature
+    private fun askSignatureDomain(screen: PreferenceFragmentCompat, button: Preference) {
+        val layout = TextInputLayout(this).apply { hint = getString(R.string.amnezia_quic_signature_domain) }
+        val input = TextInputEditText(layout.context).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            isSingleLine = true
+            setText(lastSignatureDomain)
+        }
+        layout.addView(input)
+        val container = FrameLayout(this).apply {
+            setPadding(dp2px(20), dp2px(12), dp2px(20), 0)
+            addView(layout)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.amnezia_quic_signature_title)
+            .setView(container)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val domain = input.text?.toString()?.trim().orEmpty()
+                if (domain.isNotEmpty()) {
+                    lastSignatureDomain = domain
+                    generateSignature(screen, button, domain)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun generateSignature(screen: PreferenceFragmentCompat, button: Preference, domain: String) {
+        val idle = button.summary
+        button.isEnabled = false
+        button.summary = getString(R.string.generating)
+        lifecycleScope.launch {
+            val raw = try {
+                withContext(Dispatchers.IO) { CoreServiceClient.call { it.genQuicSignature(domain) } }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logs.w(e)
+                null
+            }
+            button.summary = idle
+            button.isEnabled = true
+            val result = raw?.let { JsonInput.parseObjectOrNull(it) }
+            val packets = result?.array("packets")?.strings().orEmpty()
+            val error = if (result == null) getString(R.string.warp_core_unreachable) else result.string("error")
+            if (error.isNotEmpty() || packets.isEmpty()) {
+                MaterialAlertDialogBuilder(this@WireGuardSettingsActivity)
+                    .setTitle(R.string.amnezia_quic_signature_failed)
+                    .apply { if (error.isNotEmpty()) setMessage(error) }
+                    .setPositiveButton(android.R.string.ok, null)
+                    .show()
+                return@launch
+            }
+            // An "Edit as JSON" round trip may have rebuilt the screen meanwhile.
+            val target = supportFragmentManager.findFragmentById(R.id.settings) as? PreferenceFragmentCompat ?: screen
+            SIGNATURE_FIELDS.forEachIndexed { i, key -> target.setFieldText(key, packets.getOrElse(i) { "" }) }
+        }
+    }
+
+    private companion object {
+        const val KEY_QUIC_SIGNATURE = "amneziaQuicSignature"
+        val SIGNATURE_FIELDS = listOf("i1", "i2", "i3", "i4", "i5")
+
+        // Offered again next time, like the desktop's lastSignatureDomain.
+        var lastSignatureDomain = ""
     }
 
 }

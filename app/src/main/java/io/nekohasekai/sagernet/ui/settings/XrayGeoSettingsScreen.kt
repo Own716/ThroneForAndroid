@@ -13,6 +13,8 @@ import io.nekohasekai.sagernet.database.SettingsRegistry
 import io.nekohasekai.sagernet.databinding.DialogGeoDownloadBinding
 import io.nekohasekai.sagernet.ktx.needReload
 import io.nekohasekai.sagernet.ktx.readableMessage
+import io.nekohasekai.sagernet.validation.Empty
+import io.nekohasekai.sagernet.validation.Validation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -84,6 +86,7 @@ class XrayGeoSettingsFragment : SettingsScreenFragment(R.xml.settings_xray_geo) 
             }
             false
         }
+        validation.bind(preference.key, Validation.Rules.url(SettingChecks.HTTP, Empty.Required)).gate()
     }
 
     /** Stores [url] as the source of [file] and drops the installed copy; false when it is the stored one already. */

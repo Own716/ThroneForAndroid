@@ -158,6 +158,7 @@
         <item>android</item>
         <item>random</item>
         <item>randomized</item>
+        <item>unsafe</item>
     </string-array>
 
     <string-array name="log_level" translatable="false">
@@ -216,10 +217,12 @@
     </string-array>
     <string-array name="socks_version_entry" translatable="false">
         <item>SOCKS4</item>
+        <item>SOCKS4a</item>
         <item>SOCKS5</item>
     </string-array>
     <string-array name="socks_version_value" translatable="false">
         <item>4</item>
+        <item>4a</item>
         <item>5</item>
     </string-array>
     <string-array name="vmess_security_entry" translatable="false">
@@ -355,6 +358,14 @@
         <item>native</item>
         <item>quic</item>
     </string-array>
+    <string-array name="trusttunnel_congestion_control" translatable="false">
+        <item>bbr</item>
+        <item>cubic</item>
+        <item>reno</item>
+        <item>bbr_standard</item>
+        <item>bbr2</item>
+        <item>bbr_variant</item>
+    </string-array>
     <string-array name="shadowtls_versions" translatable="false">
         <item>1</item>
         <item>2</item>
@@ -452,6 +463,17 @@
         <item>prefer_ipv4</item>
         <item>prefer_ipv6</item>
     </string-array>
+    <string-array name="sub_tls_version_entries" translatable="false">
+        <item>@string/sub_version_auto</item>
+        <item>@string/sub_tls_12</item>
+        <item>@string/sub_tls_13</item>
+    </string-array>
+
+    <string-array name="sub_http_version_entries" translatable="false">
+        <item>@string/sub_version_auto</item>
+        <item>@string/sub_http_11</item>
+    </string-array>
+
     <string-array name="ruleset_mirror_entries" translatable="false">
         <item>GitHub</item>
         <item>jsDelivr (Cloudflare)</item>
@@ -493,6 +515,7 @@
         <item>android</item>
         <item>random</item>
         <item>randomized</item>
+        <item>unsafe</item>
     </string-array>
     <string-array name="xray_log_level" translatable="false">
         <item>debug</item>
@@ -573,6 +596,7 @@
         <item>dtls</item>
         <item>ssh</item>
         <item>rdp</item>
+        <item>ntp</item>
     </string-array>
     <string-array name="route_rule_protocol_values" translatable="false">
         <item></item>
@@ -585,6 +609,7 @@
         <item>dtls</item>
         <item>ssh</item>
         <item>rdp</item>
+        <item>ntp</item>
     </string-array>
     <string-array name="route_rule_ip_version_entries">
         <item>@string/route_rule_any</item>

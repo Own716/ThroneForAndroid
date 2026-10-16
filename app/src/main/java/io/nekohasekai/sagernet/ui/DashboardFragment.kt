@@ -1,7 +1,11 @@
 package io.nekohasekai.sagernet.ui
 
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.MenuItem
@@ -156,6 +160,12 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
             showError(getString(R.string.dashboard_no_webview))
             return
         }
+        val chromium = chromiumVersion(webView)
+        if (!oldWebViewAccepted && chromium in 1 until MIN_CHROMIUM) {
+            unload()
+            showOldWebView(chromium)
+            return
+        }
         port = DataStore.coreBoxApiPort
         origin = "http://127.0.0.1:$port"
         activate = true
@@ -212,7 +222,8 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
     }
 
     private fun showMessage(
-        @DrawableRes icon: Int, @StringRes title: Int, text: CharSequence, @StringRes action: Int, onAction: () -> Unit,
+        @DrawableRes icon: Int, @StringRes title: Int, text: CharSequence, @StringRes action: Int,
+        @StringRes secondaryAction: Int = 0, onSecondary: (() -> Unit)? = null, onAction: () -> Unit,
     ) {
         val binding = binding ?: return
         shown = false
@@ -224,12 +235,51 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
         binding.dashboardMessageText.text = text
         binding.dashboardMessageAction.setText(action)
         binding.dashboardMessageAction.setOnClickListener { onAction() }
+        binding.dashboardMessageSecondary.isVisible = onSecondary != null
+        if (onSecondary != null) {
+            binding.dashboardMessageSecondary.setText(secondaryAction)
+            binding.dashboardMessageSecondary.setOnClickListener { onSecondary() }
+        }
         syncBack()
     }
 
     private fun showError(text: String) = showMessage(
         R.drawable.ic_baseline_warning_24, R.string.dashboard_error_title, text, R.string.dashboard_retry,
     ) { render(reload = true) }
+
+    /** #97: an engine older than the bundle's target shows a squashed or blank page, so it asks first. */
+    private fun showOldWebView(version: Int) = showMessage(
+        R.drawable.ic_baseline_warning_24, R.string.dashboard_old_webview_title,
+        getString(R.string.dashboard_old_webview, MIN_CHROMIUM, version), R.string.dashboard_update_webview,
+        R.string.dashboard_open_anyway, {
+            oldWebViewAccepted = true
+            render(reload = true)
+        },
+    ) { openWebViewStore() }
+
+    /** The store page of the package that provides the WebView (Chrome on some Android 7-9 devices). */
+    private fun openWebViewStore() {
+        val context = context ?: return
+        val provider = if (Build.VERSION.SDK_INT >= 26) {
+            WebView.getCurrentWebViewPackage()?.packageName
+        } else {
+            // Android 7 cannot name its provider; it is Chrome whenever Chrome is installed and enabled.
+            CHROME_PACKAGE.takeIf { isEnabledPackage(it) }
+        }
+        val pkg = provider ?: "com.google.android.webview"
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg")))
+        } catch (e: ActivityNotFoundException) {
+            context.launchCustomTab("https://play.google.com/store/apps/details?id=$pkg")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun isEnabledPackage(pkg: String) = try {
+        requireContext().packageManager.getApplicationInfo(pkg, 0).enabled
+    } catch (e: PackageManager.NameNotFoundException) {
+        false
+    }
 
     private fun showDashboard() {
         val binding = binding ?: return
@@ -346,6 +396,23 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
     }
 
     private companion object {
+        /**
+         * The bundle's build target (Vite's default, Chromium 111, which color-mix() also needs); its :has(), dvh and
+         * script features are older. dashboard_css.py lowers the media ranges (Chromium 104) at build time.
+         */
+        const val MIN_CHROMIUM = 111
+
+        const val CHROME_PACKAGE = "com.android.chrome"
+
+        /** "Open anyway" on an older WebView, for the rest of the process. */
+        var oldWebViewAccepted = false
+
+        /** The Chromium major version of the WebView's user agent, 0 when it names none. */
+        fun chromiumVersion(webView: WebView): Int {
+            val agent = webView.settings.userAgentString.orEmpty()
+            return Regex("""Chrome/(\d+)""").find(agent)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        }
+
         /**
          * dashboard-bootstrap.html as a check: the `throne` entry of the page's server list (src/api/config.ts) gets
          * this core's address and secret, other servers stay. Answers "ok" when nothing had to change, "seeded" after

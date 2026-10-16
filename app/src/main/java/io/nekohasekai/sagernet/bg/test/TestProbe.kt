@@ -10,6 +10,7 @@ import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.completeWith
 import io.nekohasekai.sagernet.ktx.readableMessage
 import io.nekohasekai.sagernet.outbound.config.GeneratedConfig
+import io.nekohasekai.sagernet.outbound.config.PortLease
 import io.nekohasekai.sagernet.outbound.types.Custom
 import io.throneproj.mobile.Mobile
 import io.throneproj.mobile.TestRequest
@@ -239,41 +240,47 @@ internal abstract class LatencySweep(protected val session: TestSession) {
         results: Channel<ProbeResult>,
         gate: Semaphore,
     ) {
-        val generated = try {
-            CoreConfigs.buildTest(ids)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            GeneratedConfig.failure(e.readableMessage)
-        }
-        if (!generated.ok) {
-            val error = generated.error ?: "config generation failed"
-            Logs.w("Failed to build test config for batch: $error")
-            ids.forEach { results.trySend(ProbeResult(it, error = error, measured = false)) }
-            return
-        }
-        for ((id, reason) in generated.skipped) {
-            results.trySend(if (isSkipReason(reason)) ProbeResult(id, error = reason, measured = false) else invalid(id, reason))
-        }
-        session.ensureSharedXrayAssets(generated.xrayConfig)
-        coroutineScope {
-            for (probe in TestProbe.plan(generated)) launch {
-                val failure = TestTags.holding(probe.reportedTags()) {
-                    gate.withPermit { runProbe(probe, batch, results) }
-                } ?: return@launch
-                val profileIds = probe.profileIds
-                if (profileIds.size > 1 && !session.cancelled) {
-                    Logs.w("Test probe of ${profileIds.size} profiles could not start, testing it in halves: $failure")
-                    val half = (profileIds.size + 1) / 2
-                    launch { runBuild(profileIds.subList(0, half), batch, results, gate) }
-                    launch { runBuild(profileIds.subList(half, profileIds.size), batch, results, gate) }
-                } else {
-                    for (id in profileIds) {
-                        val name = batch.firstOrNull { it.id == id }?.displayName().orEmpty()
-                        results.trySend(ProbeResult(id, error = session.startFailure(name, failure), measured = false))
+        // The probe boxes bind the bridge ports late; leased until they and the halves' builds are over.
+        val ports = PortLease()
+        try {
+            val generated = try {
+                CoreConfigs.buildTest(ids, ports)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                GeneratedConfig.failure(e.readableMessage)
+            }
+            if (!generated.ok) {
+                val error = generated.error ?: "config generation failed"
+                Logs.w("Failed to build test config for batch: $error")
+                ids.forEach { results.trySend(ProbeResult(it, error = error, measured = false)) }
+                return
+            }
+            for ((id, reason) in generated.skipped) {
+                results.trySend(if (isSkipReason(reason)) ProbeResult(id, error = reason, measured = false) else invalid(id, reason))
+            }
+            session.ensureSharedXrayAssets(generated.xrayConfig)
+            coroutineScope {
+                for (probe in TestProbe.plan(generated)) launch {
+                    val failure = TestTags.holding(probe.reportedTags()) {
+                        gate.withPermit { runProbe(probe, batch, results) }
+                    } ?: return@launch
+                    val profileIds = probe.profileIds
+                    if (profileIds.size > 1 && !session.cancelled) {
+                        Logs.w("Test probe of ${profileIds.size} profiles could not start, testing it in halves: $failure")
+                        val half = (profileIds.size + 1) / 2
+                        launch { runBuild(profileIds.subList(0, half), batch, results, gate) }
+                        launch { runBuild(profileIds.subList(half, profileIds.size), batch, results, gate) }
+                    } else {
+                        for (id in profileIds) {
+                            val name = batch.firstOrNull { it.id == id }?.displayName().orEmpty()
+                            results.trySend(ProbeResult(id, error = session.startFailure(name, failure), measured = false))
+                        }
                     }
                 }
             }
+        } finally {
+            ports.close()
         }
     }
 

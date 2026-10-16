@@ -28,4 +28,7 @@ class SSHSettingsActivity : BindingSettingsActivity<Ssh>() {
         multilineInput("private_key", "host_key", "host_key_algorithms")
     }
 
+    /** ssh::Validate files the missing-authentication warning under "auth"; edit_ssh.cpp anchors it on the password. */
+    override fun issueKey(field: String): String? = if (field == "auth") "password" else null
+
 }

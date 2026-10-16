@@ -43,7 +43,8 @@ import io.nekohasekai.sagernet.ktx.alert
 import io.nekohasekai.sagernet.ktx.isPreview
 import io.nekohasekai.sagernet.ktx.launchCustomTab
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
-import io.nekohasekai.sagernet.ui.profile.ProfileTextImport
+import io.nekohasekai.sagernet.database.SettingsMapper
+import io.nekohasekai.sagernet.outbound.`import`.ProfileImport
 import io.nekohasekai.sagernet.ui.route.RouteImports
 import io.nekohasekai.sagernet.ui.settings.DnsSettingsFragment
 import io.nekohasekai.sagernet.ui.settings.XrayGeoSettingsFragment
@@ -138,6 +139,7 @@ class MainActivity : ThemedActivity(),
 
         binding.fab.setOnClickListener { toggleService() }
         binding.stats.setOnClickListener { if (DataStore.serviceState.connected) binding.stats.testConnection() }
+        binding.stats.setOnLongClickListener { displayFragmentWithId(R.id.nav_live_graphs) }
 
         setContentView(binding.root)
         currentMainFragment =
@@ -296,11 +298,24 @@ class MainActivity : ThemedActivity(),
     /** A profile link opened from outside: confirmed, then imported into the current group. */
     suspend fun importProfile(uri: Uri) {
         val link = uri.toString()
-        val profile = try {
-            ProfileTextImport.parse(link).firstOrNull() ?: error(getString(R.string.no_proxies_found))
+        val result = try {
+            ProfileImport.parse(link, SettingsMapper.xrayVlessPreference(), SettingsMapper.buildContext())
         } catch (e: Exception) {
             onMainDispatcher {
                 alert(e.readableMessage).show()
+            }
+            return
+        }
+        for (message in result.messages) Logs.w(message)
+        val profile = result.outbounds.firstOrNull()
+        if (profile == null) {
+            val report = result.report()
+            onMainDispatcher {
+                if (report.hasProblems()) {
+                    SubscriptionReportDialog.show(this@MainActivity, getString(R.string.validation_import_title), report.text())
+                } else {
+                    alert(getString(R.string.no_proxies_found)).show()
+                }
             }
             return
         }
@@ -388,6 +403,7 @@ class MainActivity : ThemedActivity(),
             R.id.nav_traffic -> displayFragment(DashboardFragment())
             R.id.nav_tools -> displayFragment(ToolsFragment())
             R.id.nav_logcat -> displayFragment(LogcatFragment())
+            R.id.nav_live_graphs -> displayFragment(LiveGraphsFragment())
             R.id.nav_faq -> {
                 launchCustomTab("https://throneproj.github.io")
                 return false

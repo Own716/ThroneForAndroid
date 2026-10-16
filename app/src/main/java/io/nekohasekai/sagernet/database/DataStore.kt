@@ -235,6 +235,9 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var subSendHwid by SettingsRegistry.SUB_SEND_HWID
     var subCustomHwidParams by SettingsRegistry.SUB_CUSTOM_HWID_PARAMS
     var allowStoppingActiveProfile by SettingsRegistry.ALLOW_STOPPING_ACTIVE_PROFILE
+    var subTlsVersion by SettingsRegistry.SUB_TLS_VERSION
+    var subHttpVersion by SettingsRegistry.SUB_HTTP_VERSION
+    var subRespectServerInterval by SettingsRegistry.SUB_RESPECT_SERVER_INTERVAL
 
     // warp
     var enableWarp by SettingsRegistry.ENABLE_WARP

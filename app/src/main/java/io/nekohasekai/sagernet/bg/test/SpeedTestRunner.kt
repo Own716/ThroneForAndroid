@@ -10,6 +10,7 @@ import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.readableMessage
+import io.nekohasekai.sagernet.outbound.config.PortLease
 import io.throneproj.mobile.Instance
 import io.throneproj.mobile.Mobile
 import io.throneproj.mobile.SpeedTestHandler
@@ -43,17 +44,23 @@ internal class SpeedTestRunner(private val session: TestSession) {
             val ids = slice.map { it.id }.filter { it !in left }
             if (ids.isEmpty()) continue
             val names = slice.associate { it.id to it.displayName() }
-            val generated = CoreConfigs.buildTest(ids)
-            if (!generated.ok) {
-                val error = generated.error ?: "config generation failed"
-                Logs.w("Failed to build batch test config: $error")
-                ids.forEach { session.reportSpeedUnmeasured(it, error) }
-                continue
-            }
-            for ((id, reason) in generated.skipped) session.reportSpeedUnmeasured(id, reason)
-            session.ensureSharedXrayAssets(generated.xrayConfig)
-            for (probe in TestProbe.plan(generated)) {
-                runProbe(probe.request(), probe.profileIds, probe::profileOf, names, null)
+            // The probe boxes bind the bridge ports late; leased until they are over.
+            val ports = PortLease()
+            try {
+                val generated = CoreConfigs.buildTest(ids, ports)
+                if (!generated.ok) {
+                    val error = generated.error ?: "config generation failed"
+                    Logs.w("Failed to build batch test config: $error")
+                    ids.forEach { session.reportSpeedUnmeasured(it, error) }
+                    continue
+                }
+                for ((id, reason) in generated.skipped) session.reportSpeedUnmeasured(id, reason)
+                session.ensureSharedXrayAssets(generated.xrayConfig)
+                for (probe in TestProbe.plan(generated)) {
+                    runProbe(probe.request(), probe.profileIds, probe::profileOf, names, null)
+                }
+            } finally {
+                ports.close()
             }
         }
     }

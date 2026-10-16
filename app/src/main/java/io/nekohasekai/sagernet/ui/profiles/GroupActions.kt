@@ -179,7 +179,10 @@ internal object GroupActions {
         }
     }
 
-    /** Group::SortProfiles after storing the sub-criterion the method reads ([save]). */
+    /**
+     * sortCurrentGroup (mainwindow_view.cpp): stores the sub-criterion the method reads ([save]), then keeps the group
+     * sorted by the method from now on.
+     */
     fun sort(
         host: ConfigurationFragment,
         groupId: Long,
@@ -189,10 +192,14 @@ internal object GroupActions {
     ) {
         host.launchIo {
             if (save != null) GroupFields.update(groupId, save)?.let { GroupRepo.postUpdate(it) }
-            if (!GroupSort.sortProfiles(groupId, GroupSortAction(method, descending))) {
-                host.onUi { snackbar(R.string.profiles_sort_busy).show() }
-            }
+            GroupSort.setSort(groupId, GroupSortAction(method, descending))
+            GroupSort.resortLater(groupId)
         }
+    }
+
+    /** stopSortingCurrentGroup: the order as it is becomes the manual one. */
+    fun stopSorting(host: ConfigurationFragment, groupId: Long) {
+        host.launchIo { GroupSort.setSort(groupId, GroupSortAction()) }
     }
 
     /** The test result column's "Include: Out IP / Speed" (updateTestItemsToShow). */

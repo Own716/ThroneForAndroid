@@ -173,6 +173,12 @@
             app:key="i5"
             app:title="I5"
             app:useSimpleSummaryProvider="true" />
+        <Preference
+            app:icon="@drawable/ic_baseline_texture_24"
+            app:key="amneziaQuicSignature"
+            app:persistent="false"
+            app:summary="@string/amnezia_quic_signature_sum"
+            app:title="@string/amnezia_quic_signature" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_vpn_key_24"
             app:key="header_protection_key"

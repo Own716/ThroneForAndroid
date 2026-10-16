@@ -3,7 +3,11 @@ package io.nekohasekai.sagernet.ui.profile
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.outbound.types.TrustTunnel
+import io.nekohasekai.sagernet.outbound.types.TrustTunnelChecks
+import io.nekohasekai.sagernet.outbound.types.trustTunnelCongestionControls
+import io.nekohasekai.sagernet.ui.json.ProfileJson
 
 class TrustTunnelSettingsActivity : BindingSettingsActivity<TrustTunnel>() {
 
@@ -24,12 +28,44 @@ class TrustTunnelSettingsActivity : BindingSettingsActivity<TrustTunnel>() {
         TlsBlock.bind(pbm)
     }
 
+    override fun TrustTunnel.init() {
+        pbm.writeToCacheAll(this)
+        DataStore.profileCacheStore.putString(KEY_RAW_JSON, ProfileJson.text(this))
+        // edit_trusttunnel.cpp: older builds saved translated item text ("CUBIC"); unknown values fall back to bbr, as in
+        // sing-trusttunnel, and the menu stores the lower-case name
+        val congestion = congestion_control.trim().replace(' ', '_')
+        DataStore.profileCacheStore.putString(
+            "congestion_control",
+            trustTunnelCongestionControls.firstOrNull { it.isNotEmpty() && it.equals(congestion, ignoreCase = true) } ?: "bbr",
+        )
+    }
+
+    /** The credentials issue goes to the missing field, a TLS conflict to the option that causes it (edit_trusttunnel.cpp). */
+    override fun issueKey(field: String): String? = when (field) {
+        "username" -> if (DataStore.profileCacheStore.getString("username").isNullOrBlank()) null else "password"
+        "tls" -> tlsConflictKey()
+        else -> null
+    }
+
+    private fun tlsConflictKey(): String {
+        val outbound = validationOutbound()
+        val tls = outbound.tls
+        val clientRandom = outbound.client_random.isNotEmpty() && TrustTunnelChecks.trustTunnelTlsConflict(
+            true, false, outbound.quic, tls.ech.enabled, tls.reality.enabled, tls.disable_sni,
+            if (tls.utls.enabled) tls.utls.fingerPrint else "",
+        ).isNotEmpty()
+        return if (clientRandom) "client_random" else "custom_sni"
+    }
+
     override fun PreferenceFragmentCompat.onPreferencesCreated() {
         portInput("serverPort")
         passwordSummary("password")
         TlsBlock.setup(this, mustTls = true)
-        // QUIC dials through qtls, which takes no uTLS config (dialog_edit_profile.cpp:759-763)
-        onSwitch("quic") { findPreference<Preference>("tls.utls.fingerPrint")?.isEnabled = !it }
+        // QUIC dials through qtls, which takes no uTLS config (dialog_edit_profile.cpp:759-763); it is TLS 1.3 only,
+        // where Go does not let the cipher suites be chosen
+        onSwitch("quic") { quic ->
+            for (key in arrayOf("tls.utls.fingerPrint", "tls.cipher_suites")) findPreference<Preference>(key)?.isEnabled = !quic
+        }
     }
 
 }

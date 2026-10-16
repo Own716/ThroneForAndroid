@@ -5,10 +5,13 @@ import io.nekohasekai.sagernet.aidl.TrafficData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import io.nekohasekai.sagernet.appwidget.Widgets
 import io.nekohasekai.sagernet.bg.BaseService
+import io.nekohasekai.sagernet.bg.LiveStatsRecorder
 import io.nekohasekai.sagernet.bg.SagerConnection
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.GroupSort
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.database.SortInput
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import kotlinx.coroutines.*
@@ -63,6 +66,8 @@ class TrafficLooper(val data: BaseService.Data, private val sc: CoroutineScope) 
         ProfileManager.removeCreditListener(credits)
         job?.cancelAndJoin()
         job = null
+        // stopRunner keeps the notification only for a restart in place (a switch or reload).
+        LiveStatsRecorder.stopped(restart = data.notification != null)
         if (DataStore.disableTrafficStats) return
         stateMutex.withLock {
             // Polling pauses with the screen off; the core's counters outlive the box, so collect the rest now.
@@ -77,6 +82,7 @@ class TrafficLooper(val data: BaseService.Data, private val sc: CoroutineScope) 
                 persist(item)
                 traffic.add(TrafficData(id = item.id, rx = item.rx, tx = item.tx))
             }
+            if (traffic.isNotEmpty()) GroupSort.repositionLater(traffic.map { it.id }, SortInput.TRAFFIC)
             data.proxy?.trafficMap?.values?.forEach { entities ->
                 for (entity in entities) profiles[entity.id]?.let {
                     entity.rx = it.rx
@@ -103,6 +109,7 @@ class TrafficLooper(val data: BaseService.Data, private val sc: CoroutineScope) 
 
     fun start() {
         ProfileManager.addCreditListener(credits)
+        LiveStatsRecorder.started(data.proxy?.profile?.displayName().orEmpty())
         job = sc.launch { loop() }
     }
 
@@ -213,6 +220,7 @@ class TrafficLooper(val data: BaseService.Data, private val sc: CoroutineScope) 
                     mainRxRate += stat.rxRate
                 }
                 val direct = stats[CoreConfig.TAG_DIRECT]
+                LiveStatsRecorder.record(mainRxRate, mainTxRate, direct?.rxRate ?: 0L, direct?.txRate ?: 0L, proxy.boxOrNull)
                 val trafficUpdates = arrayListOf<TrafficData>()
                 if (profileTrafficStatistics) {
                     for (item in profiles.values) {

@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.import.ClashProxy
 import io.nekohasekai.sagernet.outbound.BuildResult
@@ -11,11 +12,47 @@ import io.nekohasekai.sagernet.outbound.vPacketEncoding
 import io.nekohasekai.sagernet.outbound.common.Multiplex
 import io.nekohasekai.sagernet.outbound.common.Tls
 import io.nekohasekai.sagernet.outbound.common.Transport
+import io.nekohasekai.sagernet.outbound.common.importTlsCipherSuites
+import io.nekohasekai.sagernet.outbound.common.importTlsFingerprint
+import io.nekohasekai.sagernet.outbound.common.singBoxTransportType
+import io.nekohasekai.sagernet.outbound.common.splitCipherSuites
+import io.nekohasekai.sagernet.outbound.common.tlsForTransport
 import io.nekohasekai.sagernet.outbound.json.JsonInput
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.link.Base64Strict
+import io.nekohasekai.sagernet.outbound.link.Hosts
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
+
+/** vmessSecurity (vmess.h). */
+val vmessSecurity = listOf("auto", "none", "zero", "aes-128-gcm", "chacha20-poly1305", "aes-128-cfb")
+
+/** The core matches security names exactly. */
+private fun vmessImportSecurity(raw: String): String {
+    val value = raw.trim().lowercase()
+    if (value.isEmpty()) return "auto"
+    if (value in vmessSecurity) return value
+    ParseDiag.warn("security", vtr(R.string.validation_vmess_security_unknown), raw.trim())
+    return "auto"
+}
+
+/** Throne's own links write none for the empty encoding. */
+private fun vmessImportPacketEncoding(raw: String): String {
+    val value = raw.trim()
+    if (value == "none") return ""
+    if (value in vPacketEncoding) return value
+    ParseDiag.warn("packet_encoding", vtr(R.string.validation_vmess_packet_encoding_unknown), value)
+    return ""
+}
+
+/** The entry's `tls` for TLS::ParseFromClash's readPin, read without a report: the TLS parse reports a malformed value itself. */
+internal fun clashTlsOn(proxy: ClashProxy): Boolean = ParseDiag.scoped(ArrayList()) { proxy.bool("tls") }
 
 /** vmess (include/configs/outbounds/vmess.h, src/configs/outbounds/vmess.cpp). */
 class Vmess : Outbound("vmess") {
@@ -36,9 +73,13 @@ class Vmess : Outbound("vmess") {
     override fun getMux(): Multiplex = multiplex
     override fun getTransport(): Transport = transport
 
-    /** vmess.cpp:10-97: the V2RayN base64 JSON form first, then the URL form. */
+    /**
+     * vmess::ParseFromLink (vmess.cpp): the V2RayN base64 JSON form first (some generators append #name or use the
+     * URL-safe alphabet), then the URL form.
+     */
     override fun parseFromLink(link: String): Boolean {
-        val linkN = Base64Strict.decodeToString(QtStrings.substrAfter(link, "vmess://"))
+        val payload = QtStrings.substrBefore(QtStrings.substrAfter(link, "vmess://"), "#")
+        val linkN = Base64Strict.decodeToString(payload).ifEmpty { Base64Strict.decodeToString(payload, urlSafe = true) }
         if (linkN.isNotEmpty()) {
             val objN = JsonInput.parseObject(linkN)
             if (objN.isNotEmpty()) return parseV2RayN(objN)
@@ -50,28 +91,26 @@ class Vmess : Outbound("vmess") {
         super.parseFromLink(url)
         uuid = url.userName
         if (serverPort == 0) serverPort = 443
-        security = q.valueOr("encryption", "auto")
+        security = vmessImportSecurity(q.value("encryption"))
         transport.parseFromLink(url)
         tls.parseFromLink(url)
-        if (tls.server_name.isNotEmpty()) tls.enabled = true
         multiplex.parseFromLink(url)
         if (q.has("alterId")) alter_id = QtStrings.toInt(q.value("alterId"))
         if (q.has("globalPadding")) global_padding = q.value("globalPadding") == "true"
         if (q.has("authenticatedLength")) authenticated_length = q.value("authenticatedLength") == "true"
-        if (q.has("packetEncoding")) packet_encoding = q.value("packetEncoding")
-        if (packet_encoding !in vPacketEncoding) packet_encoding = ""
+        if (q.has("packetEncoding")) packet_encoding = vmessImportPacketEncoding(q.value("packetEncoding"))
         return !(uuid.isEmpty() || server.isEmpty())
     }
 
-    /** vmess.cpp:17-66: the V2RayN object; no base parse, so no dial fields and no ACE conversion of `add`. */
+    /** The V2RayN object of vmess::ParseFromLink: no base parse, so no dial fields. */
     private fun parseV2RayN(objN: JsonObject): Boolean {
         uuid = objN.string("id")
-        server = objN.string("add")
+        server = Hosts.toAceHost(objN.string("add"))
         serverPort = objN.variantInt("port")
         name = objN.string("ps")
         alter_id = objN.variantInt("aid")
 
-        var net = objN.string("net")
+        var net = singBoxTransportType(objN.string("net"))
         if (net == "raw") net = "tcp"
         val rawHttp = (net.isEmpty() || net == "tcp") && objN.string("type") == "http"
         if (net == "h2" || rawHttp) net = "http"
@@ -85,19 +124,24 @@ class Vmess : Outbound("vmess") {
         transport.rawHttpHeader = rawHttp
 
         val scy = objN.string("scy")
-        if (scy.isNotEmpty()) security = scy
+        if (scy.isNotEmpty()) security = vmessImportSecurity(scy)
 
-        if (objN.string("tls") == "tls") {
+        val tlsStr = objN.string("tls").trim()
+        if (tlsStr.isNotEmpty() && !tlsStr.equals("tls", ignoreCase = true) && !tlsStr.equals("none", ignoreCase = true)) {
+            ParseDiag.error("tls", vtr(R.string.validation_vmess_tls_mode), tlsStr)
+        }
+        if (tlsStr.equals("tls", ignoreCase = true)) {
             tls.enabled = true
             tls.server_name = objN.string("sni")
-            tls.alpn = QtStrings.splitSkipEmpty(objN.string("alpn"), ",")
+            tls.alpn = QtStrings.splitList(objN.string("alpn"))
             val insecure = if (objN.contains("insecure")) objN.variantString("insecure") else objN.variantString("allowInsecure")
             tls.insecure = insecure == "1" || insecure == "true"
             val fingerprint = objN.string("fp")
-            if (fingerprint.isNotEmpty()) {
-                tls.utls.enabled = true
-                tls.utls.fingerPrint = fingerprint
+            if (fingerprint.isNotBlank()) {
+                tls.utls.fingerPrint = importTlsFingerprint(fingerprint, "fp")
+                tls.utls.enabled = tls.utls.fingerPrint.isNotEmpty()
             }
+            tls.cipher_suites = importTlsCipherSuites(splitCipherSuites(objN.string("cs")), "cs")
         }
 
         // throneExtra holds what the V2RayN schema cannot; the dummy authority only satisfies the URL parser
@@ -109,30 +153,29 @@ class Vmess : Outbound("vmess") {
             val extraQuery = LinkParser.parseQuery(extra)
             if (extraQuery.has("globalPadding")) global_padding = extraQuery.value("globalPadding") == "true"
             if (extraQuery.has("authenticatedLength")) authenticated_length = extraQuery.value("authenticatedLength") == "true"
-            if (extraQuery.has("packetEncoding")) packet_encoding = extraQuery.value("packetEncoding")
-            if (packet_encoding !in vPacketEncoding) packet_encoding = ""
+            if (extraQuery.has("packetEncoding")) packet_encoding = vmessImportPacketEncoding(extraQuery.value("packetEncoding"))
         }
 
         return !(uuid.isEmpty() || server.isEmpty())
     }
 
-    /** vmess.cpp:117-130: `packet-encoding` is copied even when absent, like the desktop. */
+    /** vmess::ParseFromClash (vmess.cpp): `packet-encoding` is copied even when absent, like the desktop. */
     override fun parseFromClash(node: JsonObject): Boolean {
         val proxy = ClashProxy(node)
         if (proxy.type != "vmess") return false
         baseParseFromClash(proxy)
         uuid = proxy.string("uuid")
         val cipher = proxy.string("cipher")
-        if (cipher.isNotEmpty()) security = cipher
+        if (cipher.isNotEmpty()) security = vmessImportSecurity(cipher)
         alter_id = proxy.int("alterId")
-        packet_encoding = proxy.string("packet-encoding")
-        tls.parseFromClash(proxy)
+        packet_encoding = vmessImportPacketEncoding(proxy.string("packet-encoding"))
+        tls.parseFromClash(node, clashTlsOn(proxy))
         transport.parseFromClash(proxy)
         multiplex.parseFromClash(proxy)
         return true
     }
 
-    /** vmess.cpp:99-115. */
+    /** vmess::ParseFromJson (vmess.cpp): also the DB loader, so only an import normalizes security and packet encoding. */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty() || obj.string("type") != "vmess") return false
         super.parseFromJson(obj)
@@ -147,10 +190,14 @@ class Vmess : Outbound("vmess") {
         if (obj.contains("tls")) tls.parseFromJson(obj.obj("tls"))
         if (obj.contains("transport")) transport.parseFromJson(obj.obj("transport"))
         if (obj.contains("multiplex")) multiplex.parseFromJson(obj.obj("multiplex"))
+        if (ParseDiag.active()) {
+            security = vmessImportSecurity(security)
+            packet_encoding = vmessImportPacketEncoding(packet_encoding)
+        }
         return true
     }
 
-    /** vmess.cpp:132-171: always the V2RayN form; what that schema has no room for travels in `throneExtra`. */
+    /** vmess::ExportToLink (vmess.cpp): always the V2RayN form; what that schema has no room for travels in `throneExtra`. */
     override fun exportToLink(): String {
         val rawHttp = transport.type == "http" && !tls.enabled
         val network = when {
@@ -183,12 +230,13 @@ class Vmess : Outbound("vmess") {
         obj["sni"] = tls.server_name
         obj["alpn"] = tls.alpn.joinToString(",")
         obj["fp"] = tls.utls.fingerPrint
+        if (tls.cipher_suites.isNotEmpty()) obj["cs"] = tls.cipher_suites.joinToString(":")
         if (tls.insecure) obj["allowInsecure"] = "1"
         if (extra.isNotEmpty()) obj["throneExtra"] = LinkBuilder.formatQuery(extra)
         return "vmess://" + Base64Strict.encode(obj.toCompact())
     }
 
-    /** vmess.cpp:173-188: `packet_encoding` is always written, `security` only when it is not the default. */
+    /** vmess::ExportToJson (vmess.cpp): `packet_encoding` is always written, `security` only when it is not the default. */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["type"] = "vmess"
@@ -208,7 +256,7 @@ class Vmess : Outbound("vmess") {
         return obj
     }
 
-    /** vmess.cpp:190-205. */
+    /** vmess::Build (vmess.cpp): the quic transport drops uTLS ([tlsForTransport]). */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "vmess"
@@ -220,7 +268,7 @@ class Vmess : Outbound("vmess") {
         if (authenticated_length) obj["authenticated_length"] = authenticated_length
         obj["packet_encoding"] = packet_encoding
         val tlsObj = tls.build(ctx)
-        if (tlsObj.isNotEmpty()) obj["tls"] = tlsObj
+        if (tlsObj.isNotEmpty()) obj["tls"] = tlsForTransport(tlsObj, transport.type)
         val transportObj = transport.build(ctx)
         if (transportObj.isNotEmpty()) obj["transport"] = transportObj
         val muxObj = multiplex.build(ctx)
@@ -228,10 +276,18 @@ class Vmess : Outbound("vmess") {
         return BuildResult(obj)
     }
 
-    /** vmess.cpp:207-210. */
+    /** vmess::DisplayType (vmess.cpp). */
     override fun displayType(): String = "VMess"
 
-    /** vmess.cpp:212-221: encrypted, but VMess without TLS still counts as insecure; a no-op cipher stays Raw. */
+    /** vmess::Validate (vmess.cpp). */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Error, "uuid", Validation.required(uuid))
+        issues.addIssue(Severity.Error, "security", Validation.oneOf(security, vmessSecurity), security)
+        issues.addIssue(Severity.Error, "packet_encoding", Validation.oneOf(packet_encoding, vPacketEncoding), packet_encoding)
+    }
+
+    /** vmess::GetSecurity (vmess.cpp): encrypted, but VMess without TLS still counts as insecure; a no-op cipher stays Raw. */
     override fun security(): SecurityInfo {
         val info = super.security()
         if (info.level == SecurityLevel.None && security != "none" && security != "zero") {

@@ -32,10 +32,13 @@
             app:icon="@drawable/ic_baseline_layers_24"
             app:key="quic"
             app:title="@string/use_quic" />
-        <EditTextPreference
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
             app:icon="@drawable/ic_baseline_compare_arrows_24"
             app:key="congestion_control"
             app:title="@string/congestion_control"
+            app:entries="@array/trusttunnel_congestion_control"
+            app:entryValues="@array/trusttunnel_congestion_control"
+            app:defaultValue="bbr"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             app:icon="@drawable/ic_action_copyright"
@@ -131,6 +134,12 @@
             app:entries="@array/utls_fingerprint_preset_entries"
             app:entryValues="@array/utls_fingerprint_entry"
             app:defaultValue=""
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_lock_24"
+            app:key="tls.cipher_suites"
+            app:title="@string/cipher_suites"
+            app:dialogMessage="@string/cipher_suites_hint"
             app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 

@@ -2,6 +2,7 @@ package io.nekohasekai.sagernet.group
 
 import androidx.core.net.toUri
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.SubHttpVersion
 import io.nekohasekai.sagernet.database.SubUserInfo
 import io.nekohasekai.sagernet.ktx.HttpGetOptions
 import io.nekohasekai.sagernet.ktx.Logs
@@ -22,21 +23,47 @@ object SubscriptionFetch {
     /** [error] is null on success; [subInfo] is what the headers and the body's head said ([SubscriptionMetadata]). */
     class Result(@JvmField val body: String, @JvmField val subInfo: SubUserInfo, @JvmField val error: String?)
 
-    fun fetch(url: String, name: String, identity: RequestIdentity): Result {
+    fun fetch(url: String, rawName: String, identity: RequestIdentity): Result {
+        // ImportUrl names the request by its URL, whose userinfo is the Basic auth credential.
+        val name = withoutUserInfo(rawName)
         Logs.i(">>>>>>>> " + app.getString(R.string.subs_requesting, name))
         val result = if (url.startsWith("content://", ignoreCase = true)) readContent(url) else request(url, identity)
         if (result.error != null) {
-            Logs.w("<<<<<<<< " + app.getString(R.string.subs_request_error, name, result.error + "\n" + result.body))
-            return Result("", SubUserInfo(), result.error)
+            val reason = withoutUrls(result.error, url)
+            Logs.w("<<<<<<<< " + app.getString(R.string.subs_request_error, name, reason + "\n" + withoutUrls(result.body, url)))
+            return Result("", SubUserInfo(), reason)
         }
         Logs.i("<<<<<<<< " + app.getString(R.string.subs_request_finished, name))
+        if (result.subInfo.serverInterval > 0) {
+            Logs.i(app.getString(R.string.subs_server_interval, result.subInfo.serverInterval))
+        }
         return result
+    }
+
+    private val URL = Regex("""[A-Za-z][A-Za-z0-9+.\-]*://[^\s"'<>]+""")
+
+    private val USER_INFO = Regex("""([A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s]*@""")
+
+    private fun withoutUserInfo(text: String): String = USER_INFO.replace(text, "$1")
+
+    /** withoutUrls (GroupUpdater.cpp): an HTTP error text can embed the request or redirect URL, and with it the subscription token. */
+    private fun withoutUrls(text: String, url: String): String {
+        fun hostOf(u: String): String = runCatching { u.toUri().host }.getOrNull()?.takeIf { it.isNotEmpty() } ?: "\u2026"
+        var redacted = text
+        if (url.isNotEmpty()) redacted = redacted.replace(url, hostOf(url))
+        return URL.replace(redacted) { hostOf(it.value) }
     }
 
     private fun request(url: String, identity: RequestIdentity): Result {
         val response = httpGet(
             url,
-            HttpGetOptions(userAgent = identity.userAgent, headers = identity.headers(), maxBytes = MAX_BYTES),
+            HttpGetOptions(
+                userAgent = identity.userAgent,
+                headers = identity.headers(),
+                maxBytes = MAX_BYTES,
+                tlsVersion = identity.tlsVersion,
+                http2 = identity.httpVersion != SubHttpVersion.HTTP11,
+            ),
         )
         if (!response.ok) {
             val body = String(response.data, 0, minOf(response.data.size, MAX_LOGGED_BODY), Charsets.UTF_8)

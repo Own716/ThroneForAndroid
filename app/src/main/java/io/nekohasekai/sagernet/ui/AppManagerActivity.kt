@@ -37,6 +37,7 @@ import io.nekohasekai.sagernet.ktx.confirmAction
 import io.nekohasekai.sagernet.ktx.crossFadeFrom
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
+import io.nekohasekai.sagernet.route.RouteRule
 import io.nekohasekai.sagernet.utils.PackageCache
 import io.nekohasekai.sagernet.widget.applyListInsets
 import kotlinx.coroutines.Dispatchers
@@ -353,28 +354,23 @@ class AppManagerActivity : ThemedActivity() {
             }
 
             R.id.action_import_clipboard -> {
-                val proxiedAppString =
-                    SagerNet.clipboard.primaryClip?.getItemAt(0)?.text?.toString()
-                if (!proxiedAppString.isNullOrEmpty()) {
-                    val i = proxiedAppString.indexOf('\n')
-                    try {
-                        val (enabled, apps) = if (i < 0) {
-                            proxiedAppString to ""
-                        } else proxiedAppString.substring(
-                            0, i
-                        ) to proxiedAppString.substring(i + 1)
-                        binding.bypassGroup.check(if (enabled.toBoolean()) R.id.appProxyModeBypass else R.id.appProxyModeOn)
-                        DataStore.individual = apps
-                        Snackbar.make(
-                            binding.list, R.string.action_import_msg, Snackbar.LENGTH_LONG
-                        ).show()
-                        selectionLoaded = false
-                        loadApps()
-                        return true
-                    } catch (_: IllegalArgumentException) {
-                    }
+                // This screen's export leads with the bypass flag; a plain package list (the route rule picker's
+                // export, whose "unknown" entry is no package) keeps the current mode.
+                val lines = SagerNet.getClipboardText().lines().map { it.trim() }.filter { it.isNotEmpty() }
+                val bypass = lines.firstOrNull()?.takeIf { it == "true" || it == "false" }?.toBoolean()
+                val packages = (if (bypass != null) lines.drop(1) else lines).filter { it != RouteRule.UNKNOWN_PACKAGE }
+                if (bypass == null && packages.isEmpty()) {
+                    Snackbar.make(binding.list, R.string.action_import_err, Snackbar.LENGTH_LONG).show()
+                    return true
                 }
-                Snackbar.make(binding.list, R.string.action_import_err, Snackbar.LENGTH_LONG).show()
+                if (bypass != null) {
+                    binding.bypassGroup.check(if (bypass) R.id.appProxyModeBypass else R.id.appProxyModeOn)
+                }
+                DataStore.individual = packages.distinct().joinToString("\n")
+                Snackbar.make(binding.list, R.string.action_import_msg, Snackbar.LENGTH_LONG).show()
+                selectionLoaded = false
+                loadApps()
+                return true
             }
         }
         return super.onOptionsItemSelected(item)

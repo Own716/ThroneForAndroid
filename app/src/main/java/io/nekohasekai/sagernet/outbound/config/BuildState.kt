@@ -93,8 +93,8 @@ internal class Prerequisites {
     val ruleSets = LinkedHashMap<String, String>()
 }
 
-/** The per-build state of generate.cpp:180-207 that the sections share. */
-internal class BuildState(val forTest: Boolean) {
+/** The per-build state of generate.cpp:180-207 that the sections share; [ports] takes every bridge port reserved. */
+internal class BuildState(val forTest: Boolean, val ports: PortLease) {
     var singToXrayTransitioned = false
     var xrayToSingTransitioned = false
     var proxyUsesXray = false

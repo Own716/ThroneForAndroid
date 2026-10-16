@@ -275,6 +275,12 @@
             app:title="@string/xray_ech_config_list"
             app:dialogMessage="@string/xray_ech_config_list_hint"
             app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_lock_24"
+            app:key="streamSetting.tls.cipherSuites"
+            app:title="@string/cipher_suites"
+            app:dialogMessage="@string/xray_cipher_suites_hint"
+            app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 
     <PreferenceCategory

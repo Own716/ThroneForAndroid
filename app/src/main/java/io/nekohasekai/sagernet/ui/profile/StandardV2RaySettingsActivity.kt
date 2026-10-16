@@ -7,6 +7,8 @@ import io.nekohasekai.sagernet.outbound.Outbound
 import io.nekohasekai.sagernet.outbound.types.Trojan
 import io.nekohasekai.sagernet.outbound.types.Vless
 import io.nekohasekai.sagernet.outbound.types.Vmess
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.validation.Validation
 
 /**
  * One screen for the three sing-box V2Ray-family types (vmess, vless, trojan): the same transport, TLS and
@@ -53,6 +55,11 @@ abstract class StandardV2RaySettingsActivity<T : Outbound> : BindingSettingsActi
         MuxBlock.setup(this)
         // UI only, as on the desktop (dialog_edit_profile.cpp:397-406): the build still emits the mux state
         if (isVless) onMenu("flow") { findPreference<PreferenceCategory>("muxCategory")?.isEnabled = it != "xtls-rprx-vision" }
+    }
+
+    // edit_vmess.cpp: the core treats a negative alter id as 0, but text beyond an Int would silently become 0.
+    override fun ValidationForm.bindValidation() {
+        if (isVmess) bind("alter_id", Validation.Rules.int(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()))
     }
 
 }

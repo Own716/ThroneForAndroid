@@ -42,6 +42,11 @@ class EditConfigPreference : Preference {
     var requireObject = true
     var relaxations: JsonRelaxations? = null
 
+    // A provider rather than a getSummary() override, so ValidationForm can wrap it with the row's problems.
+    init {
+        summaryProvider = Preference.SummaryProvider<EditConfigPreference> { it.lineSummary() }
+    }
+
     private fun readAttributes(context: Context, attrs: AttributeSet?, defStyleAttr: Int, defStyleRes: Int) {
         val array = context.obtainStyledAttributes(attrs, R.styleable.EditConfigPreference, defStyleAttr, defStyleRes)
         try {
@@ -73,7 +78,7 @@ class EditConfigPreference : Preference {
         )
     }
 
-    override fun getSummary(): CharSequence {
+    private fun lineSummary(): CharSequence {
         val config =
             (if (useConfigStore) DataStore.configurationStore.getString(configKey) else DataStore.profileCacheStore.getString(configKey))
                 ?: ""

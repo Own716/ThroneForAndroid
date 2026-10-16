@@ -13,6 +13,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.aidl.ISagerNetService
 import io.nekohasekai.sagernet.aidl.ISagerNetServiceCallback
+import io.nekohasekai.sagernet.aidl.LiveStatsBatch
 import io.nekohasekai.sagernet.appwidget.Widgets
 import io.nekohasekai.sagernet.bg.autoselector.AutoSelectorRuntime
 import io.nekohasekai.sagernet.bg.proto.DeferredRuleSets
@@ -226,6 +227,8 @@ class BaseService {
         override fun autoSelectorRecheck() = AutoSelectorRuntime.recheck()
 
         override fun autoSelectorSelect(memberProfileId: Long) = AutoSelectorRuntime.select(memberProfileId)
+
+        override fun liveStats(session: Long, afterSerial: Long): LiveStatsBatch = LiveStatsRecorder.batch(session, afterSerial)
 
         fun stateChanged(s: State, msg: String?) = launch {
             val profileName = profileName

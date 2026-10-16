@@ -35,8 +35,15 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object SubscriptionClient {
 
-    /** One ISubscriptionCallback event: a change report (popup = show the change window) or an error. */
-    data class Report(val gid: Long, val title: String, val text: String, val popup: Boolean, val error: Boolean)
+    /** One ISubscriptionCallback event: a change report (popup = show the change window), an error or a reload hint. */
+    data class Report(
+        val gid: Long,
+        val title: String,
+        val text: String,
+        val popup: Boolean,
+        val error: Boolean,
+        val reload: Boolean = false,
+    )
 
     /** The registration outlives the last collector by this much (configuration changes). */
     private const val STOP_DELAY_MS = 5_000L
@@ -102,12 +109,15 @@ object SubscriptionClient {
     /** ImportUrl: one fetch with the global identity into group [gid] (the current group when not positive). */
     fun importUrl(url: String, gid: Long) = launchCall(gid) { it.importUrl(url, gid) }
 
+    /** What [importText] stored, and whether the import box (a popup report) already said so. */
+    class TextImport(val count: Int, val reported: Boolean)
+
     /**
      * ImportText: the profiles of [text] appended to group [gid] (the current group when not positive), through a
-     * file under cacheDir/import (binder transactions are capped); returns the count once imported.
+     * file under cacheDir/import (binder transactions are capped); returns the outcome once imported.
      */
-    suspend fun importText(text: String, gid: Long = -1L): Int = withContext(Dispatchers.IO) {
-        if (text.isBlank()) return@withContext 0
+    suspend fun importText(text: String, gid: Long = -1L): TextImport = withContext(Dispatchers.IO) {
+        if (text.isBlank()) return@withContext TextImport(0, false)
         val target = if (gid > 0) gid else GroupRepo.currentId()
         val dir = File(app.cacheDir, SubscriptionQueue.IMPORT_DIR)
         val file = File(dir, UUID.randomUUID().toString() + ".txt")
@@ -116,12 +126,13 @@ object SubscriptionClient {
             dir.mkdirs()
             file.writeText(text)
             CoreServiceClient.call { it.importFile(file.absolutePath, target) }
-            val count = countFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: 0
+            val lines = countFile.takeIf { it.exists() }?.readLines().orEmpty()
+            val count = lines.firstOrNull()?.trim()?.toIntOrNull() ?: 0
             if (count > 0) GroupRepo.postReload(target)
-            count
+            TextImport(count, lines.getOrNull(1)?.trim() == SubscriptionQueue.IMPORT_REPORTED)
         } catch (e: Exception) {
             failed(target, e)
-            0
+            TextImport(0, false)
         } finally {
             file.delete()
             countFile.delete()
@@ -194,6 +205,11 @@ object SubscriptionClient {
             override fun onError(gid: Long, message: String?) {
                 if (!active.get()) return
                 mutableReports.tryEmit(Report(gid, "", message.orEmpty(), popup = false, error = true))
+            }
+
+            override fun onReloadNeeded(gid: Long) {
+                if (!active.get()) return
+                mutableReports.tryEmit(Report(gid, "", "", popup = false, error = false, reload = true))
             }
         }
         val service = AtomicReference<ICoreService?>()

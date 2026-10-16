@@ -41,7 +41,7 @@
             app:icon="@drawable/ic_baseline_texture_24"
             app:key="extra_headers"
             app:title="@string/extra_headers"
-            app:dialogMessage="@string/headers_hint"
+            app:dialogMessage="@string/validation_naive_extra_headers_format"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_warning_24"

@@ -10,6 +10,8 @@ import io.nekohasekai.sagernet.aidl.TrafficData
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupRepo
+import io.nekohasekai.sagernet.database.GroupSort
+import io.nekohasekai.sagernet.database.GroupSortAction
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
@@ -380,7 +382,11 @@ internal class ProfileListAdapter(private val fragment: ProfileListFragment) :
         if (moved) {
             val order = ids.toList()
             memberIds = order + memberIds.filter { it in hidden }
-            runOnDefaultDispatcher { ProfileManager.setOrder(groupId, order) }
+            runOnDefaultDispatcher {
+                // A hand-placed row is a manual order, which a kept sort would undo (mainwindow_setup.cpp).
+                GroupSort.setSort(groupId, GroupSortAction())
+                ProfileManager.setOrder(groupId, order)
+            }
             if (multiColumn) notifyDataSetChanged()
         }
         host?.selection?.onDragFinished(moved)

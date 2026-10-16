@@ -22,12 +22,14 @@ import kotlinx.coroutines.launch
         ProxyGroup::class, ProxyEntity::class, RouteProfileEntity::class, RouteRuleEntity::class,
         SettingEntry::class, MarkerEntity::class,
     ],
-    version = 15,
+    version = 16,
     autoMigrations = [
         AutoMigration(from = 8, to = 9),
         AutoMigration(from = 12, to = 13),
         AutoMigration(from = 13, to = 14),
         AutoMigration(from = 14, to = 15),
+        // groups.sort_method / sort_descending (6906912f), route_rules.tls_fragment* / tls_record_fragment (a6d042c2)
+        AutoMigration(from = 15, to = 16),
     ]
 )
 @TypeConverters(value = [SubscriptionOptions.Converter::class, SubUserInfo.Converter::class])

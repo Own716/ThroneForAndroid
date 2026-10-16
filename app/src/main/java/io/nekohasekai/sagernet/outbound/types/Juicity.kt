@@ -8,6 +8,10 @@ import io.nekohasekai.sagernet.outbound.common.Tls
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.link.LinkBuilder
 import io.nekohasekai.sagernet.outbound.link.LinkParser
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.addIssue
 
 /** juicity (include/configs/outbounds/juicity.h, src/configs/outbounds/juicity.cpp). */
 class Juicity : Outbound("juicity") {
@@ -24,13 +28,20 @@ class Juicity : Outbound("juicity") {
     override fun mustTls(): Boolean = true
     override fun getTls(): Tls = tls
 
+    /** juicity::Validate (juicity.cpp). */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Error, "uuid", Validation.uuid(uuid))
+    }
+
     /** juicity.cpp:9-25. */
     override fun parseFromLink(link: String): Boolean {
         val url = LinkParser.parse(link)
         if (!url.isValid) return false
         super.parseFromLink(url)
-        uuid = url.userName
-        password = url.password
+        val (linkUuid, linkPassword) = url.userInfoPair()
+        uuid = linkUuid
+        password = linkPassword
         tls.parseFromLink(url)
         tls.enabled = true
         if (serverPort == 0) serverPort = 443

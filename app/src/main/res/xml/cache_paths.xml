@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- log exports (LogExport) and backup shares only, not the whole cache -->
+    <!-- log exports (LogExport), backup shares and diagnostics zips only, not the whole cache -->
     <cache-path name="log" path="log/" />
     <cache-path name="backup" path="backup/" />
+    <cache-path name="diagnostics" path="diagnostics/" />
 </paths>

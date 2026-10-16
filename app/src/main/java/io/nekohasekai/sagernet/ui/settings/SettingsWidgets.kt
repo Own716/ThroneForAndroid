@@ -43,6 +43,14 @@ class StringListPreference @JvmOverloads constructor(
         store.putStringList(key, lines)
         return true
     }
+
+    /** Shows [value] without storing it; the next commit of the dialog stores what it then holds. */
+    fun showUnsaved(value: String) {
+        val persistent = isPersistent
+        isPersistent = false
+        text = value
+        isPersistent = persistent
+    }
 }
 
 /** The first [maxLines] non-blank lines of an [EditTextPreference], "…" when there are more. */

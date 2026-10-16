@@ -6,6 +6,7 @@ import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SettingsMapper
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.outbound.BuildContext
+import io.nekohasekai.sagernet.outbound.OutboundChecks
 import io.nekohasekai.sagernet.outbound.OutboundFactory
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonInput
@@ -114,7 +115,15 @@ object ProfileValidator {
             return check(xrayConf.toCompact(), xray = true) { error -> invalid("Invalid Xray ent ${outbound.name}: $error") }
         }
         if (!fullConfig) {
-            val built = outbound.build(ctx)
+            val built = outbound.buildChecked(ctx)
+            if (!built.ok) {
+                // A bad global fragment setting fails every fragmenting profile alike; "invalid" here would delete them all.
+                if (built.error == OutboundChecks.fragmentSettingsError(ctx)) {
+                    Logs.i("Could not check ent ${outbound.name}: ${built.error}")
+                    return Verdict.VALID
+                }
+                return invalid("Invalid ent ${outbound.name}: ${built.error}")
+            }
             conf = jsonObjectOf((if (outbound.isEndpoint()) "endpoints" else "outbounds") to JsonArray.of(built.json))
         }
         conf["log"] = jsonObjectOf("level" to logLevel)

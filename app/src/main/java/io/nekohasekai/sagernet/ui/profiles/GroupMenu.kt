@@ -20,19 +20,13 @@ import io.nekohasekai.sagernet.ui.test.TestSessionClient
 /** The ⋮ menu of the profiles screen: actions on the current tab's group (the desktop's Groups menu). */
 class GroupMenu(private val host: ConfigurationFragment) {
 
-    /** Direction of the next sort, kept for the screen's lifetime (the desktop's proxy_last_order is memory only). */
+    /** Direction of the next sort; a group that keeps a sort shows its own direction. */
     var sortDescending = false
 
     fun setUp(menu: Menu) {
         menu.findItem(R.id.action_misc)?.subMenu?.let { MenuCompat.setGroupDividerEnabled(it, true) }
-        keepOpen(menu, R.id.action_sort_ascending) {
-            sortDescending = false
-            it.isChecked = true
-        }
-        keepOpen(menu, R.id.action_sort_descending) {
-            sortDescending = true
-            it.isChecked = true
-        }
+        keepOpen(menu, R.id.action_sort_ascending) { setDirection(it, false) }
+        keepOpen(menu, R.id.action_sort_descending) { setDirection(it, true) }
         keepOpen(menu, R.id.action_show_out_ip) { toggleShown(menu, it) }
         keepOpen(menu, R.id.action_show_speed) { toggleShown(menu, it) }
     }
@@ -55,6 +49,26 @@ class GroupMenu(private val host: ConfigurationFragment) {
         }
     }
 
+    /** Like a click on the sorted column's header: a kept sort turns around at once. */
+    private fun setDirection(item: MenuItem, descending: Boolean) {
+        sortDescending = descending
+        item.isChecked = true
+        val group = host.currentGroup() ?: return
+        if (group.keepsSorted()) GroupActions.sort(host, group.id, group.sort.method, descending)
+    }
+
+    /** ProfilesTableModel::columnOfSort: the item of the kept sort, Manual order without one. */
+    private fun sortItem(group: ProxyGroup): Int = when (group.sort.method) {
+        GroupSortMethod.BY_TYPE, GroupSortMethod.BY_SECURITY ->
+            if (TypeBy.of(group.typeSortBy) == TypeBy.BY_SECURITY) R.id.action_sort_security else R.id.action_sort_type
+
+        GroupSortMethod.BY_ADDRESS -> R.id.action_sort_address
+        GroupSortMethod.BY_NAME -> R.id.action_sort_name
+        GroupSortMethod.BY_TEST_RESULT, GroupSortMethod.BY_LATENCY -> R.id.action_sort_test_result
+        GroupSortMethod.BY_TRAFFIC -> R.id.action_sort_traffic
+        GroupSortMethod.RAW, GroupSortMethod.BY_ID -> R.id.action_sort_manual
+    }
+
     private fun toggleShown(menu: Menu, item: MenuItem) {
         item.isChecked = !item.isChecked
         val group = host.currentGroup() ?: return
@@ -72,8 +86,10 @@ class GroupMenu(private val host: ConfigurationFragment) {
         menu.findItem(R.id.action_update_subscription)?.isVisible = group?.isSubscription == true
         menu.findItem(R.id.action_test_speed_current)?.isEnabled = DataStore.serviceState.connected
         menu.findItem(R.id.action_test_stop)?.isVisible = host.testState.running
+        if (group != null && group.keepsSorted()) sortDescending = group.sort.descending
         menu.findItem(if (sortDescending) R.id.action_sort_descending else R.id.action_sort_ascending)?.isChecked = true
         if (group != null) {
+            menu.findItem(sortItem(group))?.isChecked = true
             menu.findItem(
                 when (TestBy.of(group.testSortBy)) {
                     TestBy.LATENCY -> R.id.action_sort_test_latency
@@ -123,6 +139,9 @@ class GroupMenu(private val host: ConfigurationFragment) {
             R.id.action_remove_insecure -> GroupActions.removeInsecure(host, id)
             R.id.action_resolve_domains -> GroupActions.resolveDomains(host, group)
             R.id.action_clear_traffic_statistics -> GroupActions.clearTraffic(host, group)
+
+            // the header menu's "Stop Sorting": the current order becomes the manual one
+            R.id.action_sort_manual -> GroupActions.stopSorting(host, id)
 
             // the Type column's "Sort By: Type / Security" stores type_sort_by
             R.id.action_sort_type -> sort(id, GroupSortMethod.BY_TYPE) { it.typeSortBy = TypeBy.BY_TYPE.value }

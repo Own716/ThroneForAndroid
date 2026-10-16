@@ -20,26 +20,27 @@ import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.SettingsMapper
 import io.nekohasekai.sagernet.database.preference.EditTextPreferenceModifiers
 import io.nekohasekai.sagernet.ktx.Logs
-import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ktx.runOnMainDispatcher
 import io.nekohasekai.sagernet.outbound.config.AutoSelectorPlan
 import io.nekohasekai.sagernet.outbound.config.AutoSelectorPlanner
 import io.nekohasekai.sagernet.outbound.config.AutoSelectorSkip
 import io.nekohasekai.sagernet.outbound.types.AutoSelector
+import io.nekohasekai.sagernet.outbound.types.AutoSelectorChecks
+import io.nekohasekai.sagernet.ui.FormIssue
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.validation.Severity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.matsuri.nb4a.ui.SimpleMenuPreference
-import java.util.regex.Pattern
-import java.util.regex.PatternSyntaxException
 
 /**
  * EditAutoSelector (edit_autoselector.cpp + .ui): the tracked group, the name filter, balancing, the preferred profile
  * with "Use automatic", the live plan summary and the collapsed Advanced groups with the desktop's limits. Saving
- * validates like onEnd and prunes `pool` to the members that still qualify.
+ * goes through the validation form ([bindValidation]) and prunes `pool` to the members that still qualify.
  */
 class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
 
@@ -110,6 +111,9 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
     private var planJob: Job? = null
     private var fragment: PreferenceFragmentCompat? = null
 
+    /** Every group id, archived ones included; a tracked group that is gone fails the group rule. */
+    private var knownGroups: Set<Long> = emptySet()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         advancedExpanded = savedInstanceState?.getBoolean(STATE_ADVANCED) ?: false
         super.onCreate(savedInstanceState)
@@ -147,41 +151,63 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         pool = pool.filterTo(ArrayList()) { it in eligible }
     }
 
-    /** onEnd's checks (cpp:146-172). */
-    override suspend fun saveAndExit() {
-        val error = validate()
-        if (error == null) {
-            super.saveAndExit()
-            return
+    /** serialize() runs the planner and reads the database, so Validate gets the screen's fields on a plain copy. */
+    override fun validationOutbound(): AutoSelector {
+        val copy = createEntity()
+        copy.parseFromJson(ensureEditingOutbound().exportToJson())
+        pbm.fromCacheAll(copy)
+        copy.nameFilter = copy.nameFilter.trim()
+        copy.countryFilter = copy.countryFilter.trim()
+        copy.testURL = copy.testURL.trim()
+        copy.connectivityURL = copy.connectivityURL.trim()
+        return copy
+    }
+
+    /** edit_autoselector.cpp bindValidation plus onEnd's name check; AutoSelector.validate covers the filters and URLs. */
+    override fun ValidationForm.bindValidation() {
+        bind("name") { if (it.isEmpty()) getString(R.string.autosel_name_empty) else "" }
+        bind("gid") { text ->
+            val gid = text.toLongOrNull() ?: 0L
+            if (gid > 0 && gid in knownGroups) "" else getString(R.string.autosel_select_group)
         }
-        onMainDispatcher {
-            MaterialAlertDialogBuilder(this@AutoSelectorSettingsActivity)
-                .setTitle(R.string.autosel_title)
-                .setMessage(error)
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
+        // Rows of the collapsed Advanced section are skipped by rules, so these always run and reveal the section.
+        addIssueSource {
+            fun value(key: String) = DataStore.profileCacheStore.getString(key)?.trim()?.toIntOrNull() ?: 0
+            val buildLimit = value("buildLimit")
+            val interval = value("intervalSec")
+            val activeSize = value("activeSize")
+            listOfNotNull(
+                crossIssue("buildLimit", "poolCap", AutoSelectorChecks.autoSelectorBuildLimit(buildLimit, value("poolCap"))),
+                crossIssue("benchIntervalSec", "intervalSec", AutoSelectorChecks.autoSelectorBenchInterval(value("benchIntervalSec"), interval)),
+                crossIssue("watchIntervalSec", "intervalSec", AutoSelectorChecks.autoSelectorWatchInterval(value("watchIntervalSec"), interval)),
+                crossIssue("activeSize", "expected", AutoSelectorChecks.autoSelectorReadyCount(activeSize, value("expected"))),
+                crossIssue("activeSize", "buildLimit", AutoSelectorChecks.autoSelectorCloseCount(activeSize, buildLimit)),
+            )
+        }
+        revealer = { key ->
+            val section = fragment?.findPreference<Preference>(key)?.parent?.key
+            if (!advancedExpanded && section != null && section in ADVANCED_CATEGORIES) {
+                advancedExpanded = true
+                refreshAdvanced()
+            }
         }
     }
 
-    private fun validate(): String? {
-        val store = DataStore.profileCacheStore
-        if (store.getString("name").isNullOrBlank()) return getString(R.string.autosel_name_empty)
-        val gid = store.getString("gid")?.trim()?.toLongOrNull() ?: 0L
-        if (gid <= 0 || GroupRepo.get(gid) == null) return getString(R.string.autosel_select_group)
-        val filter = store.getString("nameFilter").orEmpty().trim()
-        if (filter.isNotEmpty()) {
-            try {
-                Pattern.compile(filter, Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
-            } catch (e: PatternSyntaxException) {
-                return getString(R.string.autosel_bad_regex, e.description ?: e.message.orEmpty())
-            }
-        }
-        return null
+    private fun crossIssue(key: String, other: String, message: String): FormIssue? {
+        if (message.isEmpty()) return null
+        val label = fragment?.findPreference<Preference>(key)?.title?.toString() ?: key
+        return FormIssue(Severity.Error, label, message, key, listOf(other))
     }
 
     override fun PreferenceFragmentCompat.onPreferencesCreated() {
         fragment = this
-        pinnedId = ensureEditingOutbound().pinnedID
+        val stored = ensureEditingOutbound()
+        pinnedId = stored.pinnedID
+        // edit_autoselector.cpp onStart: a stored bad value in the collapsed section is shown, not hidden.
+        if (AutoSelectorChecks.autoSelectorCountries(stored.countryFilter).isNotEmpty() ||
+            AutoSelectorChecks.autoSelectorUrl(stored.testURL).isNotEmpty() ||
+            AutoSelectorChecks.autoSelectorUrl(stored.connectivityURL).isNotEmpty()
+        ) advancedExpanded = true
         setupGroups()
         setupTexts()
         for (field in intFields) setupInt(field)
@@ -229,6 +255,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
     private fun PreferenceFragmentCompat.setupGroups() {
         val menu = findPreference<SimpleMenuPreference>("gid") ?: return
         val groups = GroupRepo.all()
+        knownGroups = groups.mapTo(HashSet()) { it.id }
         var current = menu.value?.trim()?.toLongOrNull() ?: -1L
         if (current <= 0) current = DataStore.editingGroup
         val entries = ArrayList<CharSequence>()
@@ -308,6 +335,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
             summary = getString(if (advancedExpanded) R.string.autosel_advanced_hide else R.string.autosel_advanced_show)
             setIcon(if (advancedExpanded) R.drawable.ic_baseline_expand_less_24 else R.drawable.ic_baseline_expand_more_24)
         }
+        form?.refresh()
     }
 
     /** refreshPinnedRow (cpp:205-218): shown only while a member is pinned. */

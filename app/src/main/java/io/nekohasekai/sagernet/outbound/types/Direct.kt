@@ -12,8 +12,11 @@ class Direct : Outbound("direct") {
     /** direct.h:8. */
     override fun displayType(): String = "Direct"
 
-    /** direct.h:11: not a tunnelling protocol, so a security verdict would only mislead. */
+    /** direct.h: not a tunnelling protocol, so a security verdict would only mislead. */
     override fun security(): SecurityInfo = SecurityInfo()
+
+    /** direct.h: dials the destination itself, no server. */
+    override fun hasServerEndpoint(): Boolean = false
 
     /** direct.h:13-18 (the missing ": " after "Bind Addr6" is the desktop's). */
     override fun displayAddress(): String {

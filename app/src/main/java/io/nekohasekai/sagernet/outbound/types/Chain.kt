@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -7,6 +8,9 @@ import io.nekohasekai.sagernet.outbound.SecurityInfo
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.vtr
 
 /** chain (include/configs/outbounds/chain.h): a list of profile ids the generator expands into hops (R2 §F). */
 class Chain : Outbound("chain") {
@@ -23,8 +27,17 @@ class Chain : Outbound("chain") {
     /** chain.h:17: no security of its own; it inherits whatever its hops use. */
     override fun security(): SecurityInfo = SecurityInfo()
 
-    /** chain.h:20: holds no secret itself; every hop is checked separately. */
+    /** chain.h: holds no secret itself; every hop is checked separately. */
     override fun supportsCredentialStrip(): Boolean = true
+
+    /** chain.h: the hops carry the servers. */
+    override fun hasServerEndpoint(): Boolean = false
+
+    /** chain.h Validate: the hop rules need the local profiles, so the chain editor checks them at save. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        if (list.isEmpty()) issues.add(Issue(Severity.Error, "list", vtr(R.string.validation_chain_empty)))
+    }
 
     /** chain.h:22-27 (`list` items via QJsonValue::toInt; widened to Long for Room ids). */
     override fun parseFromJson(obj: JsonObject): Boolean {

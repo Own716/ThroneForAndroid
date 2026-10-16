@@ -89,6 +89,11 @@ class JsonArray : Iterable<Any> {
 
     operator fun get(index: Int): Any = list[index]
 
+    /** Drops the items from [size] on. */
+    fun truncate(size: Int) {
+        while (list.size > size) list.removeAt(list.size - 1)
+    }
+
     /** QJsonArray2QListString (Utils.cpp:135-140): non-string items become "". */
     fun strings(): MutableList<String> = list.mapTo(ArrayList()) { JsonValues.toStringValue(it) }
 

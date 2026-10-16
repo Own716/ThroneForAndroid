@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -10,11 +11,24 @@ import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
 import io.nekohasekai.sagernet.outbound.link.Hosts
+import io.nekohasekai.sagernet.validation.Empty
+import io.nekohasekai.sagernet.validation.Family
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.ParseDiag
+import io.nekohasekai.sagernet.validation.Rule
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.acceptOptional
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
 
-/** Outbound.h:17-20: ignore the pushed resolvers, use them for the names they claim, or also for every remote query. */
+/** kTunnelDns* (Outbound.h): ignore the pushed resolvers, use them for the names they claim, or also for every remote query. */
 const val TUNNEL_DNS_NONE = "none"
 const val TUNNEL_DNS_PREFER = "prefer"
 const val TUNNEL_DNS_STRICT = "strict"
+
+/** openvpnNetworks (openvpn.h): the editor's network choices; "" lets the core pick. */
+val OPENVPN_NETWORKS: List<String> = listOf("", "udp", "udp4", "udp6", "tcp", "tcp4", "tcp6")
 
 /**
  * The shared toolkit of src/configs/sub/vpnFileImport.cpp (its anonymous namespace, `vpnfi*`): the .ovpn tokenizer
@@ -38,8 +52,6 @@ internal object VpnFileImport {
 
     private val INTEGER = Regex("[+-]?[0-9]+")
     private val UNSIGNED = Regex("\\+?[0-9]+")
-    private val DURATION = Regex("^(?:\\d+(?:\\.\\d+)?(?:ns|us|ms|s|m|h|d))+$")
-    private val FINGERPRINT = Regex("^[0-9a-f]{64}$")
 
     /** QChar::isSpace(): ASCII whitespace, NEL, NBSP and the Unicode separator categories. */
     fun isSpace(c: Char): Boolean {
@@ -88,11 +100,11 @@ internal object VpnFileImport {
         return if (v > 0xFFFFFFFFL) null else v
     }
 
-    /** sing-box listables accept a bare string as well as an array of lines (openvpn.cpp:14-18, openconnect.cpp:15-19). */
+    /** sing-box listables accept a bare string as well as an array of lines (ovpnListable in openvpn.cpp, ocListable in openconnect.cpp). */
     fun listable(obj: JsonObject, key: String): MutableList<String> =
         if (obj.isString(key)) QtStrings.splitSkipEmpty(obj.string(key), "\n") else obj.array(key).strings()
 
-    /** vpnfiTokenize (vpnFileImport.cpp:39-81): parse_line treats `#`/`;` as a comment only where a parameter would start. */
+    /** vpnfiTokenize (vpnFileImport.cpp): parse_line treats `#`/`;` as a comment only where a parameter would start. */
     fun tokenize(line: String): MutableList<String> {
         val tokens = ArrayList<String>()
         val token = StringBuilder()
@@ -144,7 +156,7 @@ internal object VpnFileImport {
         return tokens
     }
 
-    /** vpnfiReadOvpnDirectives (vpnFileImport.cpp:83-122): inline `<tag>` blocks and backslash continuations. */
+    /** vpnfiReadOvpnDirectives (vpnFileImport.cpp): inline `<tag>` blocks and backslash continuations. */
     fun readOvpnDirectives(body: String): List<Directive> {
         val result = ArrayList<Directive>()
         val lines = body.split('\n')
@@ -190,15 +202,35 @@ internal object VpnFileImport {
         return result
     }
 
-    /** IsValidDuration (generate.cpp:2297-2300). */
-    fun isValidDuration(text: String): Boolean = DURATION.containsMatchIn(text)
+    /** IsValidDuration (generate.cpp): the sing-box duration grammar, not negative. */
+    fun isValidDuration(text: String): Boolean = Validation.duration(text, Validation.DurationRule(Empty.Required)).isEmpty()
 
-    /** vpnfiDuration (vpnFileImport.cpp:125-131): sing-box wants a duration string where `.ovpn` writes bare seconds. */
-    fun duration(value: String): String {
+    /** vpnfiAccept (vpnFileImport.cpp): keeps a directive's value only when the endpoint accepts it; otherwise the note says why it was dropped. */
+    fun accept(key: String, value: String, message: String, notes: MutableList<String>): Boolean {
+        if (message.isEmpty()) return true
+        notes.add(vtr(R.string.validation_ovpn_note_ignored, key, value, message))
+        return false
+    }
+
+    /** vpnfiDuration (vpnFileImport.cpp): sing-box wants a duration string where `.ovpn` writes bare seconds. */
+    fun duration(key: String, value: String, notes: MutableList<String>): String {
         val t = value.trim()
         val seconds = if (INTEGER.matches(t)) t.toLongOrNull() else null
-        if (seconds != null) return if (seconds > 0) "${seconds}s" else ""
-        return if (isValidDuration(value)) value else ""
+        if (seconds != null && seconds >= 0) return if (seconds > 0) "${seconds}s" else ""
+        if (seconds == null && isValidDuration(value)) return value
+        notes.add(vtr(R.string.validation_ovpn_note_unreadable_value, key, value))
+        return ""
+    }
+
+    /** vpnfiDataCiphers (vpnFileImport.cpp): the canonical upper-case names; unsupported offers are dropped from the negotiation list. */
+    fun dataCiphers(key: String, value: String, notes: MutableList<String>): MutableList<String> {
+        val ciphers = ArrayList<String>()
+        for (name in QtStrings.splitSkipEmpty(value, ":")) {
+            // OpenVPN 2.6 marks an optional cipher with '?'; the core takes only the bare name.
+            val upper = name.trim().uppercase().removePrefix("?")
+            if (accept(key, name, OpenVpnChecks.openVpnCipherName(upper), notes)) ciphers.add(upper)
+        }
+        return ciphers
     }
 
     /** QHostAddress(text) for a string containing ':' (qhostaddress.cpp parse): the 16 bytes and the scope id. */
@@ -306,25 +338,25 @@ internal object VpnFileImport {
         return Pair(Hosts.formatIpv4(addr), netmask.toInt())
     }
 
-    /** vpnfiPrefix (vpnFileImport.cpp:134-139): parseSubnet takes both the /24 and the /255.255.255.0 spelling. */
+    /** vpnfiPrefix (vpnFileImport.cpp): parseSubnet takes both the /24 and the /255.255.255.0 spelling. */
     fun prefix(address: String, mask: String): String {
         val parsed = parseSubnet("$address/$mask") ?: return ""
         return parsed.first + "/" + parsed.second
     }
 
-    /** vpnfiNormalizePrefix (vpnFileImport.cpp:141-146). */
+    /** vpnfiNormalizePrefix (vpnFileImport.cpp). */
     fun normalizePrefix(prefix: String): String {
         val parsed = parseSubnet(prefix) ?: return ""
         return parsed.first + "/" + parsed.second
     }
 
-    /** vpnfiFingerprint (vpnFileImport.cpp:149-157): 64 bare lowercase hex characters, not colon-separated. */
+    /** vpnfiFingerprint (vpnFileImport.cpp): 64 bare lowercase hex characters, not colon-separated. */
     fun fingerprint(raw: String): String {
-        val hex = raw.replace(":", "").replace(" ", "").lowercase()
-        return if (FINGERPRINT.matches(hex)) hex else ""
+        val hex = OpenVpnChecks.openVpnNormalizeFingerprint(raw)
+        return if (hex.isNotEmpty() && OpenVpnChecks.openVpnFingerprint(hex).isEmpty()) hex else ""
     }
 
-    /** vpnfiNetwork (vpnFileImport.cpp:159-169). */
+    /** vpnfiNetwork (vpnFileImport.cpp). */
     fun network(proto: String): String {
         val value = proto.lowercase()
         if (value == "udp" || value == "udp4" || value == "udp6" || value == "tcp" || value == "tcp4" || value == "tcp6") return value
@@ -334,11 +366,11 @@ internal object VpnFileImport {
         return ""
     }
 
-    /** vpnfiRouteKeyword (vpnFileImport.cpp:171-175). */
+    /** vpnfiRouteKeyword (vpnFileImport.cpp). */
     fun routeKeyword(value: String): Boolean =
         value == "vpn_gateway" || value == "net_gateway" || value == "remote_host" || value == "default" || value == "dhcp"
 
-    /** vpnfiParseRemote (vpnFileImport.cpp:177-188): `remote host [port] [proto]` in either order. */
+    /** vpnfiParseRemote (vpnFileImport.cpp): `remote host [port] [proto]` in either order. */
     fun parseRemote(args: List<String>): Remote {
         val remote = Remote()
         if (args.size < 2) return remote
@@ -357,10 +389,10 @@ internal object VpnFileImport {
         return remote
     }
 
-    /** The `key-direction` / `secret` / `tls-auth` direction argument (vpnFileImport.cpp:396,402,423). */
+    /** The `key-direction` / `secret` / `tls-auth` direction argument (ParseOvpnConfig). */
     fun keyDirection(value: String): String = if (value == "1") "client" else if (value == "0") "server" else ""
 
-    /** vpnfiOvpnIgnored (vpnFileImport.cpp:191-204): no endpoint equivalent, or the endpoint already behaves this way. */
+    /** vpnfiOvpnIgnored (vpnFileImport.cpp): no endpoint equivalent, or the endpoint already behaves this way. */
     val OVPN_IGNORED: Set<String> = setOf(
         "allow-recursive-routing", "auth-nocache", "auth-token", "auth-token-user", "bind", "block-outside-dns",
         "client", "connect-retry", "connect-retry-max", "connect-timeout", "daemon", "dco", "dev-node", "dh",
@@ -376,7 +408,7 @@ internal object VpnFileImport {
         "txqueuelen", "up", "up-delay", "up-restart", "user", "verb", "windows-driver", "writepid",
     )
 
-    /** vpnfiOvpnUnsupported (vpnFileImport.cpp:207-212): recognised, but nothing in the endpoint carries them. */
+    /** vpnfiOvpnUnsupported (vpnFileImport.cpp): recognised, but nothing in the endpoint carries them. */
     val OVPN_UNSUPPORTED: Set<String> = setOf(
         "askpass", "capath", "cryptoapicert", "engine", "extra-certs", "http-proxy", "http-proxy-option",
         "inactive", "link-mtu", "management", "management-hold", "management-query-passwords", "no-replay",
@@ -384,7 +416,7 @@ internal object VpnFileImport {
         "tls-crypt-v2-verify", "tls-export-cert", "x509-track", "x509-username-field",
     )
 
-    /** vpnfiOvpnServerOnly (vpnFileImport.cpp:214-216). */
+    /** vpnfiOvpnServerOnly (vpnFileImport.cpp). */
     val OVPN_SERVER_ONLY: Set<String> = setOf(
         "client-config-dir", "ifconfig-pool", "push", "server", "server-bridge", "tls-server",
     )
@@ -397,22 +429,22 @@ internal object VpnFileImport {
  */
 class OpenVpn : Outbound("openvpn") {
 
-    /** OpenVPNRemote (openvpn.h:6-16). */
+    /** OpenVPNRemote (openvpn.h). */
     class Remote {
         @JvmField var server: String = ""
         @JvmField var server_port: Int = 0
         @JvmField var network: String = ""
 
-        /** openvpn.cpp:21-28. */
+        /** OpenVPNRemote::ParseFromJson (openvpn.cpp). */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("server")) server = obj.string("server")
             if (obj.contains("server_port")) server_port = obj.int("server_port")
-            if (obj.contains("network")) network = obj.string("network")
+            if (obj.contains("network")) network = obj.string("network").trim()
             return true
         }
 
-        /** openvpn.cpp:30-37. */
+        /** OpenVPNRemote::ExportToJson (openvpn.cpp). */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (server.isNotEmpty()) obj["server"] = server
@@ -421,24 +453,24 @@ class OpenVpn : Outbound("openvpn") {
             return obj
         }
 
-        /** openvpn.cpp:39-42. */
+        /** OpenVPNRemote::Build (openvpn.cpp). */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenVPNPullFilter (openvpn.h:18-27). */
+    /** OpenVPNPullFilter (openvpn.h). */
     class PullFilter {
         @JvmField var action: String = ""
         @JvmField var text: String = ""
 
-        /** openvpn.cpp:44-50. */
+        /** OpenVPNPullFilter::ParseFromJson (openvpn.cpp). */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
-            if (obj.contains("action")) action = obj.string("action")
+            if (obj.contains("action")) action = obj.string("action").trim()
             if (obj.contains("text")) text = obj.string("text")
             return true
         }
 
-        /** openvpn.cpp:52-59. */
+        /** OpenVPNPullFilter::ExportToJson (openvpn.cpp). */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (action.isEmpty() && text.isEmpty()) return obj
@@ -447,11 +479,11 @@ class OpenVpn : Outbound("openvpn") {
             return obj
         }
 
-        /** openvpn.cpp:61-64. */
+        /** OpenVPNPullFilter::Build (openvpn.cpp). */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenVPNControlWrap (openvpn.h:29-43): tls-auth / tls-crypt / tls-crypt-v2 control channel wrapping. */
+    /** OpenVPNControlWrap (openvpn.h): tls-auth / tls-crypt / tls-crypt-v2 control channel wrapping. */
     class ControlWrap {
         @JvmField var type: String = ""
         @JvmField var key: MutableList<String> = ArrayList()
@@ -459,17 +491,17 @@ class OpenVpn : Outbound("openvpn") {
         /** Conflicts with `key`. */
         @JvmField var key_path: String = ""
 
-        /** openvpn.cpp:66-74. */
+        /** OpenVPNControlWrap::ParseFromJson (openvpn.cpp). */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
-            if (obj.contains("type")) type = obj.string("type")
+            if (obj.contains("type")) type = obj.string("type").trim()
             if (obj.contains("key")) key = VpnFileImport.listable(obj, "key")
             if (obj.contains("key_path")) key_path = obj.string("key_path")
-            if (obj.contains("direction")) direction = obj.string("direction")
+            if (obj.contains("direction")) direction = obj.string("direction").trim()
             return true
         }
 
-        /** openvpn.cpp:76-85. */
+        /** OpenVPNControlWrap::ExportToJson (openvpn.cpp). */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (type.isEmpty()) return obj
@@ -480,11 +512,11 @@ class OpenVpn : Outbound("openvpn") {
             return obj
         }
 
-        /** openvpn.cpp:87-90. */
+        /** OpenVPNControlWrap::Build (openvpn.cpp). */
         fun build(ctx: BuildContext): JsonObject = exportToJson()
     }
 
-    /** OpenVPNTLS (openvpn.h:45-74); not the sing-box TLS block, so [hasTls] stays false. */
+    /** OpenVPNTLS (openvpn.h); not the sing-box TLS block, so [hasTls] stays false. */
     class Tls {
         @JvmField var certificate: MutableList<String> = ArrayList()
         @JvmField var client_certificate: MutableList<String> = ArrayList()
@@ -509,11 +541,11 @@ class OpenVpn : Outbound("openvpn") {
         @JvmField var cipher: String = ""
         @JvmField var groups: String = ""
 
-        /** openvpn.cpp:92-116. */
+        /** OpenVPNTLS::ParseFromJson (openvpn.cpp): the TLS cipher suites and groups pass [OpenVpnChecks] on import. */
         fun parseFromJson(obj: JsonObject): Boolean {
             if (obj.isEmpty()) return false
             if (obj.contains("server_name")) server_name = obj.string("server_name")
-            if (obj.contains("server_name_type")) server_name_type = obj.string("server_name_type")
+            if (obj.contains("server_name_type")) server_name_type = obj.string("server_name_type").trim()
             if (obj.contains("certificate")) certificate = VpnFileImport.listable(obj, "certificate")
             if (obj.contains("certificate_path")) certificate_path = obj.string("certificate_path")
             if (obj.contains("client_certificate")) client_certificate = VpnFileImport.listable(obj, "client_certificate")
@@ -524,18 +556,19 @@ class OpenVpn : Outbound("openvpn") {
             if (obj.contains("crl_path")) crl_path = obj.string("crl_path")
             if (obj.contains("remote_certificate_ku")) remote_certificate_ku = VpnFileImport.listable(obj, "remote_certificate_ku")
             if (obj.contains("remote_certificate_eku")) remote_certificate_eku = obj.string("remote_certificate_eku")
-            if (obj.contains("remote_certificate_tls")) remote_certificate_tls = obj.string("remote_certificate_tls")
-            if (obj.contains("certificate_profile")) certificate_profile = obj.string("certificate_profile")
-            if (obj.contains("ns_certificate_type")) ns_certificate_type = obj.string("ns_certificate_type")
-            if (obj.contains("version_min")) version_min = obj.string("version_min")
-            if (obj.contains("version_max")) version_max = obj.string("version_max")
-            if (obj.contains("cipher")) cipher = obj.string("cipher")
-            if (obj.contains("groups")) groups = obj.string("groups")
+            if (obj.contains("remote_certificate_tls")) remote_certificate_tls = obj.string("remote_certificate_tls").trim()
+            if (obj.contains("certificate_profile")) certificate_profile = obj.string("certificate_profile").trim()
+            if (obj.contains("ns_certificate_type")) ns_certificate_type = obj.string("ns_certificate_type").trim()
+            if (obj.contains("version_min")) version_min = obj.string("version_min").trim()
+            if (obj.contains("version_max")) version_max = obj.string("version_max").trim()
+            // Without them the core's default suites and groups apply.
+            cipher = ovpnReadChecked(obj, "cipher", "tls.cipher", cipher) { OpenVpnChecks.openVpnTlsCipher(it) }
+            groups = ovpnReadChecked(obj, "groups", "tls.groups", groups) { OpenVpnChecks.openVpnTlsGroups(it) }
             if (obj.contains("control_wrap")) control_wrap.parseFromJson(obj.obj("control_wrap"))
             return true
         }
 
-        /** openvpn.cpp:118-142. */
+        /** OpenVPNTLS::ExportToJson (openvpn.cpp). */
         fun exportToJson(): JsonObject {
             val obj = JsonObject()
             if (server_name.isNotEmpty()) obj["server_name"] = server_name
@@ -562,8 +595,17 @@ class OpenVpn : Outbound("openvpn") {
             return obj
         }
 
-        /** openvpn.cpp:144-147. */
-        fun build(ctx: BuildContext): JsonObject = exportToJson()
+        /** OpenVPNTLS::Build (openvpn.cpp): bare lower-case fingerprints, the core's cipher-suite spelling, upper-case groups. */
+        fun build(ctx: BuildContext): JsonObject {
+            val obj = exportToJson()
+            if (peer_fingerprint.isNotEmpty()) {
+                val fingerprints = peer_fingerprint.map { OpenVpnChecks.openVpnNormalizeFingerprint(it) }.filter { it.isNotEmpty() }
+                if (fingerprints.isEmpty()) obj.remove("peer_fingerprint") else obj["peer_fingerprint"] = JsonValues.stringArray(fingerprints)
+            }
+            if (cipher.isNotEmpty()) obj["cipher"] = OpenVpnChecks.openVpnNormalizeTlsCipher(cipher)
+            if (groups.isNotEmpty()) obj["groups"] = groups.trim().uppercase()
+            return obj
+        }
     }
 
     @JvmField var network: String = ""
@@ -573,7 +615,7 @@ class OpenVpn : Outbound("openvpn") {
     @JvmField var static_challenge_echo: Boolean = false
     @JvmField var mtu: Int = 0
     @JvmField var tls: Tls = Tls()
-    /** Throne-only, never sent to the core (openvpn.h:86-89); Android has no OTP store, so it only round-trips. */
+    /** Throne-only, never sent to the core (openvpn.h); Android has no OTP store, so it only round-trips. */
     @JvmField var otp_profile_id: Int = -1
     @JvmField var only_advertised_routes: Boolean = true
     @JvmField var tunnel_dns: String = TUNNEL_DNS_PREFER
@@ -622,25 +664,28 @@ class OpenVpn : Outbound("openvpn") {
     @JvmField var handshake_window: String = ""
     @JvmField var explicit_exit_notify: Int = 0
     @JvmField var system: Boolean = false
-    /** sing-box "name" (system interface name); [name] is the tag (openvpn.h:135-136). */
+    /** sing-box "name" (system interface name); [name] is the tag (openvpn.h). */
     @JvmField var interface_name: String = ""
     @JvmField var udp_timeout: String = ""
     @JvmField var udp_mapping: String = ""
     @JvmField var udp_filtering: String = ""
     @JvmField var udp_nat_max: Int = 0
 
-    /** openvpn.cpp:149-152: the "link" is the text of an .ovpn file. */
+    /** openvpn::ParseFromLink (openvpn.cpp): the "link" is the text of an .ovpn file. */
     override fun parseFromLink(link: String): Boolean = parseOvpnConfig(link, null)
 
-    /** openvpn.cpp:154-237. */
+    /**
+     * openvpn::ParseFromJson (openvpn.cpp): enum-like values are trimmed; on import (and only then) an optional value
+     * the core would refuse is dropped with a warning, while DB loads keep what was stored.
+     */
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         val type = obj.string("type")
         if (type != "openvpn" && type != "openvpn-client") return false
         super.parseFromJson(obj)
 
-        if (obj.contains("mode")) mode = obj.string("mode")
-        if (obj.contains("network")) network = obj.string("network")
+        if (obj.contains("mode")) mode = obj.string("mode").trim()
+        if (obj.contains("network")) network = obj.string("network").trim()
         if (obj.contains("servers")) {
             servers.clear()
             for (item in obj.array("servers")) {
@@ -652,26 +697,39 @@ class OpenVpn : Outbound("openvpn") {
         if (obj.contains("address")) address = VpnFileImport.listable(obj, "address")
         if (obj.contains("peer_address")) peer_address = obj.string("peer_address")
         if (obj.contains("peer_address_ipv6")) peer_address_ipv6 = obj.string("peer_address_ipv6")
-        if (obj.contains("topology")) topology = obj.string("topology")
+        if (obj.contains("topology")) topology = obj.string("topology").trim()
         if (obj.contains("username")) username = obj.string("username")
         if (obj.contains("password")) password = obj.string("password")
-        if (obj.contains("auth_retry")) auth_retry = obj.string("auth_retry")
+        if (obj.contains("auth_retry")) auth_retry = obj.string("auth_retry").trim()
         if (obj.contains("static_challenge")) static_challenge = obj.string("static_challenge")
         if (obj.contains("static_challenge_echo")) static_challenge_echo = obj.bool("static_challenge_echo")
         if (obj.contains("static_key")) static_key = VpnFileImport.listable(obj, "static_key")
         if (obj.contains("static_key_path")) static_key_path = obj.string("static_key_path")
-        if (obj.contains("key_direction")) key_direction = obj.string("key_direction")
+        if (obj.contains("key_direction")) key_direction = obj.string("key_direction").trim()
         if (obj.contains("tls")) tls.parseFromJson(obj.obj("tls"))
         if (obj.contains("cipher")) cipher = obj.string("cipher")
-        if (obj.contains("data_ciphers")) data_ciphers = VpnFileImport.listable(obj, "data_ciphers")
-        if (obj.contains("data_ciphers_fallback")) data_ciphers_fallback = obj.string("data_ciphers_fallback")
+        // Unsupported offers drop out of the negotiation; the static key cipher and auth have no such fallback.
+        if (obj.contains("data_ciphers")) {
+            data_ciphers = ovpnKeepItems("data_ciphers", VpnFileImport.listable(obj, "data_ciphers")) { OpenVpnChecks.openVpnCipherName(it) }
+        }
+        data_ciphers_fallback = ovpnReadChecked(obj, "data_ciphers_fallback", "data_ciphers_fallback", data_ciphers_fallback) {
+            OpenVpnChecks.openVpnCipherName(it)
+        }
         if (obj.contains("auth")) auth = obj.string("auth")
         if (obj.contains("mss_fix")) mss_fix = obj.int("mss_fix")
         if (obj.contains("mss_fix_disabled")) mss_fix_disabled = obj.bool("mss_fix_disabled")
-        if (obj.contains("mss_fix_mode")) mss_fix_mode = obj.string("mss_fix_mode")
-        if (obj.contains("fragment")) fragment = obj.int("fragment")
-        if (obj.contains("replay_window")) replay_window = obj.int("replay_window")
-        if (obj.contains("replay_window_time")) replay_window_time = obj.string("replay_window_time")
+        if (obj.contains("mss_fix_mode")) mss_fix_mode = obj.string("mss_fix_mode").trim()
+        if (obj.contains("fragment")) {
+            val value = obj.int("fragment")
+            if (ovpnKeep("fragment", OpenVpnChecks.openVpnFragment(value.toString()), value.toString())) fragment = value
+        }
+        if (obj.contains("replay_window")) {
+            val value = obj.int("replay_window")
+            if (ovpnKeep("replay_window", OpenVpnChecks.openVpnReplayWindow(value.toString()), value.toString())) replay_window = value
+        }
+        replay_window_time = ovpnReadChecked(obj, "replay_window_time", "replay_window_time", replay_window_time) {
+            OpenVpnChecks.openVpnReplayWindowTime(it)
+        }
         if (obj.contains("compression")) compression = obj.string("compression")
         if (obj.contains("compression_lzo")) compression_lzo = obj.string("compression_lzo")
         if (obj.contains("allow_compression")) allow_compression = obj.string("allow_compression")
@@ -683,27 +741,38 @@ class OpenVpn : Outbound("openvpn") {
                 if (filter.parseFromJson(item as? JsonObject ?: JsonObject())) pull_filters.add(filter)
             }
         }
-        if (obj.contains("routes")) routes = VpnFileImport.listable(obj, "routes")
-        if (obj.contains("route_gateway")) route_gateway = obj.string("route_gateway")
+        if (obj.contains("routes")) routes = ovpnKeepItems("routes", VpnFileImport.listable(obj, "routes")) { Validation.cidr(it) }
+        route_gateway = ovpnReadChecked(obj, "route_gateway", "route_gateway", route_gateway) {
+            Validation.ip(it, Family.Any, Empty.Allowed)
+        }
         if (obj.contains("route_metric")) route_metric = obj.int("route_metric")
         if (obj.contains("redirect_gateway")) redirect_gateway = obj.bool("redirect_gateway")
         if (obj.contains("redirect_gateway_flags")) redirect_gateway_flags = VpnFileImport.listable(obj, "redirect_gateway_flags")
         if (obj.contains("redirect_private")) redirect_private = obj.bool("redirect_private")
         if (obj.contains("block_ipv6")) block_ipv6 = obj.bool("block_ipv6")
-        if (obj.contains("ping_interval")) ping_interval = obj.string("ping_interval")
-        if (obj.contains("ping_restart")) ping_restart = obj.string("ping_restart")
+        ping_interval = ovpnReadChecked(obj, "ping_interval", "ping_interval", ping_interval) { OpenVpnChecks.openVpnPingInterval(it) }
+        ping_restart = ovpnReadChecked(obj, "ping_restart", "ping_restart", ping_restart) { OpenVpnChecks.openVpnPingInterval(it) }
         if (obj.contains("ping_restart_disabled")) ping_restart_disabled = obj.bool("ping_restart_disabled")
-        if (obj.contains("renegotiate_interval")) renegotiate_interval = obj.string("renegotiate_interval")
+        renegotiate_interval = ovpnReadChecked(obj, "renegotiate_interval", "renegotiate_interval", renegotiate_interval) {
+            OpenVpnChecks.openVpnInterval(it)
+        }
         if (obj.contains("renegotiate_disabled")) renegotiate_disabled = obj.bool("renegotiate_disabled")
         if (obj.contains("renegotiate_bytes")) renegotiate_bytes = obj.integer("renegotiate_bytes")
         if (obj.contains("renegotiate_packets")) renegotiate_packets = obj.integer("renegotiate_packets")
-        if (obj.contains("tls_timeout")) tls_timeout = obj.string("tls_timeout")
-        if (obj.contains("handshake_window")) handshake_window = obj.string("handshake_window")
+        tls_timeout = ovpnReadChecked(obj, "tls_timeout", "tls_timeout", tls_timeout) { OpenVpnChecks.openVpnInterval(it) }
+        handshake_window = ovpnReadChecked(obj, "handshake_window", "handshake_window", handshake_window) { OpenVpnChecks.openVpnInterval(it) }
         if (obj.contains("explicit_exit_notify")) explicit_exit_notify = obj.int("explicit_exit_notify")
         if (obj.contains("system")) system = obj.bool("system")
         if (obj.contains("name")) interface_name = obj.string("name")
         if (obj.contains("mtu")) mtu = obj.int("mtu")
-        if (obj.contains("udp_timeout")) udp_timeout = obj.string("udp_timeout")
+        // The core also takes a bare number of seconds here; Throne stores and emits the duration string.
+        if (obj.contains("udp_timeout")) {
+            if (obj.isNumber("udp_timeout") && obj.integer("udp_timeout") > 0) {
+                udp_timeout = obj.integer("udp_timeout").toString() + "s"
+            } else {
+                udp_timeout = ovpnReadChecked(obj, "udp_timeout", "udp_timeout", udp_timeout) { Validation.duration(it) }
+            }
+        }
         if (obj.contains("udp_mapping")) udp_mapping = obj.string("udp_mapping")
         if (obj.contains("udp_filtering")) udp_filtering = obj.string("udp_filtering")
         if (obj.contains("udp_nat_max")) udp_nat_max = obj.int("udp_nat_max")
@@ -717,7 +786,7 @@ class OpenVpn : Outbound("openvpn") {
         return true
     }
 
-    /** openvpn.cpp:239-318. */
+    /** openvpn::ExportToJson (openvpn.cpp). */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["type"] = "openvpn"
@@ -801,7 +870,7 @@ class OpenVpn : Outbound("openvpn") {
         return obj
     }
 
-    /** openvpn.cpp:320-424. */
+    /** openvpn::Build (openvpn.cpp). */
     override fun build(ctx: BuildContext): BuildResult {
         val obj = JsonObject()
         obj["type"] = "openvpn-client"
@@ -840,10 +909,11 @@ class OpenVpn : Outbound("openvpn") {
         if (key_direction.isNotEmpty()) obj["key_direction"] = key_direction
         val tlsObj = tls.build(ctx)
         if (tlsObj.isNotEmpty()) obj["tls"] = tlsObj
-        if (cipher.isNotEmpty()) obj["cipher"] = cipher
-        if (data_ciphers.isNotEmpty()) obj["data_ciphers"] = JsonValues.stringArray(data_ciphers)
-        if (data_ciphers_fallback.isNotEmpty()) obj["data_ciphers_fallback"] = data_ciphers_fallback
-        if (auth.isNotEmpty()) obj["auth"] = auth
+        // The core matches the canonical upper-case names only; .ovpn files often spell them in lower case.
+        if (cipher.isNotEmpty()) obj["cipher"] = cipher.trim().uppercase()
+        if (data_ciphers.isNotEmpty()) obj["data_ciphers"] = JsonValues.stringArray(data_ciphers.map { it.trim().uppercase() })
+        if (data_ciphers_fallback.isNotEmpty()) obj["data_ciphers_fallback"] = data_ciphers_fallback.trim().uppercase()
+        if (auth.isNotEmpty()) obj["auth"] = auth.trim().uppercase()
         if (mss_fix > 0) obj["mss_fix"] = mss_fix
         if (mss_fix_disabled) obj["mss_fix_disabled"] = true
         if (mss_fix_mode.isNotEmpty()) obj["mss_fix_mode"] = mss_fix_mode
@@ -889,10 +959,10 @@ class OpenVpn : Outbound("openvpn") {
         return BuildResult(obj)
     }
 
-    /** openvpn.cpp:426-429. */
+    /** openvpn::DisplayType (openvpn.cpp). */
     override fun displayType(): String = "OpenVPN"
 
-    /** openvpn.cpp:431-437. */
+    /** openvpn::GetSecurity (openvpn.cpp). */
     override fun security(): SecurityInfo {
         if (mode == "static_key") return SecurityInfo("Static Key", "", SecurityLevel.Weak)
         val pinned = tls.certificate.isNotEmpty() || tls.certificate_path.isNotEmpty() || tls.peer_fingerprint.isNotEmpty()
@@ -900,13 +970,13 @@ class OpenVpn : Outbound("openvpn") {
         return SecurityInfo("TLS", "", SecurityLevel.Secure)
     }
 
-    /** openvpn.cpp:439-442. */
+    /** openvpn::IsEndpoint (openvpn.cpp). */
     override fun isEndpoint(): Boolean = true
 
-    /** openvpn.cpp:444-447. */
+    /** openvpn::SupportsCredentialStrip (openvpn.cpp). */
     override fun supportsCredentialStrip(): Boolean = true
 
-    /** openvpn.cpp:449-464. */
+    /** openvpn::StripCredentials (openvpn.cpp). */
     override fun stripCredentials() {
         username = ""
         password = ""
@@ -923,8 +993,110 @@ class OpenVpn : Outbound("openvpn") {
         tls.crl_path = ""
     }
 
+    /** A non-empty Advanced server list replaces the profile's own server and port (openvpn.h). */
+    override fun serverPortOptional(): Boolean = servers.isNotEmpty()
+
+    override fun serverAddressOptional(): Boolean = servers.isNotEmpty()
+
+    /** openvpn::StripForeignState (openvpn.cpp): the one-time password entry belongs to another installation. */
+    override fun stripForeignState(issues: MutableList<Issue>) {
+        if (otp_profile_id < 0) return
+        otp_profile_id = -1
+        issues.addIssue(Severity.Warning, "otp_profile_id", vtr(R.string.validation_ovpn_otp_removed))
+    }
+
+    /** openvpn::Validate (openvpn.cpp), without the `{otp}` placeholder reminders: Android never substitutes it. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        fun report(field: String, message: String, value: String = "") = issues.addIssue(Severity.Error, field, message, value)
+        fun reportItems(field: String, items: List<String>, rule: Rule) {
+            for (item in items) {
+                val message = rule(item)
+                if (message.isNotEmpty()) return report(field, message, item)
+            }
+        }
+        val cidr: Rule = { Validation.cidr(it) }
+        val versions = listOf("1.0", "1.1", "1.2", "1.3")
+
+        report("mode", Validation.oneOf(mode, listOf("tls", "static_key")), mode)
+        report("network", Validation.oneOf(network, OPENVPN_NETWORKS), network)
+        if (servers.isEmpty() && (server.startsWith('[') || server.endsWith(']'))) {
+            report("server", OpenVpnChecks.openVpnRemoteHost(server), server)
+        }
+        for ((i, remote) in servers.withIndex()) {
+            val field = "servers[$i]"
+            val port = remote.server_port.toString()
+            report("$field.server", OpenVpnChecks.openVpnRemoteHost(remote.server), remote.server)
+            report("$field.server_port", OpenVpnChecks.openVpnRemotePort(port), port)
+            report("$field.network", Validation.oneOf(remote.network, OPENVPN_NETWORKS), remote.network)
+        }
+        reportItems("address", address, cidr)
+        report("peer_address", Validation.ip(peer_address, Family.V4, Empty.Allowed), peer_address)
+        report("peer_address_ipv6", Validation.ip(peer_address_ipv6, Family.V6, Empty.Allowed), peer_address_ipv6)
+        report("topology", Validation.oneOf(topology, listOf("net30", "p2p", "subnet")), topology)
+        report("auth_retry", Validation.oneOf(auth_retry, listOf("none", "nointeract", "interact")), auth_retry)
+        report("key_direction", Validation.oneOf(key_direction, listOf("server", "client")), key_direction)
+        report("cipher", OpenVpnChecks.openVpnCipherName(cipher), cipher)
+        reportItems("data_ciphers", data_ciphers) { OpenVpnChecks.openVpnCipherName(it) }
+        report("data_ciphers_fallback", OpenVpnChecks.openVpnCipherName(data_ciphers_fallback), data_ciphers_fallback)
+        report("auth", OpenVpnChecks.openVpnDigest(auth), auth)
+        report("mss_fix_mode", Validation.oneOf(mss_fix_mode, listOf("mtu", "fixed")), mss_fix_mode)
+        report("fragment", OpenVpnChecks.openVpnFragment(fragment.toString()), fragment.toString())
+        report("replay_window", OpenVpnChecks.openVpnReplayWindow(replay_window.toString()), replay_window.toString())
+        report("replay_window_time", OpenVpnChecks.openVpnReplayWindowTime(replay_window_time), replay_window_time)
+        reportItems("routes", routes, cidr)
+        report("route_gateway", Validation.ip(route_gateway, Family.Any, Empty.Allowed), route_gateway)
+        report("ping_interval", OpenVpnChecks.openVpnPingInterval(ping_interval), ping_interval)
+        report("ping_restart", OpenVpnChecks.openVpnPingInterval(ping_restart), ping_restart)
+        report("renegotiate_interval", OpenVpnChecks.openVpnInterval(renegotiate_interval), renegotiate_interval)
+        report("tls_timeout", OpenVpnChecks.openVpnInterval(tls_timeout), tls_timeout)
+        report("handshake_window", OpenVpnChecks.openVpnInterval(handshake_window), handshake_window)
+        report("udp_timeout", Validation.duration(udp_timeout), udp_timeout)
+        for ((i, filter) in pull_filters.withIndex()) {
+            if (filter.action.isEmpty() && filter.text.isEmpty()) continue
+            val field = "pull_filters[$i]"
+            report("$field.action", Validation.oneOf(filter.action, listOf("accept", "ignore", "reject"), Empty.Required), filter.action)
+            report("$field.text", Validation.required(filter.text))
+        }
+
+        report("tls.server_name_type", Validation.oneOf(tls.server_name_type, listOf("subject", "name", "name-prefix")), tls.server_name_type)
+        reportItems("tls.peer_fingerprint", tls.peer_fingerprint) { OpenVpnChecks.openVpnFingerprint(it) }
+        reportItems("tls.remote_certificate_ku", tls.remote_certificate_ku) { OpenVpnChecks.openVpnKeyUsage(it) }
+        report("tls.remote_certificate_eku", OpenVpnChecks.openVpnExtendedKeyUsage(tls.remote_certificate_eku), tls.remote_certificate_eku)
+        report("tls.remote_certificate_tls", Validation.oneOf(tls.remote_certificate_tls, listOf("server", "client", "none")), tls.remote_certificate_tls)
+        report(
+            "tls.certificate_profile",
+            Validation.oneOf(tls.certificate_profile, listOf("legacy", "preferred", "insecure", "suiteb")),
+            tls.certificate_profile,
+        )
+        report("tls.ns_certificate_type", Validation.oneOf(tls.ns_certificate_type, listOf("server", "client")), tls.ns_certificate_type)
+        report("tls.version_min", Validation.oneOf(tls.version_min, versions), tls.version_min)
+        report("tls.version_max", Validation.oneOf(tls.version_max, versions), tls.version_max)
+        report("tls.cipher", OpenVpnChecks.openVpnTlsCipher(tls.cipher), tls.cipher)
+        report("tls.groups", OpenVpnChecks.openVpnTlsGroups(tls.groups), tls.groups)
+
+        for (key in OpenVpnChecks.openVpnModeConflicts(this)) report(key, OpenVpnChecks.openVpnModeConflict(this, key))
+        report("static_key", OpenVpnChecks.openVpnStaticKeyMissing(this))
+        report("static_key", OpenVpnChecks.vpnMaterialConflict(static_key, static_key_path))
+        report("cipher", OpenVpnChecks.openVpnStaticCipher(this), cipher)
+        report("address", OpenVpnChecks.openVpnStaticAddress(this))
+        report("tls.certificate", OpenVpnChecks.openVpnTlsVerification(this))
+        report("tls.client_certificate", OpenVpnChecks.openVpnClientPair(this))
+        report("tls.certificate", OpenVpnChecks.vpnMaterialConflict(tls.certificate, tls.certificate_path))
+        report("tls.client_certificate", OpenVpnChecks.vpnMaterialConflict(tls.client_certificate, tls.client_certificate_path))
+        report("tls.client_key", OpenVpnChecks.vpnMaterialConflict(tls.client_key, tls.client_key_path))
+        report("tls.control_wrap.key", OpenVpnChecks.vpnMaterialConflict(tls.control_wrap.key, tls.control_wrap.key_path))
+        report("tls.control_wrap.type", OpenVpnChecks.openVpnControlWrapKey(this), tls.control_wrap.type)
+        report("tls.control_wrap.direction", OpenVpnChecks.openVpnControlWrapDirection(this), tls.control_wrap.direction)
+        report("tls.remote_certificate_eku", OpenVpnChecks.openVpnRemoteCertificate(this))
+        report("tls.version_max", OpenVpnChecks.openVpnTlsVersions(this), tls.version_max)
+        report("mss_fix", OpenVpnChecks.openVpnMssFix(this))
+        report("ping_restart", OpenVpnChecks.openVpnPingRestart(this))
+        report("renegotiate_interval", OpenVpnChecks.openVpnRenegotiate(this))
+    }
+
     /**
-     * ParseOvpnConfig (vpnFileImport.cpp:219-742) applied to this profile. Every note the desktop would show is
+     * ParseOvpnConfig (vpnFileImport.cpp) applied to this profile. Every note the desktop would show is
      * appended to [problems]; a fatal problem appends its reason too, then returns false.
      */
     @JvmOverloads
@@ -935,7 +1107,7 @@ class OpenVpn : Outbound("openvpn") {
             problems?.addAll(notes)
         }
         if (directives.isEmpty()) {
-            notes.add("Empty OpenVPN configuration.")
+            notes.add(vtr(R.string.validation_ovpn_note_empty))
             flush()
             return false
         }
@@ -985,7 +1157,7 @@ class OpenVpn : Outbound("openvpn") {
                         else if ((args[0] == "port" || args[0] == "rport") && args.size > 1) blockPort = QtStrings.toInt(args[1])
                     }
                     if (remote.host.isEmpty()) {
-                        notes.add("<connection> block without a remote, skipped.")
+                        notes.add(vtr(R.string.validation_ovpn_note_connection_no_remote))
                         continue
                     }
                     if (remote.network.isEmpty()) remote.network = blockNetwork
@@ -1012,10 +1184,10 @@ class OpenVpn : Outbound("openvpn") {
                     "peer-fingerprint" -> for (line in item.inlineBody) {
                         val hex = VpnFileImport.fingerprint(line)
                         if (hex.isNotEmpty()) tls.peer_fingerprint.add(hex)
-                        else notes.add("Ignored an unreadable peer fingerprint: $line")
+                        else notes.add(vtr(R.string.validation_ovpn_note_fingerprint, line))
                     }
-                    "pkcs12" -> fatal = "PKCS#12 bundles are not supported; export the CA, certificate and key as PEM."
-                    else -> notes.add("Ignored inline block: <$tag>")
+                    "pkcs12" -> fatal = vtr(R.string.validation_ovpn_note_pkcs12)
+                    else -> notes.add(vtr(R.string.validation_ovpn_note_inline_block, tag))
                 }
                 continue
             }
@@ -1025,22 +1197,22 @@ class OpenVpn : Outbound("openvpn") {
             val value = if (args.size > 1) args[1] else ""
 
             if (key in VpnFileImport.OVPN_SERVER_ONLY) {
-                fatal = "This is an OpenVPN server configuration ($key), not a client profile."
+                fatal = vtr(R.string.validation_ovpn_note_server_config, key)
                 continue
             }
             if (key == "pkcs12") {
-                fatal = "PKCS#12 bundles are not supported; export the CA, certificate and key as PEM."
+                fatal = vtr(R.string.validation_ovpn_note_pkcs12)
                 continue
             }
             if (key == "dev" || key == "dev-type") {
                 if (value.startsWith("tap")) {
-                    fatal = "TAP (layer 2) tunnels are not supported; only `dev tun` profiles can be imported."
+                    fatal = vtr(R.string.validation_ovpn_note_tap)
                 }
                 continue
             }
             if (key == "mode") {
                 if (value == "server") {
-                    fatal = "This is an OpenVPN server configuration (mode server), not a client profile."
+                    fatal = vtr(R.string.validation_ovpn_note_mode_server)
                 }
                 continue
             }
@@ -1053,12 +1225,12 @@ class OpenVpn : Outbound("openvpn") {
             if (key == "proto") {
                 val net = VpnFileImport.network(value)
                 if (net.isNotEmpty()) network = net
-                else if (value.endsWith("-server")) fatal = "`proto $value` is a server transport."
-                else notes.add("Unknown transport: proto $value")
+                else if (value.endsWith("-server")) fatal = vtr(R.string.validation_ovpn_note_server_transport, value)
+                else notes.add(vtr(R.string.validation_ovpn_note_unknown_transport, value))
                 continue
             }
             if (key == "port" || key == "rport") {
-                defaultPort = QtStrings.toInt(value)
+                if (VpnFileImport.accept(key, value, Validation.port(value), notes)) defaultPort = QtStrings.toInt(value)
                 continue
             }
             if (key == "remote-random") {
@@ -1073,7 +1245,7 @@ class OpenVpn : Outbound("openvpn") {
             }
             if (key == "ifconfig-ipv6" && args.size > 1) {
                 if (VpnFileImport.normalizePrefix(args[1]).isNotEmpty()) address.add(args[1])
-                else notes.add("Ignored an unreadable IPv6 interface address: ${args[1]}")
+                else notes.add(vtr(R.string.validation_ovpn_note_ipv6_address, args[1]))
                 if (args.size > 2) peer_address_ipv6 = args[2]
                 continue
             }
@@ -1087,7 +1259,7 @@ class OpenVpn : Outbound("openvpn") {
             }
             if (key == "auth-user-pass") {
                 if (value.isNotEmpty() && value != "[inline]") {
-                    notes.add("Credentials live in $value; enter them in the profile editor.")
+                    notes.add(vtr(R.string.validation_ovpn_note_credentials_file, value))
                 }
                 continue
             }
@@ -1127,7 +1299,7 @@ class OpenVpn : Outbound("openvpn") {
                     else -> {
                         tls.crl_path = value
                         if (args.size > 2 && args[2] == "dir") {
-                            notes.add("A hash-directory CRL is not supported; point `crl-verify` at a PEM or DER file.")
+                            notes.add(vtr(R.string.validation_ovpn_note_crl_dir))
                         }
                     }
                 }
@@ -1142,7 +1314,7 @@ class OpenVpn : Outbound("openvpn") {
             if (key == "peer-fingerprint" || key == "verify-hash") {
                 val hex = VpnFileImport.fingerprint(value)
                 if (hex.isNotEmpty()) tls.peer_fingerprint.add(hex)
-                else notes.add("Ignored an unreadable peer fingerprint: $value")
+                else notes.add(vtr(R.string.validation_ovpn_note_fingerprint, value))
                 continue
             }
             if (key == "remote-cert-tls") {
@@ -1170,12 +1342,15 @@ class OpenVpn : Outbound("openvpn") {
                 if (key == "tls-version-min") tls.version_min = value else tls.version_max = value
                 continue
             }
+            // Without them the endpoint's default suites and groups apply.
             if (key == "tls-cipher") {
-                tls.cipher = value
+                val suites = OpenVpnChecks.openVpnNormalizeTlsCipher(value)
+                if (VpnFileImport.accept(key, value, OpenVpnChecks.openVpnTlsCipher(suites), notes)) tls.cipher = suites
                 continue
             }
             if (key == "tls-groups") {
-                tls.groups = value
+                val groups = value.trim().uppercase()
+                if (VpnFileImport.accept(key, value, OpenVpnChecks.openVpnTlsGroups(groups), notes)) tls.groups = groups
                 continue
             }
             if (key == "tls-cert-profile") {
@@ -1184,38 +1359,42 @@ class OpenVpn : Outbound("openvpn") {
             }
 
             if (key == "cipher") {
-                legacyCipher = value
+                legacyCipher = value.trim().uppercase()
                 continue
             }
             if (key == "data-ciphers" || key == "ncp-ciphers") {
-                data_ciphers = QtStrings.splitSkipEmpty(value, ":")
+                data_ciphers = VpnFileImport.dataCiphers(key, value, notes)
                 continue
             }
             if (key == "data-ciphers-fallback") {
-                data_ciphers_fallback = value
+                val fallback = value.trim().uppercase()
+                if (VpnFileImport.accept(key, value, OpenVpnChecks.openVpnCipherName(fallback), notes)) data_ciphers_fallback = fallback
                 continue
             }
             if (key == "auth") {
-                auth = value
+                auth = value.trim().uppercase()
                 continue
             }
             if (key == "mssfix") {
                 if (value.isEmpty()) continue
                 if (value == "0") {
                     mss_fix_disabled = true
-                } else {
+                } else if (VpnFileImport.accept(key, value, Validation.int(value, 0, 65535), notes)) {
                     mss_fix = QtStrings.toInt(value)
                     if (args.size > 2 && (args[2] == "mtu" || args[2] == "fixed")) mss_fix_mode = args[2]
                 }
                 continue
             }
             if (key == "fragment") {
-                fragment = QtStrings.toInt(value)
+                if (VpnFileImport.accept(key, value, OpenVpnChecks.openVpnFragment(value), notes)) fragment = QtStrings.toInt(value)
                 continue
             }
             if (key == "replay-window") {
-                replay_window = QtStrings.toInt(value)
-                if (args.size > 2) replay_window_time = VpnFileImport.duration(args[2])
+                if (VpnFileImport.accept(key, value, OpenVpnChecks.openVpnReplayWindow(value), notes)) replay_window = QtStrings.toInt(value)
+                if (args.size > 2) {
+                    val window = VpnFileImport.duration(key, args[2], notes)
+                    if (VpnFileImport.accept(key, args[2], OpenVpnChecks.openVpnReplayWindowTime(window), notes)) replay_window_time = window
+                }
                 continue
             }
             if (key == "compress") {
@@ -1249,7 +1428,7 @@ class OpenVpn : Outbound("openvpn") {
             }
             if (key == "route" && args.size > 1) {
                 if (VpnFileImport.routeKeyword(args[1])) {
-                    notes.add("Ignored a symbolic route target: route ${args[1]}")
+                    notes.add(vtr(R.string.validation_ovpn_note_route_symbolic, args[1]))
                     continue
                 }
                 val prefix: String
@@ -1263,14 +1442,21 @@ class OpenVpn : Outbound("openvpn") {
                     prefix = VpnFileImport.prefix(args[1], "255.255.255.255")
                 }
                 if (prefix.isEmpty()) {
-                    notes.add("Ignored an unreadable route: ${args.subList(1, args.size).joinToString(" ")}")
+                    notes.add(vtr(R.string.validation_ovpn_note_route_unreadable, args.subList(1, args.size).joinToString(" ")))
                     continue
                 }
                 if (prefix !in routes) routes.add(prefix)
-                if (args.size > next && !VpnFileImport.routeKeyword(args[next]) && route_gateway.isEmpty()) {
+                // OpenVPN also takes a host name here; the endpoint needs an address.
+                if (args.size > next && !VpnFileImport.routeKeyword(args[next]) && route_gateway.isEmpty() &&
+                    VpnFileImport.accept(key, args[next], Validation.ip(args[next]), notes)
+                ) {
                     route_gateway = args[next]
                 }
-                if (args.size > next + 1 && route_metric == 0) route_metric = QtStrings.toInt(args[next + 1])
+                if (args.size > next + 1 && route_metric == 0 &&
+                    VpnFileImport.accept(key, args[next + 1], Validation.int(args[next + 1], 0, Int.MAX_VALUE.toLong()), notes)
+                ) {
+                    route_metric = QtStrings.toInt(args[next + 1])
+                }
                 continue
             }
             if (key == "route-ipv6" && args.size > 1) {
@@ -1278,16 +1464,20 @@ class OpenVpn : Outbound("openvpn") {
                 if (prefix.isNotEmpty()) {
                     if (prefix !in routes) routes.add(prefix)
                 } else {
-                    notes.add("Ignored an unreadable route: ${args.subList(1, args.size).joinToString(" ")}")
+                    notes.add(vtr(R.string.validation_ovpn_note_route_unreadable, args.subList(1, args.size).joinToString(" ")))
                 }
                 continue
             }
             if (key == "route-gateway") {
-                if (!VpnFileImport.routeKeyword(value)) route_gateway = value
+                if (!VpnFileImport.routeKeyword(value) &&
+                    VpnFileImport.accept(key, value, Validation.ip(value, Family.Any, Empty.Allowed), notes)
+                ) {
+                    route_gateway = value
+                }
                 continue
             }
             if (key == "route-metric") {
-                route_metric = QtStrings.toInt(value)
+                if (VpnFileImport.accept(key, value, Validation.int(value, 0, Int.MAX_VALUE.toLong()), notes)) route_metric = QtStrings.toInt(value)
                 continue
             }
             if (key == "redirect-gateway" || key == "redirect-private") {
@@ -1296,7 +1486,7 @@ class OpenVpn : Outbound("openvpn") {
                 for (i in 1 until args.size) {
                     val flag = args[i].lowercase()
                     if (flag == "block-local" || flag == "bypass-dhcp" || flag == "bypass-dns") {
-                        notes.add("redirect-gateway flag has no sing-box equivalent: $flag")
+                        notes.add(vtr(R.string.validation_ovpn_note_redirect_flag, flag))
                         continue
                     }
                     if (flag !in redirect_gateway_flags) redirect_gateway_flags.add(flag)
@@ -1309,55 +1499,59 @@ class OpenVpn : Outbound("openvpn") {
             }
 
             if (key == "keepalive" && args.size > 2) {
-                ping_interval = VpnFileImport.duration(args[1])
-                ping_restart = VpnFileImport.duration(args[2])
+                ping_interval = VpnFileImport.duration(key, args[1], notes)
+                ping_restart = VpnFileImport.duration(key, args[2], notes)
                 continue
             }
             if (key == "ping") {
-                ping_interval = VpnFileImport.duration(value)
+                ping_interval = VpnFileImport.duration(key, value, notes)
                 continue
             }
             if (key == "ping-restart") {
                 if (value == "0") ping_restart_disabled = true
-                else ping_restart = VpnFileImport.duration(value)
+                else ping_restart = VpnFileImport.duration(key, value, notes)
                 continue
             }
             if (key == "reneg-sec") {
                 if (value == "0") renegotiate_disabled = true
-                else renegotiate_interval = VpnFileImport.duration(value)
+                else renegotiate_interval = VpnFileImport.duration(key, value, notes)
                 continue
             }
             if (key == "reneg-bytes") {
-                renegotiate_bytes = QtStrings.toLong(value)
+                if (VpnFileImport.accept(key, value, Validation.int(value, 0, Long.MAX_VALUE), notes)) renegotiate_bytes = QtStrings.toLong(value)
                 continue
             }
             if (key == "reneg-pkts") {
-                renegotiate_packets = QtStrings.toLong(value)
+                if (VpnFileImport.accept(key, value, Validation.int(value, 0, Long.MAX_VALUE), notes)) renegotiate_packets = QtStrings.toLong(value)
                 continue
             }
             if (key == "tls-timeout") {
-                tls_timeout = VpnFileImport.duration(value)
+                tls_timeout = VpnFileImport.duration(key, value, notes)
                 continue
             }
             if (key == "hand-window") {
-                handshake_window = VpnFileImport.duration(value)
+                handshake_window = VpnFileImport.duration(key, value, notes)
                 continue
             }
             if (key == "explicit-exit-notify") {
-                explicit_exit_notify = if (value.isEmpty()) 1 else QtStrings.toInt(value)
+                if (value.isEmpty()) {
+                    explicit_exit_notify = 1
+                } else if (VpnFileImport.accept(key, value, Validation.int(value, 0, Int.MAX_VALUE.toLong()), notes)) {
+                    explicit_exit_notify = QtStrings.toInt(value)
+                }
                 continue
             }
             if (key == "tun-mtu") {
-                mtu = QtStrings.toInt(value)
+                if (VpnFileImport.accept(key, value, Validation.int(value, 0, 65535), notes)) mtu = QtStrings.toInt(value)
                 continue
             }
 
             if (key in VpnFileImport.OVPN_IGNORED) continue
             if (key in VpnFileImport.OVPN_UNSUPPORTED) {
-                notes.add("Not supported by the OpenVPN endpoint, ignored: $key")
+                notes.add(vtr(R.string.validation_ovpn_note_unsupported, key))
                 continue
             }
-            notes.add("Unknown OpenVPN directive, ignored: $key")
+            notes.add(vtr(R.string.validation_ovpn_note_unknown, key))
         }
 
         if (fatal.isNotEmpty()) {
@@ -1374,7 +1568,7 @@ class OpenVpn : Outbound("openvpn") {
             tls.client_key.clear()
             tls.client_key_path = ""
             if (dropped) {
-                notes.add("`$clientCertSwitch` turns the client certificate off; it was dropped and the server has to accept password login.")
+                notes.add(vtr(R.string.validation_ovpn_note_client_cert_off, clientCertSwitch))
             }
         }
         // The core, like OpenVPN 2.x, refuses a lone certificate or key; OpenVPN 3 only tolerates it behind the switch.
@@ -1382,8 +1576,8 @@ class OpenVpn : Outbound("openvpn") {
         val hasClientKey = tls.client_key.isNotEmpty() || tls.client_key_path.isNotEmpty()
         if (hasClientCert != hasClientKey) {
             notes.add(
-                if (hasClientCert) "`cert` without a `key`: add the private key, or `client-cert-not-required` for password-only login."
-                else "`key` without a `cert`: add the client certificate."
+                if (hasClientCert) vtr(R.string.validation_ovpn_note_cert_without_key)
+                else vtr(R.string.validation_ovpn_note_key_without_cert)
             )
             flush()
             return false
@@ -1393,7 +1587,7 @@ class OpenVpn : Outbound("openvpn") {
             if (remote.port == 0) remote.port = if (defaultPort > 0) defaultPort else VpnFileImport.OVPN_DEFAULT_PORT
         }
         if (remotes.isEmpty()) {
-            notes.add("No `remote` server in the OpenVPN configuration.")
+            notes.add(vtr(R.string.validation_ovpn_note_no_remote))
             flush()
             return false
         }
@@ -1421,7 +1615,7 @@ class OpenVpn : Outbound("openvpn") {
             val masked = topology == "subnet" || ifconfigSecond.startsWith("255.")
             val parsed = VpnFileImport.parseSubnet(ifconfigLocal + "/" + (if (masked) ifconfigSecond else "32"))
             if (parsed != null) address.add(ifconfigLocal + "/" + parsed.second)
-            else notes.add("Ignored an unreadable interface address: $ifconfigLocal")
+            else notes.add(vtr(R.string.validation_ovpn_note_interface_address, ifconfigLocal))
             if (!masked) peer_address = ifconfigSecond
         }
 
@@ -1433,10 +1627,14 @@ class OpenVpn : Outbound("openvpn") {
         // Outside static-key mode `cipher` is the pre-negotiation data cipher.
         if (legacyCipher.isNotEmpty()) {
             if (mode == "static_key") cipher = legacyCipher
-            else if (data_ciphers_fallback.isEmpty()) data_ciphers_fallback = legacyCipher
+            else if (data_ciphers_fallback.isEmpty() &&
+                VpnFileImport.accept("cipher", legacyCipher, OpenVpnChecks.openVpnCipherName(legacyCipher), notes)
+            ) {
+                data_ciphers_fallback = legacyCipher
+            }
         }
         if (tls.remote_certificate_eku.isNotEmpty() && tls.remote_certificate_tls.isNotEmpty()) {
-            notes.add("`remote-cert-eku` replaces `remote-cert-tls`; the latter was dropped.")
+            notes.add(vtr(R.string.validation_ovpn_note_eku_replaces))
             tls.remote_certificate_tls = ""
         }
         // A redirect-gateway config is a full tunnel, not a management network.
@@ -1451,5 +1649,394 @@ class OpenVpn : Outbound("openvpn") {
 
         flush()
         return true
+    }
+}
+
+/** ovpnKeep (openvpn.cpp): only an import drops an optional value the core would refuse, with a warning; DB loads and clones keep it. */
+private fun ovpnKeep(field: String, message: String, value: String): Boolean = !ParseDiag.active() || acceptOptional(field, message, value)
+
+/** ovpnReadChecked (openvpn.cpp): the trimmed string at [key], or [current] when it is absent or the import drops it. */
+private fun ovpnReadChecked(obj: JsonObject, key: String, field: String, current: String, rule: Rule): String {
+    if (!obj.contains(key)) return current
+    val value = obj.string(key).trim()
+    return if (ovpnKeep(field, rule(value), value)) value else current
+}
+
+/** ovpnKeepItems (openvpn.cpp): the trimmed, non-empty items the import keeps. */
+private fun ovpnKeepItems(field: String, items: List<String>, rule: Rule): MutableList<String> {
+    val kept = ArrayList<String>()
+    for (raw in items) {
+        val item = raw.trim()
+        if (item.isNotEmpty() && ovpnKeep(field, rule(item), item)) kept.add(item)
+    }
+    return kept
+}
+
+/** The Checks of openvpn.h: per-field rules for the OpenVPN editors and the import check; profile checks read the saved fields. */
+object OpenVpnChecks {
+    private val CBC_CIPHERS = listOf(
+        "BF-CBC", "DES-CBC", "DES-EDE-CBC", "DES-EDE3-CBC", "CAST5-CBC", "AES-128-CBC", "AES-192-CBC", "AES-256-CBC",
+        "ARIA-128-CBC", "ARIA-192-CBC", "ARIA-256-CBC", "CAMELLIA-128-CBC", "CAMELLIA-192-CBC", "CAMELLIA-256-CBC",
+        "SEED-CBC", "SM4-CBC",
+    )
+    private val AEAD_CIPHERS = listOf("AES-128-GCM", "AES-192-GCM", "AES-256-GCM", "CHACHA20-POLY1305")
+    private val DIGESTS = listOf("SHA1", "SHA224", "SHA256", "SHA384", "SHA512", "RIPEMD160", "MD5", "NONE")
+    private val SHA256 = Regex("^[0-9a-f]{64}$")
+    private val EKU_NAMES = setOf(
+        "server", "client", "TLS Web Server Authentication", "TLS Web Client Authentication", "Code Signing",
+        "E-mail Protection", "IPSec End System", "IPSec Tunnel", "IPSec User", "Time Stamping", "OCSP Signing",
+        "Any Extended Key Usage", "Microsoft Server Gated Crypto", "Netscape Server Gated Crypto",
+        "Microsoft Commercial Code Signing", "Microsoft Individual Code Signing",
+    )
+    private val TLS_CIPHERS = setOf(
+        "RC4-SHA", "DES-CBC3-SHA", "AES128-SHA", "AES256-SHA", "AES128-SHA256", "AES128-GCM-SHA256",
+        "AES256-GCM-SHA384", "ECDHE-ECDSA-AES128-SHA", "ECDHE-ECDSA-AES256-SHA", "ECDHE-ECDSA-RC4-SHA",
+        "ECDHE-RSA-RC4-SHA", "ECDHE-RSA-DES-CBC3-SHA", "ECDHE-RSA-AES128-SHA", "ECDHE-RSA-AES256-SHA",
+        "ECDHE-ECDSA-AES128-SHA256", "ECDHE-RSA-AES128-SHA256", "ECDHE-ECDSA-AES128-GCM-SHA256",
+        "ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-ECDSA-AES256-GCM-SHA384", "ECDHE-RSA-AES256-GCM-SHA384",
+        "ECDHE-ECDSA-CHACHA20-POLY1305", "ECDHE-RSA-CHACHA20-POLY1305",
+        "TLS_RSA_WITH_RC4_128_SHA", "TLS_RSA_WITH_3DES_EDE_CBC_SHA", "TLS_RSA_WITH_AES_128_CBC_SHA",
+        "TLS_RSA_WITH_AES_256_CBC_SHA", "TLS_RSA_WITH_AES_128_CBC_SHA256", "TLS_RSA_WITH_AES_128_GCM_SHA256",
+        "TLS_RSA_WITH_AES_256_GCM_SHA384", "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA", "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+        "TLS_ECDHE_ECDSA_WITH_RC4_128_SHA", "TLS_ECDHE_RSA_WITH_RC4_128_SHA", "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
+        "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+        "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+        "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+        "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256", "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+    )
+    private val TLS_GROUPS = setOf(
+        "X25519", "CURVE25519", "SECP256R1", "PRIME256V1", "P-256", "NISTP256",
+        "SECP384R1", "P-384", "NISTP384", "SECP521R1", "P-521", "NISTP521",
+    )
+    private val TLS_VERSIONS = listOf("1.0", "1.1", "1.2", "1.3")
+    private val WRAP_TYPES = listOf("tls_auth", "tls_crypt", "tls_crypt_v2")
+
+    /** sing-openvpn staticCipherKeySize. */
+    private fun staticCipher(name: String) = name == "NONE" || name in CBC_CIPHERS
+
+    /** sing-openvpn validateDataCipherName: the static ciphers, the AEADs and the -CFB/-OFB form of a CBC cipher. */
+    private fun dataCipher(name: String): Boolean {
+        if (staticCipher(name) || name in AEAD_CIPHERS) return true
+        if (name.endsWith("-CFB") || name.endsWith("-OFB")) return (name.dropLast(4) + "-CBC") in CBC_CIPHERS
+        return false
+    }
+
+    private fun durationNs(text: String): Long? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return 0L
+        return Validation.parseDurationNs(trimmed)
+    }
+
+    /** An unparsable value counts as set: the field's own rule reports it. */
+    private fun durationSet(text: String): Boolean = (durationNs(text) ?: 1L) != 0L
+
+    /** sing-openvpn validateDurationOption, plus validatePingDurationOption's whole seconds. */
+    private fun durationRule(text: String, wholeSeconds: Boolean): String {
+        Validation.duration(text, Validation.DurationRule(wholeSeconds = wholeSeconds)).let { if (it.isNotEmpty()) return it }
+        val ns = durationNs(text) ?: 0L
+        if (ns > 0L && ns < 1_000_000_000L) return vtr(R.string.validation_ovpn_interval_min)
+        return ""
+    }
+
+    private fun staticMode(profile: OpenVpn) = profile.mode == "static_key"
+
+    private fun pullFiltersSet(profile: OpenVpn) = profile.pull_filters.any { it.action.isNotEmpty() || it.text.isNotEmpty() }
+
+    /** Names are checked upper-cased, as the editors save them and the build emits them. */
+    @JvmStatic
+    fun openVpnCipherName(name: String): String {
+        val upper = name.trim().uppercase()
+        if (upper.isEmpty() || dataCipher(upper)) return ""
+        if (upper.contains(':')) return vtr(R.string.validation_ovpn_cipher_colons)
+        return vtr(R.string.validation_ovpn_cipher_name)
+    }
+
+    @JvmStatic
+    fun openVpnDigest(name: String): String = Validation.oneOf(name.trim().uppercase(), DIGESTS)
+
+    /** Colons and spaces removed, lower-cased. */
+    @JvmStatic
+    fun openVpnNormalizeFingerprint(line: String): String {
+        val hex = StringBuilder()
+        for (c in line) if (c != ':' && !VpnFileImport.isSpace(c)) hex.append(c.lowercaseChar())
+        return hex.toString()
+    }
+
+    @JvmStatic
+    fun openVpnFingerprint(line: String): String {
+        val hex = openVpnNormalizeFingerprint(line)
+        if (hex.isEmpty() || SHA256.matches(hex)) return ""
+        return vtr(R.string.validation_ovpn_fingerprint)
+    }
+
+    /** strconv.ParseUint(value, 16, 64), as --remote-cert-ku reads it. */
+    @JvmStatic
+    fun openVpnKeyUsage(item: String): String {
+        if (Validation.hex(item, 1, 16, false).isEmpty()) return ""
+        return vtr(R.string.validation_ovpn_key_usage)
+    }
+
+    /** sing-openvpn parseRemoteCertExtKeyUsage: an OpenSSL purpose name or a dotted OID. */
+    @JvmStatic
+    fun openVpnExtendedKeyUsage(text: String): String {
+        val value = text.trim()
+        if (value.isEmpty() || value in EKU_NAMES) return ""
+        val parts = value.split('.')
+        val oid = parts.size >= 2 && parts.all { part -> part.isNotEmpty() && part.length <= 9 && part.all { it in '0'..'9' } }
+        return if (oid) "" else vtr(R.string.validation_ovpn_eku)
+    }
+
+    /** OpenVPN's TLS-ECDHE-RSA-WITH-... spelling becomes the TLS_ECDHE_RSA_WITH_... name the core knows. */
+    @JvmStatic
+    fun openVpnNormalizeTlsCipher(text: String): String = text.trim().split(':').joinToString(":") { token ->
+        if (token.startsWith("TLS-", ignoreCase = true) && token.contains("-WITH-", ignoreCase = true)) {
+            token.uppercase().replace('-', '_')
+        } else {
+            token
+        }
+    }
+
+    /** sing-openvpn parseTLSCipherSuites: its OpenSSL table or Go's name for the same suites. */
+    @JvmStatic
+    fun openVpnTlsCipher(text: String): String {
+        val value = openVpnNormalizeTlsCipher(text)
+        if (value.isEmpty()) return ""
+        for (token in value.split(':')) {
+            if (token.isEmpty()) return vtr(R.string.validation_ovpn_empty_entry)
+            if (token !in TLS_CIPHERS) return vtr(R.string.validation_ovpn_tls_cipher, token)
+        }
+        return ""
+    }
+
+    /** sing-openvpn parseTLSGroups, after the upper-casing the build applies. */
+    @JvmStatic
+    fun openVpnTlsGroups(text: String): String {
+        val value = text.trim().uppercase()
+        if (value.isEmpty()) return ""
+        for (token in value.split(':')) {
+            if (token.isEmpty()) return vtr(R.string.validation_ovpn_empty_entry)
+            if (token !in TLS_GROUPS) return vtr(R.string.validation_ovpn_tls_group, token)
+        }
+        return ""
+    }
+
+    /** Renegotiation, TLS timeout and handshake window: 0 or at least 1s. */
+    @JvmStatic
+    fun openVpnInterval(text: String): String = durationRule(text, false)
+
+    /** Ping interval and restart: the same, in whole seconds. */
+    @JvmStatic
+    fun openVpnPingInterval(text: String): String = durationRule(text, true)
+
+    @JvmStatic
+    fun openVpnReplayWindowTime(text: String): String =
+        Validation.duration(text, Validation.DurationRule(wholeSeconds = true, maxNs = 600L * 1_000_000_000L))
+
+    @JvmStatic
+    fun openVpnFragment(text: String): String {
+        Validation.int(text, 0, 65535).let { if (it.isNotEmpty()) return it }
+        val value = Validation.toInt(text) ?: 0L
+        if (value > 0L && value < 68L) return vtr(R.string.validation_ovpn_fragment)
+        return ""
+    }
+
+    @JvmStatic
+    fun openVpnReplayWindow(text: String): String = Validation.int(text, 0, 65536)
+
+    /** sing-openvpn resolveClientRemotes refuses whitespace and brackets. */
+    @JvmStatic
+    fun openVpnRemoteHost(text: String): String {
+        val host = text.trim()
+        if (host.startsWith('[') || host.endsWith(']')) return vtr(R.string.validation_ovpn_remote_brackets)
+        return Validation.host(host)
+    }
+
+    @JvmStatic
+    fun openVpnRemotePort(text: String): String = Validation.port(text)
+
+    /** JSON keys of the options the profile's mode refuses (static_key: TLS and authentication; tls: the static key). */
+    @JvmStatic
+    fun openVpnModeConflicts(profile: OpenVpn): List<String> {
+        val keys = ArrayList<String>()
+        fun add(set: Boolean, key: String) {
+            if (set) keys.add(key)
+        }
+        if (!staticMode(profile)) {
+            add(profile.static_key.isNotEmpty(), "static_key")
+            add(profile.static_key_path.isNotEmpty(), "static_key_path")
+            add(profile.key_direction.isNotEmpty(), "key_direction")
+            add(profile.cipher.isNotEmpty(), "cipher")
+            return keys
+        }
+        // sing-box buildStaticKeyClientOptions and sing-openvpn validateImplementedClientOptions.
+        val tls = profile.tls
+        add(profile.username.isNotEmpty(), "username")
+        add(profile.password.isNotEmpty(), "password")
+        add(profile.auth_retry.isNotEmpty() && profile.auth_retry != "none", "auth_retry")
+        add(profile.static_challenge.isNotEmpty(), "static_challenge")
+        add(profile.static_challenge_echo, "static_challenge_echo")
+        add(profile.route_no_pull, "route_no_pull")
+        add(pullFiltersSet(profile), "pull_filters")
+        add(durationSet(profile.renegotiate_interval), "renegotiate_interval")
+        add(profile.renegotiate_disabled, "renegotiate_disabled")
+        add(profile.renegotiate_bytes > 0, "renegotiate_bytes")
+        add(profile.renegotiate_packets > 0, "renegotiate_packets")
+        add(durationSet(profile.tls_timeout), "tls_timeout")
+        add(durationSet(profile.handshake_window), "handshake_window")
+        add(profile.data_ciphers.isNotEmpty(), "data_ciphers")
+        add(profile.data_ciphers_fallback.isNotEmpty(), "data_ciphers_fallback")
+        add(tls.server_name.isNotEmpty(), "tls.server_name")
+        add(tls.server_name_type.isNotEmpty(), "tls.server_name_type")
+        add(tls.certificate.isNotEmpty(), "tls.certificate")
+        add(tls.certificate_path.isNotEmpty(), "tls.certificate_path")
+        add(tls.client_certificate.isNotEmpty(), "tls.client_certificate")
+        add(tls.client_certificate_path.isNotEmpty(), "tls.client_certificate_path")
+        add(tls.client_key.isNotEmpty(), "tls.client_key")
+        add(tls.client_key_path.isNotEmpty(), "tls.client_key_path")
+        add(tls.peer_fingerprint.isNotEmpty(), "tls.peer_fingerprint")
+        add(tls.crl_path.isNotEmpty(), "tls.crl_path")
+        add(tls.remote_certificate_ku.isNotEmpty(), "tls.remote_certificate_ku")
+        add(tls.remote_certificate_eku.isNotEmpty(), "tls.remote_certificate_eku")
+        add(tls.remote_certificate_tls.isNotEmpty(), "tls.remote_certificate_tls")
+        add(tls.certificate_profile.isNotEmpty(), "tls.certificate_profile")
+        add(tls.ns_certificate_type.isNotEmpty(), "tls.ns_certificate_type")
+        add(tls.version_min.isNotEmpty(), "tls.version_min")
+        add(tls.version_max.isNotEmpty(), "tls.version_max")
+        add(tls.cipher.isNotEmpty(), "tls.cipher")
+        add(tls.groups.isNotEmpty(), "tls.groups")
+        add(tls.control_wrap.type.isNotEmpty(), "tls.control_wrap")
+        return keys
+    }
+
+    /** The message for one key of [openVpnModeConflicts], or "" when that key is fine. */
+    @JvmStatic
+    fun openVpnModeConflict(profile: OpenVpn, key: String): String {
+        if (key !in openVpnModeConflicts(profile)) return ""
+        if (staticMode(profile)) return vtr(R.string.validation_ovpn_static_unused)
+        if (key == "cipher") return vtr(R.string.validation_ovpn_cipher_static_only)
+        if (key == "key_direction") return vtr(R.string.validation_ovpn_key_direction_static_only)
+        return vtr(R.string.validation_ovpn_static_key_static_only)
+    }
+
+    @JvmStatic
+    fun openVpnStaticKeyMissing(profile: OpenVpn): String {
+        if (!staticMode(profile) || profile.static_key.isNotEmpty() || profile.static_key_path.isNotEmpty()) return ""
+        return vtr(R.string.validation_ovpn_static_key_missing)
+    }
+
+    @JvmStatic
+    fun openVpnStaticCipher(profile: OpenVpn): String {
+        if (!staticMode(profile)) return ""
+        val cipher = profile.cipher.trim().uppercase()
+        if (cipher.isEmpty()) return vtr(R.string.validation_ovpn_static_cipher_missing)
+        if (dataCipher(cipher) && !staticCipher(cipher)) return vtr(R.string.validation_ovpn_static_cipher_cbc)
+        return ""
+    }
+
+    @JvmStatic
+    fun openVpnStaticAddress(profile: OpenVpn): String {
+        if (!staticMode(profile)) return ""
+        if (profile.address.isEmpty()) return vtr(R.string.validation_ovpn_static_address_missing)
+        var v4 = false
+        var v6 = false
+        for (item in profile.address) {
+            // A malformed item is reported by its own rule.
+            if (Validation.cidr(item).isNotEmpty()) return ""
+            if (item.contains(':')) v6 = true else v4 = true
+        }
+        val peer4 = profile.peer_address.trim().isNotEmpty()
+        val peer6 = profile.peer_address_ipv6.trim().isNotEmpty()
+        if (v4 && !peer4) return vtr(R.string.validation_ovpn_static_peer4_missing)
+        if (v6 && !peer6) return vtr(R.string.validation_ovpn_static_peer6_missing)
+        if (peer4 && !v4) return vtr(R.string.validation_ovpn_static_address4_missing)
+        if (peer6 && !v6) return vtr(R.string.validation_ovpn_static_address6_missing)
+        return ""
+    }
+
+    /** sing-openvpn requireCAOrPeerFingerprint runs at session start, so a bare client pair still fails. */
+    @JvmStatic
+    fun openVpnTlsVerification(profile: OpenVpn): String {
+        if (staticMode(profile)) return ""
+        val tls = profile.tls
+        if (tls.certificate.isNotEmpty() || tls.certificate_path.trim().isNotEmpty() || tls.peer_fingerprint.isNotEmpty()) return ""
+        return vtr(R.string.validation_ovpn_tls_verification)
+    }
+
+    @JvmStatic
+    fun openVpnClientPair(profile: OpenVpn): String {
+        if (staticMode(profile)) return ""
+        val tls = profile.tls
+        val certificate = tls.client_certificate.isNotEmpty() || tls.client_certificate_path.isNotEmpty()
+        val key = tls.client_key.isNotEmpty() || tls.client_key_path.isNotEmpty()
+        if (certificate == key) return ""
+        return vtr(if (certificate) R.string.validation_ovpn_client_key_missing else R.string.validation_ovpn_client_certificate_missing)
+    }
+
+    /** The same material pasted and as a file path, which the core refuses; OpenConnect uses it too. */
+    @JvmStatic
+    fun vpnMaterialConflict(inlineValue: List<String>, path: String): String {
+        if (inlineValue.isEmpty() || path.trim().isEmpty()) return ""
+        return vtr(R.string.validation_ovpn_material_conflict)
+    }
+
+    @JvmStatic
+    fun openVpnControlWrapKey(profile: OpenVpn): String {
+        val wrap = profile.tls.control_wrap
+        val key = wrap.key.isNotEmpty() || wrap.key_path.trim().isNotEmpty()
+        if (wrap.type.isEmpty()) {
+            if (!key) return ""
+            if (staticMode(profile)) return vtr(R.string.validation_ovpn_wrap_static)
+            return vtr(R.string.validation_ovpn_wrap_type_missing)
+        }
+        Validation.oneOf(wrap.type, WRAP_TYPES).let { if (it.isNotEmpty()) return it }
+        if (!key) return vtr(R.string.validation_ovpn_wrap_key_missing)
+        return ""
+    }
+
+    @JvmStatic
+    fun openVpnControlWrapDirection(profile: OpenVpn): String {
+        val wrap = profile.tls.control_wrap
+        if (wrap.direction.isEmpty()) return ""
+        Validation.oneOf(wrap.direction, listOf("server", "client")).let { if (it.isNotEmpty()) return it }
+        if (wrap.type != "tls_auth") return vtr(R.string.validation_ovpn_wrap_direction)
+        return ""
+    }
+
+    @JvmStatic
+    fun openVpnRemoteCertificate(profile: OpenVpn): String {
+        val tls = profile.tls
+        if (tls.remote_certificate_eku.trim().isEmpty() || tls.remote_certificate_tls.isEmpty()) return ""
+        return vtr(R.string.validation_ovpn_remote_certificate)
+    }
+
+    /** sing-openvpn resolveTLSVersionBounds: an unset minimum is 1.2. */
+    @JvmStatic
+    fun openVpnTlsVersions(profile: OpenVpn): String {
+        val tls = profile.tls
+        val min = TLS_VERSIONS.indexOf(tls.version_min.ifEmpty { "1.2" })
+        val max = TLS_VERSIONS.indexOf(tls.version_max)
+        if (min < 0 || max < 0 || max >= min) return ""
+        return vtr(R.string.validation_ovpn_tls_versions)
+    }
+
+    @JvmStatic
+    fun openVpnMssFix(profile: OpenVpn): String {
+        if (profile.mss_fix_disabled && profile.mss_fix > 0) return vtr(R.string.validation_ovpn_mss_value_disabled)
+        if (profile.mss_fix_disabled && profile.mss_fix_mode.isNotEmpty()) return vtr(R.string.validation_ovpn_mss_mode_disabled)
+        if (profile.mss_fix <= 0 && profile.mss_fix_mode.isNotEmpty()) return vtr(R.string.validation_ovpn_mss_mode_value)
+        return ""
+    }
+
+    @JvmStatic
+    fun openVpnPingRestart(profile: OpenVpn): String {
+        if (!profile.ping_restart_disabled || (durationNs(profile.ping_restart) ?: 0L) <= 0L) return ""
+        return vtr(R.string.validation_ovpn_ping_restart_disabled)
+    }
+
+    @JvmStatic
+    fun openVpnRenegotiate(profile: OpenVpn): String {
+        if (!profile.renegotiate_disabled || (durationNs(profile.renegotiate_interval) ?: 0L) <= 0L) return ""
+        return vtr(R.string.validation_ovpn_renegotiate_disabled)
     }
 }

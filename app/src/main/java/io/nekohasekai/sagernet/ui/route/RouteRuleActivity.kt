@@ -6,6 +6,8 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import androidx.activity.addCallback
+import androidx.core.text.buildSpannedString
+import androidx.core.text.color
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
@@ -23,9 +25,12 @@ import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeLi
 import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
 import io.nekohasekai.sagernet.route.OutboundIds
 import io.nekohasekai.sagernet.route.RouteRule
+import io.nekohasekai.sagernet.route.RuleIssue
+import io.nekohasekai.sagernet.route.RuleSetCatalog
 import io.nekohasekai.sagernet.route.RuleType
 import io.nekohasekai.sagernet.ui.AppListActivity
 import io.nekohasekai.sagernet.ui.ThemedActivity
+import io.nekohasekai.sagernet.ui.ValidationForm
 import io.nekohasekai.sagernet.ui.WifiPermissionFlow
 import io.nekohasekai.sagernet.ui.profile.multilineInput
 import io.nekohasekai.sagernet.ui.profile.portInput
@@ -33,6 +38,7 @@ import io.nekohasekai.sagernet.ui.profile.setVisible
 import io.nekohasekai.sagernet.ui.settings.LinesSummaryProvider
 import io.nekohasekai.sagernet.utils.PackageCache
 import io.nekohasekai.sagernet.utils.WifiStateAccess
+import io.nekohasekai.sagernet.validation.Severity
 import io.nekohasekai.sagernet.widget.ListListener
 import io.nekohasekai.sagernet.widget.StringLinesPreference
 import kotlinx.coroutines.Dispatchers
@@ -59,8 +65,12 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
 
         private val TEXT_KEYS = listOf(
             "name", "action", "outbound_id", "reject_method", "strategy", "network", "protocol", "ip_version",
-            "override_address", "override_port",
+            "override_address", "override_port", "tls_fragment_fallback_delay",
         )
+
+        /** The single-value rows that show their own issues; the action row carries the whole-rule ones. */
+        private val SCALAR_KEYS = TEXT_KEYS - setOf("name", "action")
+
         private val LIST_KEYS = listOf(
             "domain_suffix", "domain", "ip_cidr", "rule_set", "package_name", "network_type", "domain_keyword",
             "domain_regex", "source_ip_cidr", "port", "port_range", "source_port", "source_port_range", "inbound",
@@ -68,14 +78,16 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
         )
         private val BOOL_KEYS = listOf(
             "sniff_override_dest", "ip_is_private", "source_ip_is_private", "invert", "no_drop", "network_is_expensive",
+            "tls_fragment", "tls_record_fragment",
         )
 
         /** The members inside the collapsed group. */
         private val ADVANCED_KEYS = listOf(
             "domain_keyword", "domain_regex", "ip_is_private", "source_ip_cidr", "source_ip_is_private", "port",
             "port_range", "source_port", "source_port_range", "network", "protocol", "ip_version", "inbound", "invert",
-            "override_address", "override_port", "no_drop", "package_name_regex", "process_name", "process_path",
-            "process_path_regex", "network_is_expensive", "wifi_ssid", "wifi_bssid",
+            "override_address", "override_port", "tls_fragment", "tls_fragment_fallback_delay", "tls_record_fragment",
+            "no_drop", "package_name_regex", "process_name", "process_path", "process_path_regex",
+            "network_is_expensive", "wifi_ssid", "wifi_bssid",
         )
 
         /** Android names apps by package, never by process: these show only when a desktop rule brought a value. */
@@ -94,6 +106,14 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
 
     /** Every server profile as (id, "[group] name"). */
     private var servers: List<Pair<Long, String>> = emptyList()
+
+    /** The rule-set list, so rule_set names are judged while editing. */
+    private var catalog: RuleSetCatalog? = null
+
+    private var issueCache: List<RuleIssue>? = null
+
+    /** RouteRule.checkValue per list row and line, shared by the row's error and warning bindings; dropped when the row changes. */
+    private val lineChecks = HashMap<String, HashMap<String, RuleIssue?>>()
 
     private val fragment get() = supportFragmentManager.findFragmentById(R.id.settings) as? RuleFragment
 
@@ -124,6 +144,7 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 servers = RouteServers.list()
+                catalog = RouteManager.catalog()
                 PackageCache.awaitLoadSync()
                 if (fresh) {
                     pbm.writeToCacheAll(rule)
@@ -150,8 +171,30 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
 
     override fun onPreferenceDataStoreChanged(store: PreferenceDataStore, key: String) {
         if (key == Key.PROFILE_DIRTY) return
+        issueCache = null
         DataStore.dirty = true
-        runOnUiThread { fragment?.refreshState() }
+        runOnUiThread {
+            lineChecks.remove(key)
+            fragment?.refreshState()
+            // RouteItem::scheduleRuleCheck: any field can change the whole-rule verdicts on the action row.
+            fragment?.form?.revalidate("action")
+        }
+    }
+
+    /** The rule as the screen shows it. */
+    private fun editedRule(): RouteRule = rule.copy().also {
+        pbm.fromCacheAll(it)
+        it.name = it.name.trim()
+    }
+
+    /** RouteRule::validate of [editedRule], kept until the next change in the cache store. */
+    private fun currentIssues(): List<RuleIssue> =
+        issueCache ?: RouteRuleChecks.issues(editedRule(), catalog).also { issueCache = it }
+
+    private fun checkLine(key: String, line: String): RuleIssue? {
+        val memo = lineChecks.getOrPut(key) { HashMap() }
+        if (memo.containsKey(line)) return memo[line]
+        return RouteRule.checkValue(key, line, catalog).also { memo[line] = it }
     }
 
     private fun setListValue(key: String, values: List<String>) {
@@ -227,14 +270,9 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
     }
 
     private fun save() {
-        val edited = rule.copy()
-        pbm.fromCacheAll(edited)
-        edited.name = edited.name.trim()
-        val problems = RouteRuleChecks.problems(this, edited)
-        if (problems.isNotEmpty()) {
-            message(R.string.route_rule_invalid_title, problems.joinToString("\n"))
-            return
-        }
+        // RouteItem::accept: errors keep the editor open, warnings never do.
+        if (fragment?.form?.validateAll() == false) return
+        val edited = editedRule()
         lifecycleScope.launch {
             val unknown = withContext(Dispatchers.IO) {
                 RouteRuleChecks.unknownRuleSets(edited.rule_set, RouteManager.catalog())
@@ -273,6 +311,9 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
     class RuleFragment : PreferenceFragmentCompat() {
 
         private val host get() = requireActivity() as RouteRuleActivity
+
+        var form: ValidationForm? = null
+            private set
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             preferenceManager.preferenceDataStore = DataStore.profileCacheStore
@@ -330,6 +371,78 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
                 true
             }
             refreshState()
+            attachValidation()
+        }
+
+        /**
+         * RouteItem::bindAttributeEditor and bindCurrentRule: list rows per line, single values by their own issues,
+         * cross-field issues on both rows, and whole-rule issues (and those of rows not shown) on the action row.
+         */
+        private fun attachValidation() {
+            val validation = ValidationForm(this)
+            for (key in LIST_KEYS) {
+                val check = { line: String -> host.checkLine(key, line) }
+                validation.bindLines(key) { RouteRuleChecks.lineError(it, check) }.cached()
+                validation.bind(key) { RouteRuleChecks.firstWarningLine(it, check) }.warning().raw().cached()
+            }
+            for (key in SCALAR_KEYS) {
+                validation.bind(key) { RouteRuleChecks.fieldMessage(host.currentIssues(), key, Severity.Error) }
+                validation.bind(key) { RouteRuleChecks.fieldMessage(host.currentIssues(), key, Severity.Warning) }.warning()
+            }
+            validation.bind("action") { wholeRuleMessage(Severity.Error) }
+            validation.bind("action") { wholeRuleMessage(Severity.Warning) }.warning()
+            for (shape in RouteRule.crossChecks()) {
+                val keys = listOf(shape.attr, shape.related).filter { findPreference<Preference>(it) != null }
+                if (keys.isEmpty()) continue
+                validation.addRule(keys, shape.severity) {
+                    val issue = host.currentIssues().firstOrNull {
+                        it.attr == shape.attr && it.related == shape.related && it.severity == shape.severity
+                    } ?: return@addRule ""
+                    // Marked on the other row only, so it names its own.
+                    if (rowActive(shape.attr)) issue.message else RouteRuleChecks.describe(requireContext(), issue)
+                }
+            }
+            validation.collapsed = { collapsedRow(it) }
+            validation.revealer = { key ->
+                val pref = findPreference<Preference>(key)
+                if (pref != null && collapsedRow(pref)) {
+                    host.advancedExpanded = true
+                    refreshState()
+                }
+            }
+            validation.start()
+            if (host.index >= 0 || DataStore.dirty) validation.markAll()
+            form = validation
+        }
+
+        private fun collapsedRow(pref: Preference): Boolean =
+            !host.advancedExpanded && pref.isVisible && pref.parent?.key == KEY_ADVANCED_CATEGORY
+
+        /** The form's own notion of a row it checks: shown (or only collapsed) and enabled. */
+        private fun rowActive(key: String): Boolean {
+            val pref = (if (key.isEmpty()) null else findPreference<Preference>(key)) ?: return false
+            return (pref.isShown || collapsedRow(pref)) && pref.isEnabled
+        }
+
+        private fun wholeRuleMessage(severity: Severity): String {
+            for (issue in host.currentIssues()) {
+                if (issue.severity != severity) continue
+                if (issue.attr == "action" && issue.related.isEmpty()) return issue.message
+                if (!rowActive(issue.attr) && !rowActive(issue.related)) return RouteRuleChecks.describe(requireContext(), issue)
+            }
+            return ""
+        }
+
+        /** The worst issue on a shown Advanced row, which the collapsed toggle reports like the desktop's tab icons. */
+        private fun advancedSeverity(): Severity? {
+            fun advanced(key: String) = key in ADVANCED_KEYS && findPreference<Preference>(key)?.isVisible == true
+            var worst: Severity? = null
+            for (issue in host.currentIssues()) {
+                if (!advanced(issue.attr) && !advanced(issue.related)) continue
+                if (issue.severity == Severity.Error) return Severity.Error
+                worst = Severity.Warning
+            }
+            return worst
         }
 
         override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -340,7 +453,10 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
 
         override fun onResume() {
             super.onResume()
-            if (preferenceScreen != null) refreshWifiHint()
+            if (preferenceScreen != null) {
+                refreshWifiHint()
+                form?.refresh()
+            }
         }
 
         /** The Wi-Fi fields say when location access is missing; setting the provider re-renders the summary. */
@@ -417,7 +533,11 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
             setVisible(effective == "reject", "reject_method", "no_drop")
             setVisible(effective == "resolve", "strategy")
             setVisible(effective == "sniff", "sniff_override_dest")
-            setVisible(routes || effective == "route-options", "override_address", "override_port")
+            val routeOptions = routes || effective == "route-options"
+            setVisible(routeOptions, "override_address", "override_port", "tls_fragment", "tls_record_fragment")
+            // A delay left without tls_fragment stays visible, so its warning can be acted on.
+            val delay = store.getBoolean("tls_fragment", false) || !store.getString("tls_fragment_fallback_delay").isNullOrBlank()
+            setVisible(routeOptions && delay, "tls_fragment_fallback_delay")
             for (key in DESKTOP_ONLY_KEYS) findPreference<Preference>(key)?.isVisible = !store.getString(key).isNullOrBlank()
 
             val set = ADVANCED_KEYS.count { key ->
@@ -429,7 +549,16 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
             findPreference<PreferenceCategory>(KEY_ADVANCED_CATEGORY)?.isVisible = expanded
             findPreference<Preference>(KEY_ADVANCED_TOGGLE)?.apply {
                 title = if (set > 0) getString(R.string.route_rule_advanced_count, set) else getString(R.string.route_rule_advanced)
-                summary = getString(if (expanded) R.string.route_rule_advanced_hide else R.string.route_rule_advanced_show)
+                val state = getString(if (expanded) R.string.route_rule_advanced_hide else R.string.route_rule_advanced_show)
+                val worst = if (expanded) null else advancedSeverity()
+                summary = if (worst == null) state else buildSpannedString {
+                    append(state).append('\n')
+                    color(ValidationForm.colorOf(requireContext(), worst)) {
+                        append(getString(
+                            if (worst == Severity.Error) R.string.validation_route_advanced_errors else R.string.validation_route_advanced_warnings
+                        ))
+                    }
+                }
                 setIcon(if (expanded) R.drawable.ic_baseline_expand_less_24 else R.drawable.ic_baseline_expand_more_24)
             }
         }

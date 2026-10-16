@@ -211,6 +211,12 @@
             app:entryValues="@array/utls_fingerprint_entry"
             app:defaultValue=""
             app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_lock_24"
+            app:key="tls.cipher_suites"
+            app:title="@string/cipher_suites"
+            app:dialogMessage="@string/cipher_suites_hint"
+            app:useSimpleSummaryProvider="true" />
         <SwitchPreference
             app:icon="@drawable/ic_baseline_security_24"
             app:key="tls.reality.enabled"

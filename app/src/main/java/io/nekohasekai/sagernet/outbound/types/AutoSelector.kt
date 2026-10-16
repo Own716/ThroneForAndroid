@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.outbound.types
 
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.BuildResult
 import io.nekohasekai.sagernet.outbound.Outbound
@@ -8,6 +9,11 @@ import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.JsonValues
 import io.nekohasekai.sagernet.outbound.json.jsonObjectOf
+import io.nekohasekai.sagernet.validation.Issue
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.addIssue
+import io.nekohasekai.sagernet.validation.vtr
 
 /**
  * autoSelector (include/configs/outbounds/autoselector.h, src/configs/outbounds/autoselector.cpp): a profile the
@@ -81,8 +87,20 @@ class AutoSelector : Outbound("autoselector") {
         return lookup.nameOf(gid) ?: "missing group"
     }
 
-    /** autoselector.h:58: no security of its own; it inherits whatever its members use. */
+    /** autoselector.h: no security of its own; it inherits whatever its members use. */
     override fun security(): SecurityInfo = SecurityInfo()
+
+    /** autoselector.h: the members carry the servers. */
+    override fun hasServerEndpoint(): Boolean = false
+
+    /** autoSelector::Validate (autoselector.cpp): parseFromJson already ran [normalize], so only the free-text fields can be wrong here. */
+    override fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
+        super.validate(issues, ctx)
+        issues.addIssue(Severity.Error, "name_filter", Validation.regex(nameFilter), nameFilter)
+        issues.addIssue(Severity.Error, "country_filter", AutoSelectorChecks.autoSelectorCountries(countryFilter), countryFilter)
+        issues.addIssue(Severity.Error, "test_url", AutoSelectorChecks.autoSelectorUrl(testURL), testURL)
+        issues.addIssue(Severity.Error, "connectivity_url", AutoSelectorChecks.autoSelectorUrl(connectivityURL), connectivityURL)
+    }
 
     /**
      * autoselector.h:61-95. A value of the wrong JSON type falls back to the member default (the desktop's
@@ -287,4 +305,36 @@ class AutoSelector : Outbound("autoselector") {
 
         private fun boolOr(value: Any?, default: Boolean): Boolean = value as? Boolean ?: default
     }
+}
+
+/** The Checks of autoselector.h: the free-text fields, and the bounds [AutoSelector.normalize] would otherwise clamp silently. */
+object AutoSelectorChecks {
+    /** The plan matches these against the two-letter country of each profile's last test. */
+    @JvmStatic
+    fun autoSelectorCountries(text: String): String = Validation.eachItem(text, Validation.Split.Comma, { code ->
+        if (code.length == 2 && code.all { it in 'A'..'Z' || it in 'a'..'z' }) "" else vtr(R.string.validation_autoselector_countries)
+    })
+
+    @JvmStatic
+    fun autoSelectorUrl(text: String): String = Validation.url(text, listOf("http", "https"))
+
+    @JvmStatic
+    fun autoSelectorBuildLimit(buildLimit: Int, poolCap: Int): String =
+        if (buildLimit <= poolCap) "" else vtr(R.string.validation_autoselector_build_limit, poolCap.toString())
+
+    @JvmStatic
+    fun autoSelectorBenchInterval(benchInterval: Int, interval: Int): String =
+        if (benchInterval >= interval) "" else vtr(R.string.validation_autoselector_bench_interval, interval.toString())
+
+    @JvmStatic
+    fun autoSelectorWatchInterval(watchInterval: Int, interval: Int): String =
+        if (watchInterval <= interval) "" else vtr(R.string.validation_autoselector_watch_interval, interval.toString())
+
+    @JvmStatic
+    fun autoSelectorReadyCount(activeSize: Int, expected: Int): String =
+        if (activeSize >= expected) "" else vtr(R.string.validation_autoselector_ready_count, expected.toString())
+
+    @JvmStatic
+    fun autoSelectorCloseCount(activeSize: Int, buildLimit: Int): String =
+        if (activeSize <= buildLimit) "" else vtr(R.string.validation_autoselector_close_count, buildLimit.toString())
 }

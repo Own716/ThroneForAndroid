@@ -17,6 +17,8 @@ import io.nekohasekai.sagernet.database.backup.DesktopSchema.PROFILES
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.ROUTE_PROFILES
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.ROUTE_RULES
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.SETTINGS
+import io.nekohasekai.sagernet.group.RemoteRouteUpdater
+import io.nekohasekai.sagernet.group.SubscriptionScheduler
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonInput
@@ -71,6 +73,8 @@ object BackupRestore {
             if (choice.any()) {
                 val staged = stage(backup.database, choice, warnings)
                 commit(staged, choice, backup.contents.isAndroid, warnings)
+                if (choice.profiles || choice.settings) SubscriptionScheduler.schedule()
+                if (choice.settings) RemoteRouteUpdater.schedule()
             }
             return warnings
         } finally {

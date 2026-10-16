@@ -11,14 +11,18 @@ import androidx.activity.result.contract.ActivityResultContracts
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.database.ProfileManager
+import io.nekohasekai.sagernet.database.SettingsMapper
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.readableMessage
 import io.nekohasekai.sagernet.ktx.snackbar
 import io.nekohasekai.sagernet.ktx.startFilesForResult
 import io.nekohasekai.sagernet.outbound.Outbound
+import io.nekohasekai.sagernet.outbound.`import`.ImportReport
+import io.nekohasekai.sagernet.outbound.`import`.ProfileImport
 import io.nekohasekai.sagernet.ui.ConfigurationFragment
 import io.nekohasekai.sagernet.ui.ScannerActivity
 import io.nekohasekai.sagernet.ui.SubscribeFlows
+import io.nekohasekai.sagernet.ui.SubscriptionReportDialog
 import io.nekohasekai.sagernet.ui.profile.AnyTLSSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.AutoSelectorSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.ChainSettingsActivity
@@ -32,7 +36,6 @@ import io.nekohasekai.sagernet.ui.profile.MieruSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.NaiveSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.OpenConnectSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.OpenVpnSettingsActivity
-import io.nekohasekai.sagernet.ui.profile.ProfileTextImport
 import io.nekohasekai.sagernet.ui.profile.SSHSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.ShadowTLSSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.ShadowsocksSettingsActivity
@@ -100,20 +103,29 @@ class ProfileImports(private val host: ConfigurationFragment) {
                     return@launchIo
                 }
                 val outbounds = mutableListOf<Outbound>()
+                val report = ImportReport()
+                val preference = SettingsMapper.xrayVlessPreference()
+                val ctx = SettingsMapper.buildContext()
                 ZipInputStream(resolver.openInputStream(uri)!!).use { zip ->
                     while (true) {
                         val entry = zip.nextEntry ?: break
                         if (entry.isDirectory) continue
-                        outbounds.addAll(ProfileTextImport.parse(zip.bufferedReader().readText()))
+                        val result = ProfileImport.parse(zip.bufferedReader().readText(), preference, ctx)
+                        for (message in result.messages) Logs.w(message)
+                        report.addAll(result.reports)
+                        outbounds.addAll(result.outbounds)
                         zip.closeEntry()
                     }
                 }
-                if (outbounds.isEmpty()) {
-                    host.onUi { snackbar(R.string.no_proxies_found_in_file).show() }
-                } else {
-                    ProfileManager.addProfileBatch(outbounds, groupId)
-                    host.onUi {
-                        snackbar(resources.getQuantityString(R.plurals.added, outbounds.size, outbounds.size)).show()
+                if (outbounds.isNotEmpty()) ProfileManager.addProfileBatch(outbounds, groupId)
+                report.setImported(outbounds.size)
+                host.onUi {
+                    when {
+                        // The import box already says how many were imported.
+                        report.hasProblems() ->
+                            SubscriptionReportDialog.show(requireContext(), getString(R.string.validation_import_title), report.text())
+                        outbounds.isEmpty() -> snackbar(R.string.no_proxies_found_in_file).show()
+                        else -> snackbar(resources.getQuantityString(R.plurals.added, outbounds.size, outbounds.size)).show()
                     }
                 }
             } catch (e: Exception) {

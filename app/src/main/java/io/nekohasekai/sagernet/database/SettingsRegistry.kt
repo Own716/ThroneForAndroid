@@ -271,6 +271,11 @@ object SettingsRegistry {
     /** `key=value` pairs separated by commas. */
     @JvmField val SUB_CUSTOM_HWID_PARAMS = string("sub_custom_hwid_params", "")
     @JvmField val ALLOW_STOPPING_ACTIVE_PROFILE = bool("allow_stopping_active_profile", false)
+    /** [SubTlsVersion] / [SubHttpVersion] values (SettingsRepo.h sub_tls_version, sub_http_version). */
+    @JvmField val SUB_TLS_VERSION = int("sub_tls_version", 0) { it in 0..2 }
+    @JvmField val SUB_HTTP_VERSION = int("sub_http_version", 0) { it in 0..1 }
+    /** Follow a server's profile-update-interval instead of sub_auto_update's minutes. */
+    @JvmField val SUB_RESPECT_SERVER_INTERVAL = bool("sub_respect_server_interval", false)
 
     // ------------------------------------------------------------------------------------------------ warp
 
@@ -299,6 +304,15 @@ object SettingsRegistry {
     @JvmField val XRAY_LOG_LEVEL = oneOf("xray_log_level", "warning", XRAY_LOG_LEVELS)
     @JvmField val ENABLE_STATS = bool("enable_stats", true)
     @JvmField val DISABLE_TRAFFIC_STATS = bool("disable_traffic_stats", false)
+    /**
+     * The live traffic graph (SettingsRepo.h traffic_graph_*): hidden line keys ("proxy", "direct", the desktop's
+     * "route:<id>" and "aux:<id>"), hidden directions (bit 0 download, bit 1 upload), the 1m/2m/5m/10m window.
+     */
+    @JvmField val TRAFFIC_GRAPH_HIDDEN = stringList("traffic_graph_hidden", emptyList())
+    @JvmField val TRAFFIC_GRAPH_HIDDEN_DIRS = int("traffic_graph_hidden_dirs", 0) { it in 0..3 }
+    @JvmField val TRAFFIC_GRAPH_RANGE = int("traffic_graph_range", 1) { it in 0..3 }
+    @JvmField val TRAFFIC_GRAPH_SMOOTH = bool("traffic_graph_smooth", true)
+    @JvmField val TRAFFIC_GRAPH_MARKERS = bool("traffic_graph_markers", true)
     /** Sign-encoded port: at most 0 is off. */
     @JvmField val CORE_BOX_CLASH_API = int("core_box_clash_api", -9090) { it in -65535..65535 }
     @JvmField val CORE_BOX_CLASH_LISTEN_ADDR = string("core_box_clash_listen_addr", LOOPBACK_ADDRESS) { it.isNotBlank() }
@@ -332,7 +346,7 @@ object SettingsRegistry {
         Key.SHOW_DIRECT_SPEED, Key.SHOW_GROUP_IN_NOTIFICATION, Key.NOTIFICATION_ACTIONS,
         Key.USE_SYSTEM_THEME, Key.APP_THEME, Key.NIGHT_THEME, Key.AMOLED_THEME, Key.APP_LANGUAGE,
         Key.ALWAYS_SHOW_ADDRESS, Key.GROUP_LAYOUT_MODE,
-        Key.HIDE_FROM_RECENT_APPS, Key.LOG_BUF_SIZE, Key.APP_TLS_VERSION,
+        Key.HIDE_FROM_RECENT_APPS, Key.LOG_BUF_SIZE, Key.LOG_FONT_SIZE, Key.APP_TLS_VERSION,
         Key.WEBDAV_SERVER, Key.WEBDAV_USERNAME, Key.WEBDAV_PASSWORD, Key.WEBDAV_PATH,
         Key.PROFILE_CURRENT, Key.RUNNING_PROFILES, Key.PROFILE_ID, Key.PREVIEW_HINT_DISMISSED_VERSION,
         Key.UPDATE_CHECK_AUTO, Key.UPDATE_SKIPPED_VERSION_CODE, Key.RESUME_AFTER_UPDATE, Key.BATTERY_PROMPT_SHOWN,

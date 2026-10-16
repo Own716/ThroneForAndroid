@@ -15,7 +15,15 @@ import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SettingsMapper
 import io.nekohasekai.sagernet.database.preference.EditTextPreferenceModifiers
 import io.nekohasekai.sagernet.outbound.BuildContext
+import io.nekohasekai.sagernet.outbound.Outbound
 import io.nekohasekai.sagernet.outbound.common.Ech
+import io.nekohasekai.sagernet.outbound.common.QuicChecks
+import io.nekohasekai.sagernet.outbound.common.certificatePinsFromHex
+import io.nekohasekai.sagernet.outbound.common.splitCipherSuites
+import io.nekohasekai.sagernet.outbound.config.DnsServers
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.vtr
 import moe.matsuri.nb4a.proxy.PreferenceBindingManager
 import moe.matsuri.nb4a.ui.SimpleMenuPreference
 
@@ -70,6 +78,22 @@ fun PreferenceFragmentCompat.echInputs(prefix: String) {
     findPreference<EditTextPreference>("$prefix.config")?.setOnPreferenceChangeListener { row, newValue ->
         val lines = (newValue as String).split('\n').map { it.trim() }.filter { it.isNotEmpty() }
         (row as EditTextPreference).text = Ech.normalizeConfig(lines).joinToString("\n")
+        false
+    }
+}
+
+/** Cipher suite names as entered (split by line, ':' or ','), stored joined by [separator] (splitCipherSuites). */
+fun PreferenceFragmentCompat.cipherSuitesInput(key: String, separator: String) {
+    findPreference<EditTextPreference>(key)?.setOnPreferenceChangeListener { row, newValue ->
+        (row as EditTextPreference).text = splitCipherSuites((newValue as String).replace('\n', ':')).joinToString(separator)
+        false
+    }
+}
+
+/** Pins pasted as hex SHA-256 (openssl's output) are stored in the base64 form sing-box takes (CertificatePinsFromHex). */
+fun PreferenceFragmentCompat.certificatePinsInput(vararg keys: String) {
+    for (key in keys) findPreference<EditTextPreference>(key)?.setOnPreferenceChangeListener { row, newValue ->
+        (row as EditTextPreference).text = certificatePinsFromHex((newValue as String).split('\n')).joinToString("\n")
         false
     }
 }
@@ -184,6 +208,7 @@ object TlsBlock {
         pbm.text("$prefix.alpn")
         pbm.text("$prefix.min_version")
         pbm.text("$prefix.max_version")
+        pbm.text("$prefix.cipher_suites")
         pbm.text("$prefix.certificate")
         pbm.text("$prefix.certificate_path")
         pbm.text("$prefix.certificate_sha256")
@@ -238,9 +263,11 @@ object TlsBlock {
 
         multilineInput(
             "$prefix.alpn", "$prefix.certificate", "$prefix.certificate_sha256", "$prefix.certificate_public_key_sha256",
-            "$prefix.ech.config",
+            "$prefix.ech.config", "$prefix.cipher_suites",
         )
         echInputs("$prefix.ech")
+        cipherSuitesInput("$prefix.cipher_suites", "\n")
+        certificatePinsInput("$prefix.certificate_sha256", "$prefix.certificate_public_key_sha256")
         if (mustTls) {
             findPreference<Preference>(enabledKey)?.isVisible = false
         } else {
@@ -380,8 +407,12 @@ object TransportBlock {
     fun setup(pf: PreferenceFragmentCompat, prefix: String = "transport") = with(pf) {
         numberInput("$prefix.max_early_data")
         multilineInput("$prefix.headers")
-        // the model stores "" for plain TCP; the menu needs a selectable value
-        findPreference<SimpleMenuPreference>("$prefix.type")?.let { if (it.value.isNullOrEmpty()) it.value = "tcp" }
+        // the model stores "" for plain TCP; the menu needs a selectable value. Another stored type (quic, or one
+        // sing-box lacks) stays as it is and validate flags it, rather than becoming tcp on save.
+        findPreference<SimpleMenuPreference>("$prefix.type")?.let {
+            if (it.value.isNullOrEmpty()) it.value = "tcp"
+            it.keepUnlistedValue()
+        }
         onMenu("$prefix.type") { type ->
             val hostPath = type == "ws" || type == "http" || type == "httpupgrade"
             setVisible(hostPath, "$prefix.host", "$prefix.path")
@@ -406,4 +437,56 @@ object DialBlock {
         pbm.bool("$prefix.udp_fragment")
         pbm.bool("$prefix.reuse_addr")
     }
+}
+
+/**
+ * The shared blocks' editor-only checks (dialog_edit_profile_singbox.cpp bindSingboxStream, edit_advanced.cpp), bound
+ * on every profile screen: rows a screen does not have stay inert. The model's Validate covers the rest.
+ */
+fun ValidationForm.bindProfileBlocks(outbound: Outbound) {
+    val store = DataStore.profileCacheStore
+    if (outbound.hasTls()) {
+        addAlias("tls.ech.query_server_name", "tls.ech.queryTarget")
+        bind("tls.ech.queryTarget", ::echResolverRule).warning()
+    }
+    if (outbound.hasTransport()) {
+        bind("transport.headers", ::headerLines)
+        bind("transport.max_early_data", Validation.Rules.int(0, Int.MAX_VALUE.toLong()))
+    }
+    if (outbound.hasMux()) {
+        for (key in listOf("multiplex.brutal.up_mbps", "multiplex.brutal.down_mbps")) {
+            bind(key, Validation.Rules.int(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()))
+                .onlyIf { store.getBoolean("multiplex.brutal.enabled", false) }
+        }
+    }
+    if (outbound.hasQuic()) {
+        bind("quic.max_concurrent_streams", Validation.Rules.int(0, Int.MAX_VALUE.toLong()))
+        // validate sees the parsed number, where text beyond an Int has become 0
+        bind("quic.initial_packet_size", QuicChecks::quicInitialPacketSize)
+    }
+}
+
+/**
+ * The header rows' text (headers_hint): a name line then a value line per header, so a "Name: value" line shifts every
+ * pair after it. "|" separates headers in share links.
+ */
+fun headerLines(text: String): String {
+    val lines = text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+    if (lines.any { it.contains('|') }) return vtr(R.string.validation_header_pipe)
+    if (lines.size % 2 != 0) return vtr(R.string.validation_header_lines)
+    for (i in lines.indices step 2) {
+        val message = Validation.httpToken(lines[i])
+        if (message.isNotEmpty()) return vtr(R.string.validation_naive_header_name, lines[i], message)
+    }
+    return ""
+}
+
+/** generate.cpp falls back to the default resolver for an ECH resolver it cannot use; the domain part is validate's. */
+private fun echResolverRule(text: String): String {
+    val target = Ech()
+    target.setQueryTarget(text)
+    if (target.resolver.isEmpty()) return ""
+    val parsed = DnsServers.parseDnsAddress(target.resolver)
+    val address = parsed.address ?: return parsed.why
+    return if (address.type == "dhcp") vtr(R.string.validation_ech_resolver_dhcp) else ""
 }

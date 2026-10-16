@@ -9,9 +9,11 @@ import io.nekohasekai.sagernet.bg.XrayGeoAssets
 import io.nekohasekai.sagernet.bg.proto.SpeedTestSnapshot
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupRepo
+import io.nekohasekai.sagernet.database.GroupSort
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.database.SortInput
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.throneproj.mobile.Mobile
@@ -108,9 +110,20 @@ internal class TestSession(
         } catch (e: Exception) {
             Logs.w(e)
         } finally {
+            repositionTested()
             notification.finish(assetProblems)
             notifyClient { it.onDone(id, cancelled) }
         }
+    }
+
+    /** TestRunner.cpp: kept sorts move once the run is over, so rows do not jump while results stream in. */
+    private fun repositionTested() {
+        // the running connection's URL and IP results are shown, never stored
+        if (spec.testCurrent && kind != TestSpec.KIND_SPEED) return
+        val changed = tested.values.groupBy({ it.groupId }, { it.id })
+        GroupSort.repositionLater(changed, SortInput.TEST_RESULT)
+        // A speed test also credits the traffic it moved.
+        if (kind == TestSpec.KIND_SPEED) GroupSort.repositionLater(changed, SortInput.TRAFFIC)
     }
 
     /**

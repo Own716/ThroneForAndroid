@@ -9,10 +9,14 @@ import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceGroup
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.preference.EditTextPreferenceModifiers
 import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
 import io.nekohasekai.sagernet.ktx.needReload
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.validation.Rule
 import moe.matsuri.nb4a.ui.EditConfigPreference
 
 /**
@@ -26,11 +30,25 @@ abstract class SettingsScreenFragment(@XmlRes private val preferences: Int) : Pr
         listView.layoutManager = FixedLinearLayoutManager(listView)
     }
 
+    private var form: ValidationForm? = null
+
+    /**
+     * The screen's checks (the desktop dialogs' Validation::Form). The screen saves on every change, so errors refuse
+     * the value at commit ([gateText], [gateInt], [ValidationForm.Field.gate]) and warnings are shown on the row. It
+     * starts after [bind] with everything marked, as the desktop dialogs mark everything when they open.
+     */
+    protected val validation: ValidationForm
+        get() = form ?: ValidationForm(this).also { form = it }
+
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         preferenceManager.preferenceDataStore = DataStore.configurationStore
         beforeInflate()
         setPreferencesFromResource(preferences, rootKey)
         bind()
+        form?.let {
+            it.start()
+            it.markAll()
+        }
     }
 
     protected open fun beforeInflate() {}
@@ -120,6 +138,36 @@ abstract class SettingsScreenFragment(@XmlRes private val preferences: Int) : Pr
             }
             true
         }
+    }
+
+    /**
+     * [checkText] refusing with [rule]'s own message; [valid] (with the [invalid] toast) only catches what the stored
+     * setting cannot hold although the rule accepts it.
+     */
+    protected fun gateText(
+        key: String,
+        rule: Rule,
+        reload: Boolean = true,
+        @StringRes invalid: Int = R.string.invalid_value,
+        valid: (String) -> Boolean = { true },
+    ): ValidationForm.Field {
+        checkText(key, invalid, reload, valid)
+        return validation.bind(key, rule).gate()
+    }
+
+    /** [checkInt] refusing with [rule]'s own message; blank stores [blankAs] when the rule lets it through. */
+    protected fun gateInt(key: String, rule: Rule, reload: Boolean = true, blankAs: Int? = null): ValidationForm.Field {
+        checkInt(key, R.string.invalid_number, reload, blankAs) { true }
+        return validation.bind(key, rule).gate()
+    }
+
+    /** The refusal dialog of a gate, for checks a [ValidationForm.Field.gate] cannot express. */
+    protected fun refuse(preference: Preference, message: String) {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(preference.title?.toString()?.ifEmpty { null } ?: getString(R.string.validation_form_title))
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
     }
 
     companion object {

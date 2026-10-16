@@ -3,7 +3,13 @@ package io.nekohasekai.sagernet.ui.profile
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.outbound.types.Hysteria
+import io.nekohasekai.sagernet.outbound.types.hysteriaObfsTypes
+import io.nekohasekai.sagernet.ui.ValidationForm
+import io.nekohasekai.sagernet.ui.json.ProfileJson
+import io.nekohasekai.sagernet.validation.Validation
+import io.nekohasekai.sagernet.validation.vtr
 
 /** Hysteria v1 and v2 on one screen; the version menu gates the version-specific fields and the v2 realm block. */
 class HysteriaSettingsActivity : BindingSettingsActivity<Hysteria>() {
@@ -75,6 +81,52 @@ class HysteriaSettingsActivity : BindingSettingsActivity<Hysteria>() {
 
         TlsBlock.setup(this, mustTls = true)
         QuicBlock.setup(this)
+    }
+
+    override fun Hysteria.init() {
+        pbm.writeToCacheAll(this)
+        DataStore.profileCacheStore.putString(KEY_RAW_JSON, ProfileJson.text(this))
+        // edit_hysteria.cpp: the obfuscation type is matched ignoring case, an unknown one shows the first item
+        val obfsType = obfs_type.trim()
+        DataStore.profileCacheStore.putString(
+            "obfs_type", hysteriaObfsTypes.firstOrNull { it.equals(obfsType, ignoreCase = true) } ?: hysteriaObfsTypes[0],
+        )
+    }
+
+    private fun cached(key: String) = DataStore.profileCacheStore.getString(key)?.trim().orEmpty()
+
+    private fun isV2() = cached("protocol_version") == "2"
+
+    private fun gecko() = isV2() && cached("obfs_type").equals("gecko", ignoreCase = true)
+
+    override fun issueKey(field: String): String? = when (field) {
+        // the auth row is hidden until a type is chosen
+        "auth" -> if (cached("auth_type").isEmpty()) "auth_type" else null
+        "obfs.type" -> "obfs_type"
+        "obfs.min_packet_size" -> "min_packet_size"
+        "realm" -> "realm_enabled"
+        else -> null
+    }
+
+    // edit_hysteria.cpp and edit_hysteria_realm.cpp: number text the binding would read as 0, and the realm fields
+    override fun ValidationForm.bindValidation() {
+        for (key in listOf("up_mbps", "down_mbps", "recv_window_conn", "recv_window")) {
+            bind(key, Validation.Rules.int(0, Int.MAX_VALUE.toLong()))
+        }
+        val packetSize = Validation.Rules.int(0, 2048)
+        for (key in listOf("min_packet_size", "max_packet_size")) {
+            // Validate already checks a readable size while gecko obfuscation uses it
+            bind(key) { text ->
+                if (gecko() && DataStore.profileCacheStore.getString("obfs").orEmpty().isNotEmpty() && text.toIntOrNull() != null) ""
+                else packetSize(text)
+            }
+        }
+        bind("obfs") { if (it.isEmpty()) vtr(R.string.validation_hysteria_gecko_password) else "" }
+            .raw().warning().onlyIf { gecko() }
+        bind("realm_server_url", Validation.Rules.url(listOf("http", "https")))
+        bindLines("realm_stun_servers", Validation.Rules.hostPort(false))
+        bind("realm_port_mapping_timeout", Validation.Rules.duration())
+        bind("realm_port_mapping_lifetime", Validation.Rules.duration())
     }
 
 }

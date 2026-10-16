@@ -20,6 +20,7 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputLayout
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.RouteManager
 import io.nekohasekai.sagernet.databinding.LayoutRouteAddRuleBinding
@@ -29,17 +30,27 @@ import io.nekohasekai.sagernet.databinding.LayoutRouteRuleItemBinding
 import io.nekohasekai.sagernet.databinding.LayoutRouteRulesTitleBinding
 import io.nekohasekai.sagernet.group.RemoteRouteUpdater
 import io.nekohasekai.sagernet.ktx.FixedLinearLayoutManager
+import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.confirmAction
 import io.nekohasekai.sagernet.route.OutboundIds
 import io.nekohasekai.sagernet.route.RouteProfile
 import io.nekohasekai.sagernet.route.RouteRule
+import io.nekohasekai.sagernet.route.RuleEnv
+import io.nekohasekai.sagernet.route.RuleIssue
+import io.nekohasekai.sagernet.route.RuleSetCatalog
+import io.nekohasekai.sagernet.ui.FormIssue
 import io.nekohasekai.sagernet.ui.ThemedActivity
+import io.nekohasekai.sagernet.ui.ValidationForm
 import io.nekohasekai.sagernet.utils.PackageCache
+import io.nekohasekai.sagernet.validation.Empty
+import io.nekohasekai.sagernet.validation.Severity
+import io.nekohasekai.sagernet.validation.Validation
 import io.nekohasekai.sagernet.widget.UndoSnackbarManager
 import io.nekohasekai.sagernet.widget.applyListInsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.IdentityHashMap
 
 /**
  * A route profile: name, default outbound, the remote source of a remote profile, and the ordered rule list (drag
@@ -76,6 +87,13 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
         var dirty = false
         var fetching = false
         var saving = false
+
+        /** The rule-set list the rules' rule_set names are judged against. */
+        var catalog: RuleSetCatalog? = null
+
+        /** The problems the name and remote URL fields show now; "" for none. */
+        var nameError = ""
+        var urlError = ""
     }
 
     private val model: EditorModel by viewModels()
@@ -87,6 +105,10 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
     private val rawAdapter = RawAdapter()
     private lateinit var touchHelper: ItemTouchHelper
     private lateinit var undoManager: UndoSnackbarManager<RouteRule>
+
+    /** RouteItem's ruleMarks: each rule object's issues; an edited rule comes back as a new object. */
+    private val issueCache = IdentityHashMap<RouteRule, List<RuleIssue>>()
+    private var ruleEnv: RuleEnv? = null
 
     private val ruleEditor = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         onRuleResult(it.resultCode, it.data)
@@ -119,6 +141,7 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
         val remote = intent.getBooleanExtra(EXTRA_REMOTE, false)
         lifecycleScope.launch {
             val loaded = withContext(Dispatchers.IO) {
+                model.catalog = RouteManager.catalog()
                 val p = when {
                     id > 0L -> RouteManager.get(id)
                     json != null -> RouteJson.profileFromJson(json).apply { this.id = 0L }
@@ -144,8 +167,55 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
             model.servers = loaded.second
             model.appLabels = loaded.third
             model.dirty = json != null
+            // A loaded or imported profile shows its problems at once, a new one as its fields are left.
+            if (id > 0L || json != null) markHeader()
             refreshAll()
         }
+    }
+
+    private fun nameProblem(p: RouteProfile): String = Validation.required(p.name)
+
+    private fun urlProblem(p: RouteProfile): String =
+        if (p.is_remote) Validation.url(p.remote_url, listOf("http", "https"), Empty.Required) else ""
+
+    /** Form::markAll for the header fields. */
+    private fun markHeader() {
+        val p = model.profile ?: return
+        model.nameError = nameProblem(p)
+        model.urlError = urlProblem(p)
+        headerAdapter.holder?.bindErrors()
+    }
+
+    private fun ruleIssues(rule: RouteRule): List<RuleIssue> = issueCache.getOrPut(rule) {
+        val env = ruleEnv ?: RuleEnv(model.catalog, RuleEnv.storedProfiles()).also { ruleEnv = it }
+        try {
+            rule.validate(env)
+        } catch (e: Exception) {
+            Logs.w(e)
+            emptyList()
+        }
+    }
+
+    /** RouteItem::otherRuleIssues: every rule's issues as `Rule "x" › field`, a list item named by its line. */
+    private fun ruleFormIssues(p: RouteProfile): List<FormIssue> = p.rules.flatMap { rule ->
+        ruleIssues(rule).map { issue ->
+            val label = getString(R.string.validation_route_rule_attr, rule.name, RouteRuleChecks.label(this, issue.attr))
+            val line = if (issue.value.isEmpty()) -1 else rule.currentValues(issue.attr).indexOfFirst { it.trim() == issue.value }
+            val message = if (line < 0) issue.message else getString(
+                R.string.validation_form_line, (line + 1).toString(), RouteRuleChecks.elide(issue.value), issue.message
+            )
+            FormIssue(issue.severity, label, message)
+        }
+    }
+
+    /** Scrolls to the first error: the header, else the first rule that has one. */
+    private fun revealFirstError(p: RouteProfile, inHeader: Boolean) {
+        val position = if (inHeader) 0 else {
+            val index = p.rules.indexOfFirst { rule -> ruleIssues(rule).any { it.severity == Severity.Error } }
+            if (index < 0) return
+            headerAdapter.itemCount + rawAdapter.itemCount + titleAdapter.itemCount + index
+        }
+        list.smoothScrollToPosition(position)
     }
 
     private fun nameRules(p: RouteProfile) {
@@ -222,24 +292,28 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
             .show()
     }
 
-    /** RouteItem::accept (RouteItem.cpp:597-649): name, remote URL, then the empty-rule filter and check. */
+    /**
+     * RouteItem::accept: the form's gate (name, remote URL, every rule's errors; warnings never block), then the
+     * empty-rule filter and check.
+     */
     private fun save() {
         val p = model.profile ?: return
         if (p.is_raw) return
         if (model.saving) return
         undoManager.flush()
-        p.name = p.name.trim()
-        if (p.name.isEmpty()) {
-            message(R.string.route_profile_invalid_title, getString(R.string.route_profile_empty_name))
+        markHeader()
+        val header = ArrayList<FormIssue>()
+        if (model.nameError.isNotEmpty()) header.add(FormIssue(Severity.Error, getString(R.string.route_profile_name), model.nameError))
+        if (model.urlError.isNotEmpty()) header.add(FormIssue(Severity.Error, getString(R.string.route_profile_url), model.urlError))
+        val found = ruleFormIssues(p)
+        val errors = header + found.filter { it.severity == Severity.Error }
+        if (errors.isNotEmpty()) {
+            revealFirstError(p, header.isNotEmpty())
+            ValidationForm.showSummary(this, errors, found.filter { it.severity == Severity.Warning })
             return
         }
-        if (p.is_remote) {
-            p.remote_url = p.remote_url.trim()
-            if (p.remote_url.isEmpty()) {
-                message(R.string.route_profile_invalid_title, getString(R.string.route_profile_need_url))
-                return
-            }
-        }
+        p.name = p.name.trim()
+        if (p.is_remote) p.remote_url = p.remote_url.trim()
         val kept = p.rules.filterNot { it.isEmpty() }
         if (!p.is_remote && kept.isEmpty()) {
             message(R.string.route_profile_empty_title, getString(R.string.route_profile_empty))
@@ -334,8 +408,10 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
 
     private fun fetch() {
         val p = model.profile ?: return
-        val url = p.remote_url.trim()
-        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) {
+        val problem = Validation.url(p.remote_url, listOf("http", "https"), Empty.Required)
+        if (problem.isNotEmpty()) {
+            model.urlError = problem
+            headerAdapter.holder?.bindErrors()
             message(R.string.route_profile_invalid_url_title, getString(R.string.route_profile_invalid_url))
             return
         }
@@ -422,15 +498,34 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
             binding.outboundDirect.text = OutboundIds.toName(OutboundIds.DIRECT)
             binding.outboundBlock.text = OutboundIds.toName(OutboundIds.BLOCK)
             binding.outboundWarp.text = RouteTexts.WARP_BYPASS
+            // Validation::Form: typing clears a field's mark, leaving the field checks it again.
             binding.name.doAfterTextChanged {
                 if (updating) return@doAfterTextChanged
                 model.profile?.name = it?.toString().orEmpty()
                 markDirty()
+                model.nameError = ""
+                bindErrors()
             }
             binding.url.doAfterTextChanged {
                 if (updating) return@doAfterTextChanged
                 model.profile?.remote_url = it?.toString().orEmpty()
                 markDirty()
+                model.urlError = ""
+                bindErrors()
+            }
+            binding.name.setOnFocusChangeListener { _, focused ->
+                val p = model.profile
+                if (!focused && p != null) {
+                    model.nameError = nameProblem(p)
+                    bindErrors()
+                }
+            }
+            binding.url.setOnFocusChangeListener { _, focused ->
+                val p = model.profile
+                if (!focused && p != null) {
+                    model.urlError = urlProblem(p)
+                    bindErrors()
+                }
             }
             binding.autoUpdate.setOnCheckedChangeListener { _, checked ->
                 if (updating) return@setOnCheckedChangeListener
@@ -456,8 +551,21 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
             if (binding.url.text?.toString() != p.remote_url) binding.url.setText(p.remote_url)
             binding.autoUpdate.isChecked = p.auto_update
             updating = false
+            // A shown mark follows a value set from code, e.g. the name a fetch filled in.
+            if (model.nameError.isNotEmpty()) model.nameError = nameProblem(p)
+            if (model.urlError.isNotEmpty()) model.urlError = urlProblem(p)
+            bindErrors()
             bindRemoteState()
             bindReadOnly(p)
+        }
+
+        fun bindErrors() {
+            binding.nameLayout.showError(model.nameError)
+            binding.urlLayout.showError(model.urlError)
+        }
+
+        private fun TextInputLayout.showError(message: String) {
+            if (message.isEmpty()) isErrorEnabled = false else error = message
         }
 
         /** A desktop raw profile is shown, never edited. */
@@ -560,6 +668,24 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
             binding.ruleName.text = rule.name
             binding.ruleAction.text = RouteTexts.ruleAction(this@RouteProfileActivity, rule, model.servers)
             binding.ruleSummary.text = RouteTexts.ruleConditions(this@RouteProfileActivity, rule, model.appLabels)
+            bindIssues(ruleIssues(rule))
+        }
+
+        /** RouteItem::applyRuleMarks: the worst issue's icon, and that issue in its colour. */
+        private fun bindIssues(issues: List<RuleIssue>) {
+            val first = issues.firstOrNull { it.severity == Severity.Error } ?: issues.firstOrNull()
+            binding.issueIcon.isVisible = first != null
+            binding.ruleIssue.isVisible = first != null
+            if (first == null) return
+            val color = ValidationForm.colorOf(this@RouteProfileActivity, first.severity)
+            binding.issueIcon.setImageResource(
+                if (first.severity == Severity.Error) R.drawable.ic_json_error else R.drawable.ic_baseline_warning_24
+            )
+            binding.issueIcon.setColorFilter(color)
+            var text = RouteRuleChecks.describe(this@RouteProfileActivity, first)
+            if (issues.size > 1) text += " " + resources.getQuantityString(R.plurals.validation_import_more, issues.size - 1, issues.size - 1)
+            binding.ruleIssue.text = text
+            binding.ruleIssue.setTextColor(color)
         }
     }
 

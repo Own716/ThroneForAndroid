@@ -11,6 +11,7 @@ import io.nekohasekai.sagernet.group.DeviceDetails
 import io.nekohasekai.sagernet.group.RequestIdentity
 import io.nekohasekai.sagernet.group.SubscriptionScheduler
 import io.nekohasekai.sagernet.ktx.USER_AGENT
+import moe.matsuri.nb4a.ui.SimpleMenuPreference
 import kotlin.math.abs
 
 /**
@@ -26,9 +27,22 @@ class SubscriptionSettingsFragment : SettingsScreenFragment(R.xml.settings_subsc
             it.setSingleLine()
             it.hint = USER_AGENT
         }
-        checkText(userAgent.key, R.string.invalid_value, reload = false) { true }
+        gateText(userAgent.key, SettingChecks::headerValue, reload = false)
 
         bindAutoUpdate()
+
+        for ((key, tip) in listOf(
+            SettingsRegistry.SUB_TLS_VERSION.key to R.string.sub_tls_version_tip,
+            SettingsRegistry.SUB_HTTP_VERSION.key to R.string.sub_http_version_tip,
+        )) {
+            pref<SimpleMenuPreference>(key).summaryProvider =
+                Preference.SummaryProvider<SimpleMenuPreference> { "${it.entry}\n${getString(tip)}" }
+        }
+        pref<SwitchPreference>(SettingsRegistry.SUB_RESPECT_SERVER_INTERVAL.key).setOnPreferenceChangeListener { _, newValue ->
+            DataStore.subRespectServerInterval = newValue as Boolean
+            SubscriptionScheduler.schedule()
+            true
+        }
 
         val sendHwid = pref<SwitchPreference>(SettingsRegistry.SUB_SEND_HWID.key)
         sendHwid.summary = hwidSummary(DataStore.subCustomHwidParams)
@@ -48,6 +62,7 @@ class SubscriptionSettingsFragment : SettingsScreenFragment(R.xml.settings_subsc
             }
             true
         }
+        validation.bind(params.key, SettingChecks::hwidParams).gate()
     }
 
     /** sub_auto_update is sign-encoded minutes: negative is off, the magnitude is kept while off. */
@@ -72,15 +87,12 @@ class SubscriptionSettingsFragment : SettingsScreenFragment(R.xml.settings_subsc
             true
         }
         interval.setOnPreferenceChangeListener { _, newValue ->
-            val value = newValue?.toString()?.trim()?.toIntOrNull()
-            if (value == null || value < SettingsRegistry.MIN_AUTO_UPDATE_MINUTES) {
-                toast(R.string.auto_update_interval_invalid, SettingsRegistry.MIN_AUTO_UPDATE_MINUTES)
-                return@setOnPreferenceChangeListener false
-            }
+            val value = newValue?.toString()?.trim()?.toIntOrNull() ?: return@setOnPreferenceChangeListener false
             DataStore.subAutoUpdate = if (enabled.isChecked) value else -value
             SubscriptionScheduler.schedule()
             true
         }
+        validation.bind(interval.key, SettingChecks.autoUpdateMinutes).gate()
     }
 
     /** The four values the requests send (the desktop's Send HWID tooltip), after the custom parameters. */

@@ -4,6 +4,7 @@ import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.Outbound
+import io.nekohasekai.sagernet.outbound.OutboundChecks
 import io.nekohasekai.sagernet.outbound.OutboundFactory
 import io.nekohasekai.sagernet.outbound.config.GeneratorSettings
 import io.nekohasekai.sagernet.outbound.config.MemberCheck
@@ -225,10 +226,18 @@ object SettingsMapper {
                 }
 
                 else -> {
-                    val key = if (outbound.isEndpoint()) "endpoints" else "outbounds"
-                    val config = jsonObjectOf(key to JsonArray.of(outbound.build(ctx).json), "log" to jsonObjectOf("level" to logLevel))
-                    Mobile.checkConfig(config.toCompact())
-                    null
+                    val built = outbound.buildChecked(ctx)
+                    when {
+                        // A bad global fragment setting fails every fragmenting member alike: not the member's fault.
+                        !built.ok && built.error == OutboundChecks.fragmentSettingsError(ctx) -> null
+                        !built.ok -> built.error
+                        else -> {
+                            val key = if (outbound.isEndpoint()) "endpoints" else "outbounds"
+                            val config = jsonObjectOf(key to JsonArray.of(built.json), "log" to jsonObjectOf("level" to logLevel))
+                            Mobile.checkConfig(config.toCompact())
+                            null
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {

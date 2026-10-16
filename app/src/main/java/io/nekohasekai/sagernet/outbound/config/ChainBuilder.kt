@@ -2,6 +2,7 @@ package io.nekohasekai.sagernet.outbound.config
 
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.Outbound
+import io.nekohasekai.sagernet.outbound.common.setXrayDialerProxy
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.jsonObjectOf
@@ -215,7 +216,7 @@ internal class ChainBuilder(
                 val custom = TypeAccess.asCustom(outbound) ?: return "Failed to cast to Custom for Xray full config hop"
                 if (custom.configObject().isEmpty()) return "Custom Xray full config is not valid JSON"
             } else {
-                val result = if (outbound.isXray()) outbound.buildXray(ctx) else outbound.build(ctx)
+                val result = if (outbound.isXray()) outbound.buildXray(ctx) else outbound.buildChecked(ctx)
                 if (!result.ok) return result.error
             }
         }
@@ -257,7 +258,7 @@ internal class ChainBuilder(
             }
             // A pre-reserved 0 means the caller's reservation failed; reserve again rather than bake in a dead port.
             var port = req.xrayFullConfigPort
-            if (port <= 0) port = LocalPorts.reserve(1, custom.bridgeHost)[0]
+            if (port <= 0) port = state.ports.reserve(1, custom.bridgeHost)[0]
             if (port <= 0) {
                 state.error = "Could not reserve a local port for the custom Xray full config bridge"
                 return ingressTag
@@ -292,7 +293,7 @@ internal class ChainBuilder(
         val ports = ArrayList<Int>()
         fun bridgePort(given: Int): Int {
             if (given > 0) return given
-            if (ports.isEmpty()) ports.addAll(LocalPorts.reserve(2))
+            if (ports.isEmpty()) ports.addAll(state.ports.reserve(2))
             return ports.removeAt(0)
         }
         if (state.singToXrayTransitioned) {
@@ -338,9 +339,9 @@ internal class ChainBuilder(
         return ingressTag
     }
 
-    /** resolvesHostnamesViaDnsRules (generate.cpp:1334-1338). */
+    /** resolvesHostnamesViaDnsRules (generate.cpp): endpoints and plain SOCKS4, whose server cannot resolve names (SOCKS4a can). */
     private fun resolvesHostnamesViaDnsRules(hop: Hop): Boolean =
-        hop.outbound.isEndpoint() || TypeAccess.asSocks(hop.outbound)?.version == 4
+        hop.outbound.isEndpoint() || TypeAccess.asSocks(hop.outbound)?.let { it.version == 4 && !it.socks4a } == true
 
     /**
      * buildSingboxChain (:1321-1369). Hop idx gets `<prefix>-<startSuffix+idx>` (idx 0 is `proxy` for the main
@@ -356,7 +357,7 @@ internal class ChainBuilder(
             if (opts.warpWrap && idx == 1) tag = Tags.WARP_BYPASS
             if (opts.markIngress && idx == 0) state.singIngressTags.add(tag)
             val hop = hops[idx]
-            val result = hop.outbound.build(ctx)
+            val result = hop.outbound.buildChecked(ctx)
             if (!result.ok) {
                 state.error += result.error
                 return
@@ -394,14 +395,8 @@ internal class ChainBuilder(
             }
             val obj = result.json
             obj["tag"] = tag
-            // Xray removed outbound-level proxySettings; sockopt.dialerProxy is its 1:1 replacement.
-            if (nextTag.isNotEmpty() && (opts.link || bridge.needed)) {
-                val stream = obj.obj("streamSettings")
-                val sockopt = stream.obj("sockopt")
-                sockopt["dialerProxy"] = nextTag
-                stream["sockopt"] = sockopt
-                obj["streamSettings"] = stream
-            }
+            // Xray removed outbound-level proxySettings; sockopt.dialerProxy is its 1:1 replacement, the XHTTP download leg included.
+            if (nextTag.isNotEmpty() && (opts.link || bridge.needed)) setXrayDialerProxy(obj, nextTag)
             state.xrayOutbounds.add(obj)
         }
         if (bridge.needed) {
