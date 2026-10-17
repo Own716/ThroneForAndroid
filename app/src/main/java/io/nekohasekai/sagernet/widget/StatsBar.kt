@@ -189,7 +189,10 @@ class StatsBar @JvmOverloads constructor(
         TooltipCompat.setTooltipText(this, if (exit == null) statusLine else "$statusLine\n$exit")
     }
 
-    /** runningCountryInfo (mainwindow_view.cpp:151-165): the exit's flag and country, no IP or city. */
+    /**
+     * runningCountryInfo (mainwindow_view.cpp:151-165): the exit's flag and country, no IP or city. Hidden while
+     * exit_country_lookup is off: ExitIp then holds no result and runs no lookup, a tap's refresh() included.
+     */
     private fun showExit() {
         val view = exitText ?: return
         val connected = currentState == BaseService.State.Connected

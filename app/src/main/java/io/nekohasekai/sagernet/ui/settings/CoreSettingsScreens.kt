@@ -30,6 +30,7 @@ import io.nekohasekai.sagernet.ui.profile.keepUnlistedValue
 import io.nekohasekai.sagernet.validation.Empty
 import io.nekohasekai.sagernet.validation.Validation
 import io.nekohasekai.sagernet.validation.vtr
+import io.nekohasekai.sagernet.widget.ExitIp
 import moe.matsuri.nb4a.ui.LongClickListPreference
 import moe.matsuri.nb4a.ui.SimpleMenuPreference
 import moe.matsuri.nb4a.ui.UrlTestPreference
@@ -133,6 +134,14 @@ class TestingSettingsFragment : SettingsScreenFragment(R.xml.settings_testing) {
         ) { it.isEmpty() || SpeedTestSettings.isValidHttpUrl(it) }
         pref<EditTextPreference>(SettingsRegistry.DIRECT_TEST_URL.key).summaryProvider =
             DefaultSummaryProvider(getString(R.string.direct_test_url_empty))
+
+        // Off drops the shown exit and a lookup in flight; on waits for the next connection or stats bar tap.
+        pref<SwitchPreference>(SettingsRegistry.EXIT_COUNTRY_LOOKUP.key).setOnPreferenceChangeListener { _, newValue ->
+            if (newValue == false) ExitIp.clear()
+            true
+        }
+        // A newer desktop's service id stays stored (it runs as "auto" here) instead of being replaced by the menu.
+        pref<SimpleMenuPreference>(SettingsRegistry.EXIT_LOOKUP_PROVIDER.key).keepUnlistedValue()
 
         // Only the URL test treats 0 as its default; the download/upload test would time out at once.
         gateInt(SettingsRegistry.SPEED_TEST_TIMEOUT_MS.key, { SettingChecks.millis(it, 5000, zeroIsDefault = false) }, reload = false)

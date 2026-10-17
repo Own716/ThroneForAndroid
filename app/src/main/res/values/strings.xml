@@ -635,6 +635,11 @@
     <string name="direct_test_url">Direct test URL</string>
     <string name="direct_test_url_sum">Fetched without any proxy to tell a dead connection apart from dead servers. Leave empty to use the system network state.</string>
     <string name="direct_test_url_empty">system network state</string>
+    <string name="cag_exit_country">Exit country</string>
+    <string name="exit_country_lookup">Look up exit country</string>
+    <string name="exit_country_lookup_sum">After connecting, ask an IP lookup service (through the proxy) which IP address and country the connection exits from. When off, no such service is contacted automatically.</string>
+    <string name="exit_lookup_provider">Lookup service</string>
+    <string name="exit_lookup_provider_auto">Automatic</string>
     <string name="speed_test_mode_country">Only country</string>
     <string name="net_use_proxy">Use proxy</string>
     <string name="net_use_proxy_sum">Send subscription and update requests through the local proxy</string>
@@ -1296,6 +1301,7 @@
     <string name="autosel_group">Servers from</string>
     <string name="autosel_group_archived">%s (archived)</string>
     <string name="autosel_group_missing">Missing group (#%d)</string>
+    <string name="autosel_groups_none">No group selected</string>
     <string name="autosel_name_filter">Only names matching</string>
     <string name="autosel_name_filter_tip">Optional regular expression. Only profiles whose name matches are considered — useful to pick out one country or provider.</string>
     <string name="autosel_name_filter_empty">Every profile in the group</string>
@@ -1309,6 +1315,11 @@
     <string name="autosel_plan">Profiles</string>
     <string name="autosel_plan_calculating">Checking the group…</string>
     <string name="autosel_plan_counts">%1$d of %2$d profiles in the group can be used; %3$d would run.</string>
+    <string name="autosel_plan_counts_groups">%1$d of %2$d profiles in the %3$d groups can be used; %4$d would run.</string>
+    <plurals name="autosel_plan_missing_groups">
+        <item quantity="one">%d tracked group no longer exists and is skipped.</item>
+        <item quantity="other">%d tracked groups no longer exist and are skipped.</item>
+    </plurals>
     <string name="autosel_plan_skipped">Skipped: %s.</string>
     <string name="autosel_plan_skip_item">%1$d %2$s</string>
     <string name="autosel_list_separator">", "</string>
@@ -1317,6 +1328,7 @@
     <string name="autosel_plan_reused">%d have a recent test result that will be reused.</string>
     <string name="autosel_plan_needs_ranking">The rest will be measured before the selector starts.</string>
     <string name="autosel_error_no_group">Auto selector points at a group that no longer exists</string>
+    <string name="autosel_error_no_tracked_group">Auto selector tracks no group</string>
     <string name="autosel_error_no_members">Auto selector has no usable members</string>
     <string name="autosel_skip_missing">missing profile</string>
     <string name="autosel_skip_meta">chain or auto selector</string>
@@ -1386,7 +1398,7 @@
     <string name="autosel_connectivity_url_empty">Direct test URL (%s)</string>
     <string name="autosel_connectivity_url_none">Not set: the system\'s network state is used</string>
     <string name="autosel_name_empty">Name cannot be empty.</string>
-    <string name="autosel_select_group">Select the group this auto selector should track.</string>
+    <string name="autosel_select_group">Select at least one group for this auto selector to track.</string>
     <plurals name="autosel_profiles">
         <item quantity="one">%d profile</item>
         <item quantity="other">%d profiles</item>

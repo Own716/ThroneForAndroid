@@ -56,6 +56,27 @@
         <item>@string/speed_test_mode_country</item>
     </string-array>
 
+    <string-array name="exit_lookup_provider_entries">
+        <item>@string/exit_lookup_provider_auto</item>
+        <item>ip-api.com</item>
+        <item>ipwho.is</item>
+        <item>ipinfo.io</item>
+        <item>ipapi.co</item>
+        <item>IP2Location.io</item>
+        <item>FreeIPAPI</item>
+        <item>Cloudflare</item>
+    </string-array>
+    <string-array name="exit_lookup_provider_values" translatable="false">
+        <item>auto</item>
+        <item>ip-api</item>
+        <item>ipwho</item>
+        <item>ipinfo</item>
+        <item>ipapi-co</item>
+        <item>ip2location</item>
+        <item>freeipapi</item>
+        <item>cloudflare</item>
+    </string-array>
+
     <string-array name="ss_enc_method_value">
         <item>none</item>
         <item>2022-blake3-aes-128-gcm</item>

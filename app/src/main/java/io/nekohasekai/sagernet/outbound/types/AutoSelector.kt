@@ -17,12 +17,13 @@ import io.nekohasekai.sagernet.validation.vtr
 
 /**
  * autoSelector (include/configs/outbounds/autoselector.h, src/configs/outbounds/autoselector.cpp): a profile the
- * generator expands into the core `auto-selector` outbound over the members of the tracked group [gid]
+ * generator expands into the core `auto-selector` outbound over the members of the tracked groups [gids]
  * (outbound.config.AutoSelectorPlanner, ConfigGenerator). Profile and group ids are widened to Long for Room, like
  * [Chain.list]; they are local ids, so imports and restores remap them.
  */
 class AutoSelector : Outbound("autoselector") {
-    @JvmField var gid: Long = -1
+    /** Tracked groups in the user's order; members are taken from each in turn. */
+    @JvmField var gids: MutableList<Long> = ArrayList()
 
     /** Case-insensitive regex over the member display name, empty = all. */
     @JvmField var nameFilter: String = ""
@@ -80,11 +81,12 @@ class AutoSelector : Outbound("autoselector") {
     /** autoselector.h:53. */
     override fun displayType(): String = "Auto Selector"
 
-    /** autoselector.cpp:9-15: the tracked group's name ("" until the app installs [groupNames]). */
+    /** autoselector.cpp:9-15: the names of the tracked groups that exist ("" until the app installs [groupNames]). */
     override fun displayAddress(): String {
-        if (gid < 0) return "no group"
+        if (gids.none { it >= 0 }) return "no group"
         val lookup = groupNames ?: return ""
-        return lookup.nameOf(gid) ?: "missing group"
+        val names = gids.mapNotNull { if (it >= 0) lookup.nameOf(it) else null }
+        return if (names.isEmpty()) "missing group" else names.joinToString(", ")
     }
 
     /** autoselector.h: no security of its own; it inherits whatever its members use. */
@@ -109,7 +111,13 @@ class AutoSelector : Outbound("autoselector") {
     override fun parseFromJson(obj: JsonObject): Boolean {
         if (obj.isEmpty()) return false
         if (obj.contains("name")) name = obj.string("name")
-        if (obj.contains("gid")) gid = longOr(obj["gid"], -1)
+        // "gid" is what builds before multi-group tracking wrote; "gids" wins when both are present.
+        if (obj.contains("gids")) {
+            gids = obj.array("gids").mapNotNullTo(ArrayList()) { longOr(it, -1).takeIf { id -> id >= 0 } }
+        } else if (obj.contains("gid")) {
+            val gid = longOr(obj["gid"], -1)
+            gids = if (gid >= 0) arrayListOf(gid) else ArrayList()
+        }
         if (obj.contains("name_filter")) nameFilter = obj.string("name_filter")
         if (obj.contains("country_filter")) countryFilter = obj.string("country_filter")
         if (obj.contains("exclude_unavailable")) excludeUnavailable = boolOr(obj["exclude_unavailable"], true)
@@ -141,12 +149,13 @@ class AutoSelector : Outbound("autoselector") {
         return true
     }
 
-    /** autoselector.h:97-131: every key is always written. */
+    /** autoselector.h:97-131: every key is always written; "gid" (the first tracked group) keeps older builds tracking one. */
     override fun exportToJson(): JsonObject {
         val obj = JsonObject()
         obj["name"] = name
         obj["type"] = "autoselector"
-        obj["gid"] = gid
+        obj["gid"] = gids.firstOrNull() ?: -1L
+        obj["gids"] = idArray(gids)
         obj["name_filter"] = nameFilter
         obj["country_filter"] = countryFilter
         obj["exclude_unavailable"] = excludeUnavailable
@@ -183,6 +192,8 @@ class AutoSelector : Outbound("autoselector") {
 
     /** autoselector.h:140-167: clamps what a hand-edited profile could put out of range; runs before every plan. */
     fun normalize() {
+        val seen = HashSet<Long>()
+        gids = gids.filterTo(ArrayList()) { it >= 0 && seen.add(it) }
         if (poolCap < 1) poolCap = 1
         if (poolCap > MAX_POOL_CAP) poolCap = MAX_POOL_CAP
         if (buildLimit < 1) buildLimit = 1
@@ -273,7 +284,7 @@ class AutoSelector : Outbound("autoselector") {
         history = out
     }
 
-    /** The tracked group's name for [displayAddress]; null when the group does not exist. */
+    /** A tracked group's name for [displayAddress]; null when the group does not exist. */
     fun interface GroupNames {
         fun nameOf(gid: Long): String?
     }
