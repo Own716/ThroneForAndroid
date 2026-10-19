@@ -275,7 +275,6 @@
     <string name="webdav_test_failed" formatted="false">Koneksi gagal: %s</string>
     <string name="backup_to_webdav">Cadangkan ke WebDAV</string>
     <string name="restore_from_webdav">Pulihkan dari WebDAV</string>
-    <string name="webdav_backup_success">Pencadangan ke WebDAV berhasil</string>
     <string name="webdav_backup_failed">Pencadangan ke WebDAV gagal: %s</string>
     <string name="webdav_restore_failed">Pemulihan dari WebDAV gagal: %s</string>
     <string name="webdav_server_empty">Silakan konfigurasikan server WebDAV terlebih dahulu</string>

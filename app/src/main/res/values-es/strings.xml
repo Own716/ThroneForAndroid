@@ -278,7 +278,6 @@
     <string name="webdav_test_failed" formatted="false">Conexión fallida: %s</string>
     <string name="backup_to_webdav">Respaldar a WebDAV</string>
     <string name="restore_from_webdav">Restaurar desde WebDAV</string>
-    <string name="webdav_backup_success">Copia de seguridad a WebDAV exitosa</string>
     <string name="webdav_backup_failed">Copia de seguridad a WebDAV fallida: %s</string>
     <string name="webdav_restore_failed">Restauración desde WebDAV fallida: %s</string>
     <string name="webdav_server_empty">Configure primero el servidor WebDAV</string>

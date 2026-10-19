@@ -278,7 +278,6 @@
     <string name="webdav_test_failed" formatted="false">Échec de la connexion : %s</string>
     <string name="backup_to_webdav">Sauvegarder vers WebDAV</string>
     <string name="restore_from_webdav">Restaurer depuis WebDAV</string>
-    <string name="webdav_backup_success">Sauvegarde vers WebDAV réussie</string>
     <string name="webdav_backup_failed">Échec de la sauvegarde vers WebDAV : %s</string>
     <string name="webdav_restore_failed">Échec de la restauration depuis WebDAV : %s</string>
     <string name="webdav_server_empty">Veuillez d\'abord configurer le serveur WebDAV</string>

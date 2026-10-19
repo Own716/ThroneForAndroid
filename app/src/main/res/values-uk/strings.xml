@@ -1480,7 +1480,6 @@
     <string name="vless_encryption_hint">mlkem768x25519plus.native.0rtt.KEY1.KEY2...</string>
     <string name="webdav_auth_error">Помилка автентифікації: хибне ім’я користувача або пароль</string>
     <string name="webdav_backup_failed">Не вдалося створити резервну копію в WebDAV: %s</string>
-    <string name="webdav_backup_success">Резервну копію в WebDAV створено успішно</string>
     <string name="webdav_connect_failed">З’єднання не вдалося з кодом: %d</string>
     <string name="webdav_create_dir_failed">Не вдалося створити або відкрити теку резервних копій</string>
     <string name="webdav_password">Пароль</string>

@@ -1513,7 +1513,6 @@
     <string name="webdav_test_failed" formatted="false">連線失敗: %s</string>
     <string name="backup_to_webdav">備份到 WebDAV</string>
     <string name="restore_from_webdav">從 WebDAV 恢復</string>
-    <string name="webdav_backup_success">備份到 WebDAV 成功</string>
     <string name="webdav_backup_failed">備份到 WebDAV 失敗：%s</string>
     <string name="webdav_restore_failed">從 WebDAV 恢復失敗：%s</string>
     <string name="webdav_server_empty">請先配置 WebDAV 伺服器</string>

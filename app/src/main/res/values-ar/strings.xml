@@ -1418,7 +1418,6 @@
     <string name="warp_wireguard_note">يعتمد WARP على بروکسيك: يحتاج WireGuard إلى بروکسي يمرر UDP.</string>
     <string name="webdav_auth_error">فشلت المصادقة: اسم المستخدم أو كلمة المرور غير صحيحة</string>
     <string name="webdav_backup_failed">فشل النسخ الاحتياطي إلى WebDAV: %s</string>
-    <string name="webdav_backup_success">نجح النسخ الاحتياطي إلى WebDAV</string>
     <string name="webdav_choose_backup">اختر نسخة احتياطية</string>
     <string name="webdav_connect_failed">فشل الاتصال بالكود: %d</string>
     <string name="webdav_create_dir_failed">تعذّر إنشاء أو الوصول إلى مجلد النسخ الاحتياطي</string>

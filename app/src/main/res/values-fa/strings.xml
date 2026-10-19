@@ -280,7 +280,6 @@
     <string name="webdav_test_failed" formatted="false">اتصال ناموفق بود: %s</string>
     <string name="backup_to_webdav">پشتیبان‌گیری در WebDAV</string>
     <string name="restore_from_webdav">بازیابی از WebDAV</string>
-    <string name="webdav_backup_success">پشتیبان‌گیری در WebDAV موفق بود</string>
     <string name="webdav_backup_failed">پشتیبان‌گیری در WebDAV ناموفق بود: %s</string>
     <string name="webdav_restore_failed">بازیابی از WebDAV ناموفق بود: %s</string>
     <string name="webdav_server_empty">لطفاً ابتدا سرور WebDAV را پیکربندی کنید</string>

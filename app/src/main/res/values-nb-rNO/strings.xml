@@ -285,7 +285,6 @@
     <string name="webdav_test_failed" formatted="false">Tilkobling mislyktes: %s</string>
     <string name="backup_to_webdav">Sikkerhetskopier til WebDAV</string>
     <string name="restore_from_webdav">Gjenopprett fra WebDAV</string>
-    <string name="webdav_backup_success">Sikkerhetskopiering til WebDAV vellykket</string>
     <string name="webdav_backup_failed">Sikkerhetskopiering til WebDAV mislyktes: %s</string>
     <string name="webdav_restore_failed">Gjenoppretting fra WebDAV mislyktes: %s</string>
     <string name="webdav_server_empty">Konfigurer WebDAV-tjeneren først</string>

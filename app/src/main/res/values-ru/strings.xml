@@ -261,7 +261,6 @@
     <string name="webdav_test_failed" formatted="false">Ошибка соединения: %s</string>
     <string name="backup_to_webdav">Резервное копирование в WebDAV</string>
     <string name="restore_from_webdav">Восстановление из WebDAV</string>
-    <string name="webdav_backup_success">Резервное копирование в WebDAV выполнено</string>
     <string name="webdav_backup_failed">Не удалось создать резервную копию в WebDAV: %s</string>
     <string name="webdav_restore_failed">Не удалось восстановить из WebDAV: %s</string>
     <string name="webdav_server_empty">Сначала настройте сервер WebDAV</string>

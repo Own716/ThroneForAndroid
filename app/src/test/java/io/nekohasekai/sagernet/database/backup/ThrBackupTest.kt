@@ -89,7 +89,7 @@ class ThrBackupTest {
     fun roundTripKeepsEntriesInQMapOrder() {
         val db = temp.newFile("snapshot.db").apply { writeBytes(sqliteHeader + ByteArray(70_000) { it.toByte() }) }
         val parts = ThrBackup.Parts(profiles = true, settings = true)
-        val meta = ThrBackup.androidMeta(parts, "1.0")
+        val meta = ThrBackup.androidMeta(parts, "1.0", "device-id", "Pixel")
         // UTF-16 order puts the surrogate pair (0xD83D) before U+FFFD, code point order would not.
         val keys = listOf("icons/�.png", "icons/😀.png", "about.txt")
         val files = LinkedHashMap<String, ThrBackup.Payload>()
@@ -103,6 +103,7 @@ class ThrBackupTest {
         assertArrayEquals(db.readBytes(), database)
         assertEquals(meta.toCompact(), contents.meta.toCompact())
         assertTrue(contents.isAndroid)
+        assertEquals("Pixel", contents.deviceName)
         assertEquals(setOf(ThrBackup.DATABASE) + keys, contents.keys)
         assertEquals(ThrBackup.Parts(profiles = true, settings = true), contents.parts)
 
@@ -123,10 +124,11 @@ class ThrBackupTest {
     @Test
     fun androidMetaIsCompactAndSorted() {
         val created = GregorianCalendar(2026, Calendar.SEPTEMBER, 4, 3, 43, 0).time
-        val meta = ThrBackup.androidMeta(ThrBackup.Parts(routes = true), "2.0", created = created)
+        val meta = ThrBackup.androidMeta(ThrBackup.Parts(routes = true), "2.0", "device-id", "Pixel", created)
         assertEquals(
-            "{\"android\":{\"app_version\":\"2.0\",\"icons\":false},\"backup_version\":2," +
-                "\"created_at\":\"Fri Sep 4 03:43:00 2026\",\"parts\":{\"icons\":false,\"otp\":false," +
+            "{\"android\":{\"app_version\":\"2.0\",\"icons\":false},\"app_version\":\"2.0\",\"backup_version\":2," +
+                "\"created_at\":\"Fri Sep 4 03:43:00 2026\",\"device\":{\"id\":\"device-id\",\"name\":\"Pixel\"}," +
+                "\"parts\":{\"icons\":false,\"otp\":false," +
                 "\"profiles\":false,\"routes\":true,\"settings\":false},\"platform\":\"android\"}",
             meta.toCompact()
         )

@@ -328,7 +328,6 @@
     <string name="webdav_test_failed" formatted="false">Connection failed: %s</string>
     <string name="backup_to_webdav">Back up to WebDAV</string>
     <string name="restore_from_webdav">Restore from WebDAV</string>
-    <string name="webdav_backup_success">Backup to WebDAV successful</string>
     <string name="webdav_backup_failed">Backup to WebDAV failed: %s</string>
     <string name="webdav_restore_failed">Restore from WebDAV failed: %s</string>
     <string name="webdav_server_empty">Please configure WebDAV server first</string>
@@ -1664,6 +1663,35 @@
     <string name="webdav_listing">Reading the WebDAV folder…</string>
     <string name="webdav_uploading">Uploading to WebDAV…</string>
     <string name="webdav_downloading">Downloading from WebDAV…</string>
+    <string name="webdav_deleting">Deleting from WebDAV…</string>
+    <string name="webdav_backup_uploaded">Backup uploaded as %s</string>
+    <string name="webdav_index_upload_failed">Backup uploaded, but the backup list could not be updated: %s</string>
+    <string name="webdav_index_delete_failed">Backup deleted, but the backup list could not be updated: %s</string>
+    <string name="webdav_backup_deleted">Backup deleted</string>
+    <string name="webdav_delete_failed">Deleting from WebDAV failed: %s</string>
+    <string name="webdav_delete">Delete</string>
+    <string name="webdav_delete_confirm">Delete this backup from the WebDAV server? This cannot be undone.\n\n%s</string>
+    <string name="webdav_backup_mismatch">The downloaded backup does not match the backup list; it may have been replaced or damaged.</string>
+    <string name="webdav_redirected">The server redirected the request to %s. Correct the server address to match.</string>
+    <string name="webdav_unknown_device">Unknown device</string>
+    <string name="webdav_this_device">%s (this device)</string>
+    <string name="webdav_detail_device">Device: %s</string>
+    <string name="webdav_detail_platform">Platform: %s</string>
+    <string name="webdav_detail_version">App version: %s</string>
+    <string name="webdav_detail_parts">Contents: %s</string>
+    <string name="webdav_detail_size">Size: %s</string>
+    <string name="webdav_detail_file">File: %s</string>
+    <string name="webdav_detail_unindexed">This file is not in the backup list, so its download cannot be checked.</string>
+    <string name="webdav_part_profiles">Profiles</string>
+    <string name="webdav_part_routes">Routing</string>
+    <string name="webdav_part_settings">Settings</string>
+    <string name="webdav_part_otp">OTP</string>
+    <string name="webdav_part_ip_lists">IP lists</string>
+    <string name="webdav_part_icons">Icons</string>
+    <string name="webdav_device_name">Device name</string>
+    <string name="webdav_device_name_message">Shown with this device\'s backups in the WebDAV backup list. Leave empty to use the system device name.</string>
+    <string name="webdav_device_name_default">%s (default)</string>
+    <string name="backup_restore_header_device">Backup created on %1$s by %2$s (%3$s).\nSelect which parts to restore:</string>
 
     <!-- Desktop raw routing profiles: carried verbatim, never used -->
     <string name="route_raw_summary">Raw (Throne desktop) · read-only</string>

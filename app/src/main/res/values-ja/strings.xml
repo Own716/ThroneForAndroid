@@ -250,7 +250,6 @@
     <string name="webdav_test_failed" formatted="false">接続に失敗しました: %s</string>
     <string name="backup_to_webdav">WebDAV にバックアップ</string>
     <string name="restore_from_webdav">WebDAV から復元</string>
-    <string name="webdav_backup_success">WebDAV へのバックアップに成功しました</string>
     <string name="webdav_backup_failed">WebDAV へのバックアップに失敗しました: %s</string>
     <string name="webdav_restore_failed">WebDAV からの復元に失敗しました: %s</string>
     <string name="webdav_server_empty">先に WebDAV サーバーを設定してください</string>

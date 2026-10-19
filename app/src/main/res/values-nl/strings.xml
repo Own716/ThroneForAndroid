@@ -278,7 +278,6 @@
     <string name="webdav_test_failed" formatted="false">Verbinding mislukt: %s</string>
     <string name="backup_to_webdav">Back-up naar WebDAV</string>
     <string name="restore_from_webdav">Herstellen vanaf WebDAV</string>
-    <string name="webdav_backup_success">Back-up naar WebDAV geslaagd</string>
     <string name="webdav_backup_failed">Back-up naar WebDAV mislukt: %s</string>
     <string name="webdav_restore_failed">Herstellen vanaf WebDAV mislukt: %s</string>
     <string name="webdav_server_empty">Configureer eerst de WebDAV-server</string>

@@ -5,6 +5,7 @@ import android.database.sqlite.SQLiteDatabase
 import io.nekohasekai.sagernet.BuildConfig
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.MarkerEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.SettingsRegistry
@@ -46,7 +47,10 @@ object BackupExport {
             buildDatabase(temp, selection)
             val parts = ThrBackup.Parts(profiles = selection.profiles, routes = selection.routes, settings = selection.settings)
             val files = mapOf(ThrBackup.DATABASE to ThrBackup.Payload.FromFile(temp))
-            ThrBackup.write(out, ThrBackup.androidMeta(parts, BuildConfig.VERSION_NAME), files)
+            val meta = ThrBackup.androidMeta(
+                parts, BuildConfig.VERSION_NAME, DataStore.deviceId, DataStore.effectiveDeviceName()
+            )
+            ThrBackup.write(out, meta, files)
         } finally {
             BackupTemp.delete(temp)
         }

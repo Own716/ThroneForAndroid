@@ -289,7 +289,6 @@
     <string name="webdav_test_failed" formatted="false">Bağlantı başarısız: %s</string>
     <string name="backup_to_webdav">WebDAV\'a yedekle</string>
     <string name="restore_from_webdav">WebDAV\'tan geri yükle</string>
-    <string name="webdav_backup_success">WebDAV\'a yedekleme başarılı</string>
     <string name="webdav_backup_failed">WebDAV\'a yedekleme başarısız: %s</string>
     <string name="webdav_restore_failed">WebDAV\'tan geri yükleme başarısız: %s</string>
     <string name="webdav_server_empty">Lütfen önce WebDAV sunucusunu yapılandırın</string>

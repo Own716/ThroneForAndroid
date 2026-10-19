@@ -6,7 +6,12 @@ import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.net.Uri
 import android.os.Bundle
+import android.text.format.DateUtils
+import android.text.format.Formatter
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
@@ -29,6 +34,7 @@ import io.nekohasekai.sagernet.database.backup.WebDavBackup
 import io.nekohasekai.sagernet.databinding.LayoutBackupBinding
 import io.nekohasekai.sagernet.databinding.LayoutImportBinding
 import io.nekohasekai.sagernet.databinding.LayoutProgressBinding
+import io.nekohasekai.sagernet.databinding.LayoutWebdavBackupItemBinding
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
@@ -184,12 +190,20 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
             val file = File(app.cacheDir, "thrupload-${System.currentTimeMillis()}.thrbackup")
             try {
                 file.outputStream().use { BackupExport.write(selection, it) }
-                dav.upload(file, WebDavBackup.fileName())
+                val parts = ThrBackup.Parts(
+                    profiles = selection.profiles, routes = selection.routes, settings = selection.settings
+                )
+                dav.upload(file, parts)
             } finally {
                 file.delete()
             }
-        }) {
-            snackbar(R.string.webdav_backup_success).show()
+        }) { upload ->
+            val indexError = upload.indexError
+            if (indexError == null) {
+                snackbar(getString(R.string.webdav_backup_uploaded, upload.file)).show()
+            } else {
+                alert(getString(R.string.webdav_index_upload_failed, indexError))
+            }
         }
     }
 
@@ -209,9 +223,10 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         }
         runTask(R.string.backup_reading, R.string.backup_restore_failed, work = {
             app.contentResolver.openInputStream(uri)?.use { BackupRestore.load(it) } ?: error("cannot read $uri")
-        }, done = ::showRestoreDialog)
+        }) { showRestoreDialog(it) }
     }
 
+    /** The folder's backups, newest first; a tap shows the backup's details. */
     private fun restoreFromWebDav() {
         val dav = webDav() ?: return
         runTask(R.string.webdav_listing, R.string.webdav_restore_failed, work = { dav.list() }) { backups ->
@@ -219,18 +234,110 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
                 alert(getString(R.string.webdav_no_backups, dav.directory.toString()))
                 return@runTask
             }
-            val names = Array<CharSequence>(backups.size) { backups[it].name }
+            val adapter = object : ArrayAdapter<WebDavBackup.Entry>(requireContext(), 0, backups) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val item = convertView?.let(LayoutWebdavBackupItemBinding::bind)
+                        ?: LayoutWebdavBackupItemBinding.inflate(LayoutInflater.from(parent.context), parent, false)
+                    item.title.text = backupTitle(backups[position])
+                    item.summary.text = backupSummary(backups[position])
+                    return item.root
+                }
+            }
             MaterialAlertDialogBuilder(requireContext())
                 .setTitle(R.string.webdav_choose_backup)
-                .setItems(names) { _, which ->
-                    runTask(R.string.webdav_downloading, R.string.webdav_restore_failed, work = {
-                        dav.download(backups[which]) { BackupRestore.load(it) }
-                    }, done = ::showRestoreDialog)
-                }
+                .setAdapter(adapter) { _, which -> showWebDavBackup(dav, backups[which]) }
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
         }
     }
+
+    /** Everything the index knows about [entry]; server texts stay plain text. */
+    private fun showWebDavBackup(dav: WebDavBackup, entry: WebDavBackup.Entry) {
+        val details = listOfNotNull(
+            getString(R.string.webdav_detail_device, deviceLabel(entry)),
+            entry.platform.takeIf { it.isNotEmpty() }
+                ?.let { getString(R.string.webdav_detail_platform, platformName(it)) },
+            entry.appVersion.takeIf { it.isNotEmpty() }?.let { getString(R.string.webdav_detail_version, it) },
+            partNames(entry.parts).takeIf { it.isNotEmpty() }?.let { getString(R.string.webdav_detail_parts, it) },
+            entry.size.takeIf { it >= 0 }?.let {
+                getString(R.string.webdav_detail_size, Formatter.formatShortFileSize(requireContext(), it))
+            },
+            getString(R.string.webdav_detail_file, WebDavBackup.plain(entry.file)),
+        ).joinToString("\n")
+        val note = if (entry.indexed) "" else "\n\n" + getString(R.string.webdav_detail_unindexed)
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(backupDate(entry))
+            .setMessage(details + note)
+            .setPositiveButton(R.string.backup_restore) { _, _ ->
+                runTask(R.string.webdav_downloading, R.string.webdav_restore_failed, work = { dav.download(entry) }) {
+                    showRestoreDialog(it, entry.deviceName)
+                }
+            }
+            .setNeutralButton(R.string.webdav_delete) { _, _ -> deleteFromWebDav(dav, entry) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** After a confirmation; the list comes back refreshed. */
+    private fun deleteFromWebDav(dav: WebDavBackup, entry: WebDavBackup.Entry) {
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle(R.string.webdav_delete)
+            .setMessage(getString(R.string.webdav_delete_confirm, backupTitle(entry)))
+            .setPositiveButton(R.string.webdav_delete) { _, _ ->
+                runTask(R.string.webdav_deleting, R.string.webdav_delete_failed, work = { dav.delete(entry) }) { error ->
+                    if (error == null) {
+                        snackbar(R.string.webdav_backup_deleted).show()
+                        restoreFromWebDav()
+                    } else {
+                        alert(getString(R.string.webdav_index_delete_failed, error)) {
+                            if (view != null) restoreFromWebDav()
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun backupDate(entry: WebDavBackup.Entry): String = if (entry.createdAt > 0) {
+        DateUtils.formatDateTime(
+            requireContext(), entry.createdAt,
+            DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_YEAR or
+                DateUtils.FORMAT_ABBREV_MONTH
+        )
+    } else {
+        getString(R.string.backup_unknown_date)
+    }
+
+    private fun deviceLabel(entry: WebDavBackup.Entry): String {
+        val name = entry.deviceName.ifEmpty { getString(R.string.webdav_unknown_device) }
+        return if (entry.thisDevice) getString(R.string.webdav_this_device, name) else name
+    }
+
+    /** `<date> · <device>`. */
+    private fun backupTitle(entry: WebDavBackup.Entry): String = "${backupDate(entry)} · ${deviceLabel(entry)}"
+
+    /** `<platform> · <version> · <parts> · <size>`; a file missing from the index shows its name instead. */
+    private fun backupSummary(entry: WebDavBackup.Entry): String = listOfNotNull(
+        entry.platform.takeIf { it.isNotEmpty() }?.let(::platformName),
+        entry.appVersion.takeIf { it.isNotEmpty() },
+        partNames(entry.parts).takeIf { it.isNotEmpty() },
+        WebDavBackup.plain(entry.file).takeIf { !entry.indexed },
+        entry.size.takeIf { it >= 0 }?.let { Formatter.formatShortFileSize(requireContext(), it) },
+    ).joinToString(" · ")
+
+    /** The contract's part names that this app knows, readable; unknown ones are left out. */
+    private fun partNames(parts: List<String>): String = parts.distinct().mapNotNull { part ->
+        when (part) {
+            WebDavBackup.PART_PROFILES -> R.string.webdav_part_profiles
+            WebDavBackup.PART_ROUTES -> R.string.webdav_part_routes
+            WebDavBackup.PART_SETTINGS -> R.string.webdav_part_settings
+            WebDavBackup.PART_OTP -> R.string.webdav_part_otp
+            WebDavBackup.PART_IP_LISTS -> R.string.webdav_part_ip_lists
+            WebDavBackup.PART_ICONS -> R.string.webdav_part_icons
+            else -> null
+        }
+    }.joinToString(", ") { getString(it) }
 
     private fun webDav(): WebDavBackup? {
         if (busy) {
@@ -247,8 +354,11 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         return dav
     }
 
-    /** The desktop's restore dialog (dialog_basic_settings.cpp:732-788). */
-    private fun showRestoreDialog(backup: BackupRestore.Loaded) {
+    /**
+     * The desktop's restore dialog (dialog_basic_settings.cpp:732-788); [knownDevice] names the device when the backup
+     * itself does not (a WebDAV index entry).
+     */
+    private fun showRestoreDialog(backup: BackupRestore.Loaded, knownDevice: String = "") {
         val available = BackupRestore.available(backup.contents)
         if (!available.any()) {
             backup.discard()
@@ -259,7 +369,13 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         pending = backup
         val view = LayoutImportBinding.inflate(layoutInflater)
         val created = backup.contents.createdAt.ifEmpty { getString(R.string.backup_unknown_date) }
-        view.restoreHeader.text = getString(R.string.backup_restore_header, created, platformName(backup.contents.platform))
+        val platform = platformName(backup.contents.platform)
+        val device = WebDavBackup.plain(backup.contents.deviceName).ifEmpty { knownDevice }
+        view.restoreHeader.text = if (device.isEmpty()) {
+            getString(R.string.backup_restore_header, created, platform)
+        } else {
+            getString(R.string.backup_restore_header_device, created, device, platform)
+        }
         for ((box, on) in listOf(
             view.restoreProfiles to available.profiles,
             view.restoreRoutes to available.routes,
@@ -396,12 +512,15 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         else -> e.readableMessage
     }
 
-    private fun alert(text: String) {
+    /** [then] runs when the dialog goes away; not at all when there is no screen to show it on. */
+    private fun alert(text: String, then: (() -> Unit)? = null) {
         val context = context
         if (context == null || !isAdded) {
             MessageStore.showMessage(text)
             return
         }
-        MaterialAlertDialogBuilder(context).setMessage(text).setPositiveButton(android.R.string.ok, null).show()
+        MaterialAlertDialogBuilder(context).setMessage(text).setPositiveButton(android.R.string.ok, null)
+            .setOnDismissListener { then?.invoke() }
+            .show()
     }
 }

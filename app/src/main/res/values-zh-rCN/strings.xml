@@ -271,7 +271,6 @@
     <string name="webdav_test_failed">连接失败: %s</string>
     <string name="backup_to_webdav">备份到 WebDAV</string>
     <string name="restore_from_webdav">从 WebDAV 恢复</string>
-    <string name="webdav_backup_success">备份到 WebDAV 成功</string>
     <string name="webdav_backup_failed">备份到 WebDAV 失败：%s</string>
     <string name="webdav_restore_failed">从 WebDAV 恢复失败：%s</string>
     <string name="webdav_server_empty">请先配置 WebDAV 服务器</string>

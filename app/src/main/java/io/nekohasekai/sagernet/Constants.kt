@@ -71,6 +71,8 @@ object Key {
     const val WEBDAV_USERNAME = "webdavUsername"
     const val WEBDAV_PASSWORD = "webdavPassword"
     const val WEBDAV_PATH = "webdavPath"
+    const val DEVICE_ID = "deviceId"
+    const val DEVICE_NAME = "deviceName"
 }
 
 object Action {

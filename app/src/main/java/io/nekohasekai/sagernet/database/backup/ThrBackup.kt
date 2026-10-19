@@ -65,6 +65,9 @@ object ThrBackup {
         val createdAt: String get() = meta.string("created_at")
         val platform: String get() = meta.string("platform")
         val isAndroid: Boolean get() = platform == PLATFORM_ANDROID
+
+        /** The name of the device that made the backup, empty when unknown; untrusted, plain text only. */
+        val deviceName: String get() = meta.obj("device").string("name")
     }
 
     /** Written by bytes or copied from a file (the SQLite snapshot). */
@@ -162,16 +165,27 @@ object ThrBackup {
 
     /**
      * The metadata an Android backup carries. Both `icons` flags stay false: Android writes no icons, and the desktop's
-     * part means its tray icons.
+     * part means its tray icons. `device` and the top-level `app_version` are the shared WebDAV contract's.
      */
-    fun androidMeta(parts: Parts, appVersion: String, created: Date = Date()): JsonObject =
+    fun androidMeta(
+        parts: Parts,
+        appVersion: String,
+        deviceId: String,
+        deviceName: String,
+        created: Date = Date(),
+    ): JsonObject =
         JsonObject().apply {
             this["android"] = JsonObject().apply {
                 this["app_version"] = appVersion
                 this["icons"] = false
             }
+            this["app_version"] = appVersion
             this["backup_version"] = CONTENT_VERSION
             this["created_at"] = textDate(created)
+            this["device"] = JsonObject().apply {
+                this["id"] = deviceId
+                this["name"] = deviceName
+            }
             this["parts"] = JsonObject().apply {
                 this["icons"] = false
                 this["otp"] = parts.otp

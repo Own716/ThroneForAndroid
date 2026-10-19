@@ -11,22 +11,18 @@ import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceDataStore
+import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.backup.WebDavBackup
+import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
+import io.nekohasekai.sagernet.ktx.readableMessage
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ktx.snackbar
 import io.nekohasekai.sagernet.widget.applyListInsets
 import kotlinx.coroutines.launch
-import okhttp3.Credentials
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.net.URL
 import com.google.android.material.snackbar.Snackbar
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 class WebDAVSettingsActivity : ThemedActivity() {
     
@@ -115,7 +111,19 @@ class WebDAVSettingsActivity : ThemedActivity() {
                 }
                 summaryProvider = EditTextPreference.SimpleSummaryProvider.getInstance()
             }
-            
+
+            findPreference<EditTextPreference>(Key.DEVICE_NAME)?.apply {
+                setOnBindEditTextListener { editText ->
+                    editText.setSingleLine()
+                    editText.hint = DataStore.defaultDeviceName()
+                    editText.setSelection(editText.text.length)
+                }
+                summaryProvider = Preference.SummaryProvider<EditTextPreference> { preference ->
+                    preference.text?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: getString(R.string.webdav_device_name_default, DataStore.defaultDeviceName())
+                }
+            }
+
             findPreference<Preference>("webdavTest")?.setOnPreferenceClickListener {
                 if (isClickAllowed()) {
                     testWebDAV()
@@ -129,74 +137,9 @@ class WebDAVSettingsActivity : ThemedActivity() {
         private fun testWebDAV() {
             runOnDefaultDispatcher {
                 try {
-                    val server = DataStore.webdavServer ?: ""
-                    if (server.isBlank()) {
-                        throw Exception(getString(R.string.webdav_server_empty))
-                    }
-
-                    val url = URL(server)
-                    val client = OkHttpClient.Builder()
-                        .connectTimeout(10, TimeUnit.SECONDS)
-                        .readTimeout(10, TimeUnit.SECONDS)
-                        .writeTimeout(10, TimeUnit.SECONDS)
-                        .build()
-
-                    // First the connection and the credentials
-                    val authRequest = Request.Builder()
-                        .url(url)
-                        .method("PROPFIND", null)
-                        .apply {
-                            val credentials = Credentials.basic(
-                                DataStore.webdavUsername ?: "",
-                                DataStore.webdavPassword ?: ""
-                            )
-                            header("Authorization", credentials)
-                            header("Depth", "0")
-                        }
-                        .build()
-
-                    val response = client.newCall(authRequest).execute()
-                    
-                    when (response.code) {
-                        401 -> throw Exception(getString(R.string.webdav_auth_error))
-                        403 -> throw Exception(getString(R.string.webdav_permission_denied))
-                        404 -> throw Exception(getString(R.string.webdav_server_not_found))
-                        in 500..599 -> throw Exception(getString(R.string.webdav_server_error))
-                    }
-
-                    if (!response.isSuccessful) {
-                        throw Exception(getString(R.string.webdav_connect_failed, response.code))
-                    }
-
-                    // Then, once authenticated, the directory
-                    val path = (DataStore.webdavPath ?: "").trim('/')
-                    if (path.isNotBlank()) {
-                        val baseHttpUrl = server.toHttpUrlOrNull()
-                            ?: throw Exception(getString(R.string.webdav_server_not_found))
-
-                        val dirUrl = baseHttpUrl.newBuilder().apply {
-                            path.split('/').filter { it.isNotEmpty() }.forEach { segment ->
-                                addPathSegment(segment)
-                            }
-                        }.build()
-
-                        val dirRequest = Request.Builder()
-                            .url(dirUrl)
-                            .method("MKCOL", null)
-                            .apply {
-                                val credentials = Credentials.basic(
-                                    DataStore.webdavUsername ?: "",
-                                    DataStore.webdavPassword ?: ""
-                                )
-                                header("Authorization", credentials)
-                            }
-                            .build()
-
-                        val dirResponse = client.newCall(dirRequest).execute()
-                        if (!dirResponse.isSuccessful && dirResponse.code != 405) {  // 405: the directory exists
-                            throw Exception(getString(R.string.webdav_create_dir_failed))
-                        }
-                    }
+                    val dav = WebDavBackup.configured()
+                        ?: throw Exception(app.getString(R.string.webdav_server_empty))
+                    dav.check()
 
                     onMainDispatcher {
                         if (!isFragmentAlive) return@onMainDispatcher
@@ -211,7 +154,7 @@ class WebDAVSettingsActivity : ThemedActivity() {
                         if (!isFragmentAlive) return@onMainDispatcher
                         Snackbar.make(
                             requireView(),
-                            getString(R.string.webdav_test_failed, e.message),
+                            getString(R.string.webdav_test_failed, e.readableMessage),
                             Snackbar.LENGTH_SHORT
                         ).show()
                     }

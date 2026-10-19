@@ -249,7 +249,6 @@
     <string name="webdav_test_failed" formatted="false">연결 실패: %s</string>
     <string name="backup_to_webdav">WebDAV에 백업</string>
     <string name="restore_from_webdav">WebDAV에서 복원</string>
-    <string name="webdav_backup_success">WebDAV에 백업 성공</string>
     <string name="webdav_backup_failed">WebDAV에 백업 실패: %s</string>
     <string name="webdav_restore_failed">WebDAV에서 복원 실패: %s</string>
     <string name="webdav_server_empty">먼저 WebDAV 서버를 구성하세요</string>

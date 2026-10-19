@@ -1392,7 +1392,6 @@
     <string name="warp_wireguard_note">WARP ідзе на вашым проксі: WireGuard патрабуе проксі, які перадае UDP.</string>
     <string name="webdav_auth_error">Аўтэнтыфікацыя прайграў: несапраўднае імя карыстальніка або пароль</string>
     <string name="webdav_backup_failed">Рэзервовае капіяванне на WebDAV прайграў: %s</string>
-    <string name="webdav_backup_success">Рэзервовае капіяванне на WebDAV паспяховае</string>
     <string name="webdav_choose_backup">Выбраць рэзервовую копію</string>
     <string name="webdav_connect_failed">Злучэнне прайграў з кодам: %d</string>
     <string name="webdav_create_dir_failed">Не атрымалася стварыць або атрымаць доступ да каталога рэзервовага капіявання</string>

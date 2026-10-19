@@ -31,6 +31,13 @@
         android:defaultValue="Throne"
         android:summary="%s" />
 
+    <EditTextPreference
+        android:key="deviceName"
+        app:icon="@drawable/ic_communication_phonelink_ring"
+        android:title="@string/webdav_device_name"
+        android:dialogMessage="@string/webdav_device_name_message"
+        android:singleLine="true" />
+
     <Preference
         android:key="webdavTest"
         app:icon="@drawable/ic_baseline_cast_connected_24"

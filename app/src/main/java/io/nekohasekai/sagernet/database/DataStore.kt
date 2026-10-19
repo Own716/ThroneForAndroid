@@ -1,6 +1,8 @@
 package io.nekohasekai.sagernet.database
 
 import android.os.Binder
+import android.os.Build
+import android.provider.Settings
 import androidx.preference.PreferenceDataStore
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.bg.BaseService
@@ -8,6 +10,7 @@ import io.nekohasekai.sagernet.bg.VpnService
 import io.nekohasekai.sagernet.database.preference.OnPreferenceDataStoreChangeListener
 import io.nekohasekai.sagernet.database.preference.RoomPreferenceDataStore
 import io.nekohasekai.sagernet.database.preference.SettingsStore
+import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.boolean
 import io.nekohasekai.sagernet.ktx.int
 import io.nekohasekai.sagernet.ktx.long
@@ -107,6 +110,25 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var webdavPath: String?
         get() = configurationStore.getString(Key.WEBDAV_PATH) ?: "Throne"
         set(value) = configurationStore.putString(Key.WEBDAV_PATH, value)
+
+    /** This device in the WebDAV backup list: a random UUID made on first use, never backed up or restored. */
+    val deviceId: String
+        @Synchronized get() = configurationStore.getString(Key.DEVICE_ID)?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString().also { configurationStore.putString(Key.DEVICE_ID, it) }
+
+    /** The name the user gave this device for WebDAV backups; empty = [defaultDeviceName]. */
+    var deviceName by configurationStore.string(Key.DEVICE_NAME) { "" }
+
+    fun effectiveDeviceName(): String = deviceName.trim().ifEmpty { defaultDeviceName() }
+
+    /** The system's device name (Settings › About phone), else manufacturer and model. */
+    fun defaultDeviceName(): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+            runCatching { Settings.Global.getString(app.contentResolver, Settings.Global.DEVICE_NAME) }
+                .getOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        return "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+    }
 
     // ------------------------------------------------------------------------------------------------ desktop keys
     // SettingsRegistry: property = lowerCamelCase of the desktop key.
