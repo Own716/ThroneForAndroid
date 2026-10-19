@@ -2418,4 +2418,22 @@
     <string name="validation_dns_local_ip">Используйте IP-адрес, например 223.5.5.5 или tls://1.1.1.1: этот сервер разрешает имена остальных.</string>
     <string name="validation_dns_cache_small">Ядро повышает значения ниже 1024 до 1024.</string>
     <string name="validation_form_unplaced">%1$s (нет на этом экране; исправьте в «%2$s»)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Правило включено</string>
+    <string name="route_rule_disabled">Отключено: остаётся в профиле, но не попадает в сгенерированную конфигурацию.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Использовать глобальные настройки DNS</string>
+    <string name="route_dns_global_sum">Серверы, заданные в Настройки › DNS.</string>
+    <string name="route_dns_custom">Использовать пользовательские настройки DNS</string>
+    <string name="route_dns_custom_sum">Эти серверы заменяют глобальные, пока используется этот маршрутизирующий профиль.</string>
+    <string name="route_dns_object_note">В настройках DNS используется пользовательский объект DNS, поэтому вместо значений ниже применяется этот объект.</string>
+    <string name="route_dns_scope_note">Локальное переопределение, hosts-файл, предопределённые ответы и дополнительные настройки DNS всегда берутся из Настройки › DNS.</string>
+    <string name="route_dns_own_servers">Он использует собственные DNS-серверы: удаленный %1$s, прямой %2$s.</string>
+    <string name="dns_route_override_note">Текущий маршрутизирующий профиль «%1$s» использует собственные DNS-серверы, поэтому серверы и поведение ниже применяются только к другим маршрутизирующим профилям.</string>
+    <string name="validation_route_dns_remote">Удаленный DNS «%1$s»: %2$s</string>
+    <string name="validation_route_dns_direct">Прямой DNS «%1$s»: %2$s</string>
+    <string name="validation_route_dns_final">DNS-сервер по умолчанию должен быть удаленным или прямым, а не «%1$s».</string>
+    <string name="validation_route_dns_dropped">Собственные настройки DNS профиля отброшены, поэтому он использует глобальные: %1$s</string>
+    <string name="route_dns_global_servers">Удаленный %1$s, прямой %2$s</string>
+    <string name="dns_server_suggestions">Недавние и предлагаемые серверы</string>
 </resources>

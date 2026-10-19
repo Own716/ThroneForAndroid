@@ -2325,4 +2325,22 @@
     <string name="validation_dns_local_ip">请使用 IP 地址，例如 223.5.5.5 或 tls://1.1.1.1：此服务器负责解析其他服务器的名称。</string>
     <string name="validation_dns_cache_small">核心会把低于 1024 的值提高到 1024。</string>
     <string name="validation_form_unplaced">%1$s（不在此页面；请在“%2$s”中修正）</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">规则已启用</string>
+    <string name="route_rule_disabled">已禁用：仍保留在路由配置中，但不会写入生成的配置。</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">使用全局 DNS 设置</string>
+    <string name="route_dns_global_sum">在「设置 › DNS」中设定的服务器。</string>
+    <string name="route_dns_custom">使用自定义 DNS 设置</string>
+    <string name="route_dns_custom_sum">使用此路由配置时，这些服务器将替代全局服务器。</string>
+    <string name="route_dns_object_note">DNS 设置使用了自定义 DNS 对象，因此将应用该对象，而非下方的值。</string>
+    <string name="route_dns_scope_note">本地覆盖、hosts 文件、预定义应答和高级 DNS 设置始终来自「设置 › DNS」。</string>
+    <string name="route_dns_own_servers">此路由配置使用自己的 DNS 服务器：远程 %1$s，直连 %2$s。</string>
+    <string name="dns_route_override_note">当前路由配置 \"%1$s\" 使用自己的 DNS 服务器，因此下方的服务器和行为仅适用于其他路由配置。</string>
+    <string name="validation_route_dns_remote">远程 DNS \"%1$s\"：%2$s</string>
+    <string name="validation_route_dns_direct">直连 DNS \"%1$s\"：%2$s</string>
+    <string name="validation_route_dns_final">默认 DNS 服务器必须是远程或直连，不能是 \"%1$s\"。</string>
+    <string name="validation_route_dns_dropped">该路由配置自己的 DNS 设置已被丢弃，因此改用全局设置：%1$s</string>
+    <string name="route_dns_global_servers">远程 %1$s，直连 %2$s</string>
+    <string name="dns_server_suggestions">最近使用和推荐的服务器</string>
 </resources>

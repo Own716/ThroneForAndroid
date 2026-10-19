@@ -260,11 +260,12 @@ class RouteFragment : ToolbarFragment(R.layout.layout_route), Toolbar.OnMenuItem
                 pasteDialog()
                 return@launch
             }
-            val prompt = if (imported.legacyArray) {
+            val what = if (imported.legacyArray) {
                 getString(R.string.route_import_clipboard_rules)
             } else {
                 getString(R.string.route_import_clipboard_profile, RouteImports.nameOf(activity, profile))
             }
+            val prompt = RouteImports.withDnsNote(activity, what, profile)
             MaterialAlertDialogBuilder(activity)
                 .setTitle(R.string.route_import_clipboard_title)
                 .setMessage(RouteImports.withNotes(activity, prompt, imported.warnings))
@@ -310,8 +311,9 @@ class RouteFragment : ToolbarFragment(R.layout.layout_route), Toolbar.OnMenuItem
                     return@launch
                 }
                 dialog.dismiss()
-                if (imported.warnings.isNotEmpty()) {
-                    RouteImports.showMessage(activity, R.string.route_import_warnings_title, imported.warnings.joinToString("\n"))
+                val notes = listOfNotNull(RouteImports.dnsNote(activity, profile), imported.warnings.joinToString("\n").ifEmpty { null })
+                if (notes.isNotEmpty()) {
+                    RouteImports.showMessage(activity, R.string.route_import_warnings_title, notes.joinToString("\n\n"))
                 }
                 applyImported(profile, imported.legacyArray)
             }

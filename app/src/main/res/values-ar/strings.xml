@@ -2493,4 +2493,22 @@
     <string name="validation_dns_local_ip">استخدم عنوان IP، مثل 223.5.5.5 أو tls://1.1.1.1: يحلّل هذا الخادم أسماء الخوادم الأخرى.</string>
     <string name="validation_dns_cache_small">ترفع النواة القيم الأقل من 1024 إلى 1024.</string>
     <string name="validation_form_unplaced">%1$s (غير موجود في هذه الشاشة؛ أصلحه في %2$s)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">القاعدة مفعّلة</string>
+    <string name="route_rule_disabled">معطّلة: تبقى في ملف التوجيه لكنها لا تُضمَّن في التكوين المُنشأ.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">استخدام إعدادات DNS العامة</string>
+    <string name="route_dns_global_sum">الخوادم المعيّنة في الإعدادات › DNS.</string>
+    <string name="route_dns_custom">استخدام إعدادات DNS مخصصة</string>
+    <string name="route_dns_custom_sum">تحل هذه الخوادم محل الخوادم العامة أثناء استخدام ملف التوجيه هذا.</string>
+    <string name="route_dns_object_note">تستخدم إعدادات DNS كائن DNS مخصصًا، لذا يُطبَّق ذلك الكائن بدلًا من القيم أدناه.</string>
+    <string name="route_dns_scope_note">التجاوز المحلي وملف hosts والإجابات المحددة مسبقًا وإعدادات DNS المتقدمة تأتي دائمًا من الإعدادات › DNS.</string>
+    <string name="route_dns_own_servers">يستخدم خوادم DNS خاصة به: البعيد %1$s، المباشر %2$s.</string>
+    <string name="dns_route_override_note">يستخدم ملف التوجيه الحالي «%1$s» خوادم DNS خاصة به، لذا تنطبق الخوادم والسلوك أدناه على ملفات التوجيه الأخرى فقط.</string>
+    <string name="validation_route_dns_remote">DNS البعيد «%1$s»: %2$s</string>
+    <string name="validation_route_dns_direct">DNS المباشر «%1$s»: %2$s</string>
+    <string name="validation_route_dns_final">يجب أن يكون خادم DNS الافتراضي بعيدًا أو مباشرًا، وليس «%1$s».</string>
+    <string name="validation_route_dns_dropped">أُسقطت إعدادات DNS الخاصة بملف التوجيه، لذا يستخدم الإعدادات العامة: %1$s</string>
+    <string name="route_dns_global_servers">البعيد %1$s، المباشر %2$s</string>
+    <string name="dns_server_suggestions">الخوادم المستخدمة مؤخرًا والمقترحة</string>
 </resources>

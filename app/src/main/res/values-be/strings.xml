@@ -2417,4 +2417,22 @@
     <string name="validation_dns_local_ip">Выкарыстоўвайце IP-адрас, напрыклад 223.5.5.5 або tls://1.1.1.1: гэты сервер развязвае імёны астатніх.</string>
     <string name="validation_dns_cache_small">Ядро падымае значэнні ніжэй за 1024 да 1024.</string>
     <string name="validation_form_unplaced">%1$s (няма на гэтым экране; выпраўце ў «%2$s»)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Правіла ўключана</string>
+    <string name="route_rule_disabled">Адключана: застаецца ў профілі, але не трапляе ў згенераваную канфігурацыю.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Выкарыстоўваць глабальныя налады DNS</string>
+    <string name="route_dns_global_sum">Серверы, зададзеныя ў Налады › DNS.</string>
+    <string name="route_dns_custom">Выкарыстоўваць карыстальніцкія налады DNS</string>
+    <string name="route_dns_custom_sum">Гэтыя серверы замяняюць глабальныя, пакуль выкарыстоўваецца гэты профіль маршрутызацыі.</string>
+    <string name="route_dns_object_note">Налады DNS выкарыстоўваюць карыстальніцкі аб\'ект DNS, таму замест значэнняў ніжэй ужываецца гэты аб\'ект.</string>
+    <string name="route_dns_scope_note">Лакальнае перавызначэнне, файл hosts, загадзя вызначаныя адказы і пашыраныя налады DNS заўсёды бяруцца з Налады › DNS.</string>
+    <string name="route_dns_own_servers">Ён выкарыстоўвае ўласныя серверы DNS: аддалены %1$s, прамы %2$s.</string>
+    <string name="dns_route_override_note">Бягучы профіль маршрутызацыі «%1$s» выкарыстоўвае ўласныя серверы DNS, таму серверы і паводзіны ніжэй ужываюцца толькі да іншых профіляў маршрутызацыі.</string>
+    <string name="validation_route_dns_remote">Аддалены DNS «%1$s»: %2$s</string>
+    <string name="validation_route_dns_direct">Прамы DNS «%1$s»: %2$s</string>
+    <string name="validation_route_dns_final">Прадвызначаны сервер DNS павінен быць аддаленым або прамым, а не «%1$s».</string>
+    <string name="validation_route_dns_dropped">Уласныя налады DNS профілю адкінуты, таму ён выкарыстоўвае глабальныя: %1$s</string>
+    <string name="route_dns_global_servers">Аддалены %1$s, прамы %2$s</string>
+    <string name="dns_server_suggestions">Нядаўнія і прапанаваныя серверы</string>
 </resources>

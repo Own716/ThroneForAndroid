@@ -24,6 +24,7 @@ import io.nekohasekai.sagernet.ktx.runOnIoDispatcher
 import io.nekohasekai.sagernet.route.RouteProfile
 import io.nekohasekai.sagernet.route.RouteShare
 import io.nekohasekai.sagernet.route.RuleSets
+import io.nekohasekai.sagernet.route.RuleType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -133,10 +134,17 @@ object RemoteRouteUpdater {
         return ids
     }
 
+    /**
+     * The swap of UpdateProfile: rules, default outbound and an empty name are taken; a fetched `dns` is not, so [p]
+     * keeps its own DNS settings. Rules switched off locally stay off, matched by name.
+     */
     private fun applyContent(p: RouteProfile, content: String, warnings: MutableList<String>?, fetched: Boolean): String? {
         val imported = RouteShare.fromShareInput(content, RouteManager.profileIdResolver())
         val remote = imported.profile
             ?: return imported.fatal.ifEmpty { "could not parse a routing profile from the response" }
+        val disabledNames = p.rules.filter { it.disabled && it.type != RuleType.ENDPOINT_PREFERRED_BY.id }
+            .mapTo(HashSet()) { it.name }
+        for (rule in remote.rules) if (rule.name in disabledNames) rule.disabled = true
         p.rules = remote.rules
         p.default_outbound_id = remote.default_outbound_id
         if (p.name.isBlank() && remote.name.isNotBlank()) p.name = remote.name

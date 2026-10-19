@@ -2564,4 +2564,21 @@
     <string name="validation_dns_local_ip">Use an IP address, for example 223.5.5.5 or tls://1.1.1.1: this server resolves the names of the others.</string>
     <string name="validation_dns_cache_small">The core raises values below 1024 to 1024.</string>
     <string name="validation_form_unplaced">%1$s (not on this screen; fix it in %2$s)</string>
+    <string name="route_rule_enabled">Rule enabled</string>
+    <string name="route_rule_disabled">Disabled: kept in the profile but left out of the generated config.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Use the global DNS settings</string>
+    <string name="route_dns_global_sum">The servers set in Settings › DNS.</string>
+    <string name="route_dns_custom">Use custom DNS settings</string>
+    <string name="route_dns_custom_sum">These servers replace the global ones while this routing profile is in use.</string>
+    <string name="route_dns_object_note">The DNS settings use a custom DNS object, so that object applies instead of the values below.</string>
+    <string name="route_dns_scope_note">Local override, the hosts file, predefined answers and the advanced DNS settings always come from Settings › DNS.</string>
+    <string name="route_dns_own_servers">It uses its own DNS servers: remote %1$s, direct %2$s.</string>
+    <string name="dns_route_override_note">The current routing profile \"%1$s\" uses its own DNS servers, so the servers and behaviour below apply only to other routing profiles.</string>
+    <string name="validation_route_dns_remote">Remote DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">Direct DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">The default DNS server must be remote or direct, not \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">The profile\'s own DNS settings were dropped, so it uses the global ones: %1$s</string>
+    <string name="route_dns_global_servers">Remote %1$s, direct %2$s</string>
+    <string name="dns_server_suggestions">Recent and suggested servers</string>
 </resources>

@@ -16,7 +16,7 @@ object RouteShare {
     const val REMOTE_ROUTE_LINK_PREFIX = "throne://remoteroute/"
     private const val KIND = "throne-route-profile"
 
-    /** The keys a rule object may carry: name, type and outbound besides the ones [setField] reads. */
+    /** The keys a rule object may carry: name, type, outbound and disabled besides the ones [setField] reads. */
     private val RULE_KEYS = setOf(
         "name", "type", "outbound", "action", "ip_version", "network", "protocol", "inbound", "domain", "domain_suffix",
         "domain_keyword", "domain_regex", "source_ip_cidr", "source_ip_is_private", "ip_cidr", "ip_is_private",
@@ -24,7 +24,7 @@ object RouteShare {
         "package_name", "package_name_regex", "network_type", "network_is_expensive", "wifi_ssid", "wifi_bssid",
         "rule_set", "invert", "method", "reject_method", "no_drop", "override_address", "override_port", "tls_fragment",
         "tls_fragment_fallback_delay", "tls_record_fragment", "tls_spoof", "tls_spoof_method", "override_destination",
-        "strategy", "sniffers",
+        "strategy", "sniffers", "disabled",
     )
 
     class Imported(val profile: RouteProfile?, val fatal: String, val warnings: List<String>, val legacyArray: Boolean)
@@ -37,6 +37,7 @@ object RouteShare {
         root["kind"] = KIND
         root["v"] = 1
         root["name"] = p.name
+        p.activeDns()?.let { root["dns"] = it.toJson() }
         root["default_outbound"] = OutboundIds.toName(p.default_outbound_id)
         val rules = JsonArray()
         for (rule in p.rules) {
@@ -47,6 +48,7 @@ object RouteShare {
             if (obj.isEmpty()) continue
             obj["name"] = rule.name
             obj["type"] = type.token
+            if (rule.disabled) obj["disabled"] = true
             rules.add(obj)
         }
         root["rules"] = rules
@@ -60,7 +62,8 @@ object RouteShare {
     /**
      * FromShareInput: a throne://route link (any case), share JSON, base64url or standard base64 of it with or without
      * padding, or a legacy rule array. Raw profiles are refused; endpoints and endpoint rules are dropped with a
-     * warning (D11), as are rules with fields Android does not support ([parseRuleObject]). Rule outbound names
+     * warning (D11), as are rules with fields Android does not support ([parseRuleObject]); a root `dns` object is
+     * adopted as the profile's own DNS when the core could use it ([adoptDns]). Rule outbound names
      * resolve through [profileIdByName]; [env] gives the rule-set list and the profiles the rules are validated
      * against (the default reads them, so call this off the main thread).
      */
@@ -145,7 +148,21 @@ object RouteShare {
             rule.name = name.ifEmpty { "rule_" + fallbackNum++ }
             profile.rules.add(rule)
         }
+        adoptDns(profile, root, warnings)
         return Imported(profile, "", warnings, false)
+    }
+
+    /** routeProfileAdoptDns: a usable `dns` object becomes the profile's own DNS; another is dropped with a warning. */
+    private fun adoptDns(profile: RouteProfile, root: JsonObject, warnings: MutableList<String>) {
+        if (!root.isObject("dns")) return
+        val dns = RouteDns.fromJson(root.obj("dns"))
+        val problem = dns.problem()
+        if (problem.isNotEmpty()) {
+            warnings.add(vtr(R.string.validation_route_dns_dropped, problem))
+            return
+        }
+        profile.custom_dns = true
+        profile.dns = dns
     }
 
     /**
@@ -190,6 +207,11 @@ object RouteShare {
         for (key in keys) {
             if (key == "name" || key == "type") continue
             val value = obj[key]
+            // QJsonValue::toBool: anything but a JSON true leaves the rule enabled.
+            if (key == "disabled") {
+                rule.disabled = value == true
+                continue
+            }
             if (key == "outbound") {
                 rule.outbound_id = when (value) {
                     is Long, is Double -> when (val id = JsonValues.toInt(value).toLong()) {

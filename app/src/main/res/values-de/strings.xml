@@ -2342,4 +2342,22 @@
     <string name="validation_dns_local_ip">Verwende eine IP-Adresse, z. B. 223.5.5.5 oder tls://1.1.1.1: Dieser Server löst die Namen der anderen auf.</string>
     <string name="validation_dns_cache_small">Der Kern erhöht Werte unter 1024 auf 1024.</string>
     <string name="validation_form_unplaced">%1$s (nicht auf diesem Bildschirm; korrigiere es unter %2$s)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Regel aktiviert</string>
+    <string name="route_rule_disabled">Deaktiviert: bleibt im Profil, wird aber nicht in die generierte Konfiguration übernommen.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Globale DNS-Einstellungen verwenden</string>
+    <string name="route_dns_global_sum">Die Server aus Einstellungen › DNS.</string>
+    <string name="route_dns_custom">Benutzerdefinierte DNS-Einstellungen verwenden</string>
+    <string name="route_dns_custom_sum">Diese Server ersetzen die globalen, solange dieses Routenprofil verwendet wird.</string>
+    <string name="route_dns_object_note">Die DNS-Einstellungen verwenden ein benutzerdefiniertes DNS-Objekt, daher gilt dieses Objekt anstelle der Werte unten.</string>
+    <string name="route_dns_scope_note">Lokale Überschreibung, die Hosts-Datei, vordefinierte Antworten und die erweiterten DNS-Einstellungen kommen immer aus Einstellungen › DNS.</string>
+    <string name="route_dns_own_servers">Es verwendet eigene DNS-Server: remote %1$s, direkt %2$s.</string>
+    <string name="dns_route_override_note">Das aktuelle Routenprofil \"%1$s\" verwendet eigene DNS-Server, daher gelten die Server und das Verhalten unten nur für andere Routenprofile.</string>
+    <string name="validation_route_dns_remote">Remote-DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">Direkte DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">Der Standard-DNS-Server muss remote oder direkt sein, nicht \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">Die eigenen DNS-Einstellungen des Profils wurden verworfen, daher verwendet es die globalen: %1$s</string>
+    <string name="route_dns_global_servers">Remote %1$s, direkt %2$s</string>
+    <string name="dns_server_suggestions">Zuletzt verwendete und vorgeschlagene Server</string>
 </resources>

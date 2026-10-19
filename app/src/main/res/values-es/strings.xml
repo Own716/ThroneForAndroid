@@ -2353,4 +2353,22 @@
     <string name="validation_dns_local_ip">Use una dirección IP, por ejemplo 223.5.5.5 o tls://1.1.1.1: este servidor resuelve los nombres de los demás.</string>
     <string name="validation_dns_cache_small">El núcleo eleva a 1024 los valores inferiores a 1024.</string>
     <string name="validation_form_unplaced">%1$s (no está en esta pantalla; corrígelo en %2$s)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Regla activada</string>
+    <string name="route_rule_disabled">Desactivada: se conserva en el perfil, pero se excluye de la configuración generada.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Usar los ajustes de DNS globales</string>
+    <string name="route_dns_global_sum">Los servidores definidos en Ajustes › DNS.</string>
+    <string name="route_dns_custom">Usar ajustes de DNS personalizados</string>
+    <string name="route_dns_custom_sum">Estos servidores sustituyen a los globales mientras este perfil de enrutamiento está en uso.</string>
+    <string name="route_dns_object_note">Los ajustes de DNS usan un objeto DNS personalizado, por lo que se aplica ese objeto en lugar de los valores de abajo.</string>
+    <string name="route_dns_scope_note">La anulación local, el archivo hosts, las respuestas predefinidas y los ajustes avanzados de DNS siempre provienen de Ajustes › DNS.</string>
+    <string name="route_dns_own_servers">Usa sus propios servidores DNS: remoto %1$s, directo %2$s.</string>
+    <string name="dns_route_override_note">El perfil de enrutamiento actual \"%1$s\" usa sus propios servidores DNS, por lo que los servidores y el comportamiento de abajo solo se aplican a otros perfiles de enrutamiento.</string>
+    <string name="validation_route_dns_remote">DNS remoto \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">DNS directo \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">El servidor DNS predeterminado debe ser remoto o directo, no \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">Se descartaron los ajustes de DNS propios del perfil, por lo que usa los globales: %1$s</string>
+    <string name="route_dns_global_servers">Remoto %1$s, directo %2$s</string>
+    <string name="dns_server_suggestions">Servidores recientes y sugeridos</string>
 </resources>

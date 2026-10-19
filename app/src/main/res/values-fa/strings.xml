@@ -2366,4 +2366,22 @@
     <string name="validation_dns_local_ip">از یک آدرس IP استفاده کنید، مثلاً 223.5.5.5 یا tls://1.1.1.1: این سرور نام سرورهای دیگر را حل می‌کند.</string>
     <string name="validation_dns_cache_small">هسته مقدارهای کمتر از 1024 را به 1024 افزایش می‌دهد.</string>
     <string name="validation_form_unplaced">%1$s (در این صفحه نیست؛ آن را در %2$s اصلاح کنید)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">قانون فعال است</string>
+    <string name="route_rule_disabled">غیرفعال: در پروفایل می‌ماند اما در پیکربندی تولیدشده قرار نمی‌گیرد.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">استفاده از تنظیمات DNS سراسری</string>
+    <string name="route_dns_global_sum">سرورهای تعیین‌شده در تنظیمات › DNS.</string>
+    <string name="route_dns_custom">استفاده از تنظیمات DNS سفارشی</string>
+    <string name="route_dns_custom_sum">تا وقتی این پروفایل مسیریابی در حال استفاده است، این سرورها جایگزین سرورهای سراسری می‌شوند.</string>
+    <string name="route_dns_object_note">تنظیمات DNS از یک شیء DNS سفارشی استفاده می‌کند، بنابراین به‌جای مقادیر زیر همان شیء اعمال می‌شود.</string>
+    <string name="route_dns_scope_note">بازنویسی محلی، فایل hosts، پاسخ‌های از پیش تعریف‌شده و تنظیمات پیشرفته DNS همیشه از تنظیمات › DNS می‌آیند.</string>
+    <string name="route_dns_own_servers">از سرورهای DNS خودش استفاده می‌کند: ریموت %1$s، مستقیم %2$s.</string>
+    <string name="dns_route_override_note">پروفایل مسیریابی فعلی \"%1$s\" از سرورهای DNS خودش استفاده می‌کند، بنابراین سرورها و رفتار زیر فقط برای پروفایل‌های مسیریابی دیگر اعمال می‌شوند.</string>
+    <string name="validation_route_dns_remote">DNS ریموت \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">DNS مستقیم \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">سرور DNS پیش‌فرض باید ریموت یا مستقیم باشد، نه \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">تنظیمات DNS اختصاصی پروفایل کنار گذاشته شد، بنابراین از تنظیمات سراسری استفاده می‌کند: %1$s</string>
+    <string name="route_dns_global_servers">ریموت %1$s، مستقیم %2$s</string>
+    <string name="dns_server_suggestions">سرورهای اخیر و پیشنهادی</string>
 </resources>

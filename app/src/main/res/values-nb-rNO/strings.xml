@@ -2346,4 +2346,22 @@
     <string name="validation_dns_local_ip">Bruk en IP-adresse, for eksempel 223.5.5.5 eller tls://1.1.1.1: denne tjeneren løser navnene til de andre.</string>
     <string name="validation_dns_cache_small">Kjernen hever verdier under 1024 til 1024.</string>
     <string name="validation_form_unplaced">%1$s (ikke på denne skjermen; rett det i %2$s)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Regel aktivert</string>
+    <string name="route_rule_disabled">Deaktivert: beholdes i profilen, men utelates fra den genererte konfigurasjonen.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Bruk de globale DNS-innstillingene</string>
+    <string name="route_dns_global_sum">Tjenerne som er satt i Innstillinger › DNS.</string>
+    <string name="route_dns_custom">Bruk egendefinerte DNS-innstillinger</string>
+    <string name="route_dns_custom_sum">Disse tjenerne erstatter de globale mens denne ruteprofilen er i bruk.</string>
+    <string name="route_dns_object_note">DNS-innstillingene bruker et egendefinert DNS-objekt, så det objektet gjelder i stedet for verdiene nedenfor.</string>
+    <string name="route_dns_scope_note">Lokal overstyring, hosts-filen, forhåndsdefinerte svar og de avanserte DNS-innstillingene kommer alltid fra Innstillinger › DNS.</string>
+    <string name="route_dns_own_servers">Den bruker egne DNS-tjenere: ekstern %1$s, direkte %2$s.</string>
+    <string name="dns_route_override_note">Gjeldende ruteprofil \"%1$s\" bruker egne DNS-tjenere, så tjenerne og atferden nedenfor gjelder bare for andre ruteprofiler.</string>
+    <string name="validation_route_dns_remote">Ekstern DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">Direkte DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">Standard DNS-tjener må være ekstern eller direkte, ikke \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">Profilens egne DNS-innstillinger ble droppet, så den bruker de globale: %1$s</string>
+    <string name="route_dns_global_servers">Ekstern %1$s, direkte %2$s</string>
+    <string name="dns_server_suggestions">Nylige og foreslåtte tjenere</string>
 </resources>

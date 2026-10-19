@@ -2322,4 +2322,22 @@
     <string name="validation_dns_local_ip">請使用 IP 位址，例如 223.5.5.5 或 tls://1.1.1.1：此伺服器負責解析其他伺服器的名稱。</string>
     <string name="validation_dns_cache_small">核心會將低於 1024 的值提高為 1024。</string>
     <string name="validation_form_unplaced">%1$s（不在此畫面；請在「%2$s」中修正）</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">規則已啟用</string>
+    <string name="route_rule_disabled">已停用：仍保留在路由配置中，但不會寫入生成的配置。</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">使用全域性 DNS 設定</string>
+    <string name="route_dns_global_sum">在「設定 › DNS」中設定的伺服器。</string>
+    <string name="route_dns_custom">使用自定義 DNS 設定</string>
+    <string name="route_dns_custom_sum">使用此路由配置時，這些伺服器將取代全域性伺服器。</string>
+    <string name="route_dns_object_note">DNS 設定使用了自定義 DNS 物件，因此會套用該物件，而非下方的值。</string>
+    <string name="route_dns_scope_note">本地覆蓋、hosts 檔案、預定義應答和高階 DNS 設定一律來自「設定 › DNS」。</string>
+    <string name="route_dns_own_servers">此路由配置使用自己的 DNS 伺服器：遠端 %1$s，直連 %2$s。</string>
+    <string name="dns_route_override_note">當前路由配置「%1$s」使用自己的 DNS 伺服器，因此下方的伺服器和行為只適用於其他路由配置。</string>
+    <string name="validation_route_dns_remote">遠端 DNS「%1$s」：%2$s</string>
+    <string name="validation_route_dns_direct">直連 DNS「%1$s」：%2$s</string>
+    <string name="validation_route_dns_final">預設 DNS 伺服器必須是遠端或直連，不能是「%1$s」。</string>
+    <string name="validation_route_dns_dropped">此路由配置自己的 DNS 設定已被捨棄，因此改用全域性設定：%1$s</string>
+    <string name="route_dns_global_servers">遠端 %1$s，直連 %2$s</string>
+    <string name="dns_server_suggestions">最近使用和建議的伺服器</string>
 </resources>

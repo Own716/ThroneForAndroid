@@ -2335,4 +2335,22 @@
     <string name="validation_dns_local_ip">Gunakan alamat IP, mis. 223.5.5.5 atau tls://1.1.1.1: server ini menyelesaikan nama server lainnya.</string>
     <string name="validation_dns_cache_small">Inti menaikkan nilai di bawah 1024 menjadi 1024.</string>
     <string name="validation_form_unplaced">%1$s (tidak ada di layar ini; perbaiki di %2$s)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Aturan diaktifkan</string>
+    <string name="route_rule_disabled">Dinonaktifkan: tetap ada di profil, tetapi tidak disertakan dalam konfigurasi yang dibuat.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Gunakan pengaturan DNS global</string>
+    <string name="route_dns_global_sum">Server yang diatur di Pengaturan › DNS.</string>
+    <string name="route_dns_custom">Gunakan pengaturan DNS kustom</string>
+    <string name="route_dns_custom_sum">Server ini menggantikan server global selama profil rute ini digunakan.</string>
+    <string name="route_dns_object_note">Pengaturan DNS menggunakan objek DNS kustom, jadi objek tersebut yang berlaku, bukan nilai di bawah.</string>
+    <string name="route_dns_scope_note">Override lokal, berkas hosts, jawaban pradefinisikan, dan pengaturan DNS lanjutan selalu berasal dari Pengaturan › DNS.</string>
+    <string name="route_dns_own_servers">Profil ini menggunakan server DNS sendiri: remot %1$s, direk %2$s.</string>
+    <string name="dns_route_override_note">Profil rute saat ini \"%1$s\" menggunakan server DNS sendiri, jadi server dan perilaku di bawah hanya berlaku untuk profil rute lain.</string>
+    <string name="validation_route_dns_remote">Remot DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">Direk DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">Server DNS default harus remot atau direk, bukan \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">Pengaturan DNS milik profil dibuang, jadi profil menggunakan pengaturan global: %1$s</string>
+    <string name="route_dns_global_servers">Remot %1$s, direk %2$s</string>
+    <string name="dns_server_suggestions">Server terbaru dan yang disarankan</string>
 </resources>

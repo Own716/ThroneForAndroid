@@ -11,6 +11,7 @@ import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.bg.CoreServiceClient
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProfileManager
+import io.nekohasekai.sagernet.database.RouteDnsSettings
 import io.nekohasekai.sagernet.database.SettingsRegistry
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
@@ -193,7 +194,10 @@ object DiagnosticsCapture {
         return file
     }
 
-    /** clientInfo (CoreDiagnostics.cpp): the build, the device and the few settings that shape the core's load. */
+    /**
+     * clientInfo (CoreDiagnostics.cpp): the build, the device and the few settings that shape the core's load. Reads
+     * the database, so it runs on the capture's IO thread.
+     */
     private fun clientInfo(): String {
         val store = DataStore.configurationStore
         val state = DataStore.serviceState
@@ -202,6 +206,8 @@ object DiagnosticsCapture {
         } else {
             null
         }
+        val (dns, routeOwnsDns) = runCatching { RouteDnsSettings.current() }
+            .getOrElse { RouteDnsSettings.global() to false }
         return JsonWriter.writeIndented(
             jsonObjectOf(
                 "throne_version" to SagerNet.appVersionNameForDisplay,
@@ -218,7 +224,8 @@ object DiagnosticsCapture {
                 "tun" to (DataStore.serviceMode == Key.MODE_VPN),
                 "enable_stats" to SettingsRegistry.ENABLE_STATS.read(store),
                 "resolve_domain_strategy" to SettingsRegistry.DOMAIN_STRATEGY.read(store),
-                "fake_dns" to SettingsRegistry.FAKEDNS.read(store),
+                "fake_dns" to dns.fakeDns,
+                "route_custom_dns" to routeOwnsDns,
                 "enable_tun_routing" to SettingsRegistry.ENABLE_TUN_ROUTING.read(store),
             )
         )

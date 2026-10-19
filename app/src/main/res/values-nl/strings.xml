@@ -2342,4 +2342,22 @@
     <string name="validation_dns_local_ip">Gebruik een IP-adres, bijvoorbeeld 223.5.5.5 of tls://1.1.1.1: deze server lost de namen van de andere op.</string>
     <string name="validation_dns_cache_small">De core verhoogt waarden onder 1024 naar 1024.</string>
     <string name="validation_form_unplaced">%1$s (niet op dit scherm; corrigeer het in %2$s)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Regel ingeschakeld</string>
+    <string name="route_rule_disabled">Uitgeschakeld: blijft in het profiel, maar wordt weggelaten uit de gegenereerde configuratie.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Globale DNS-instellingen gebruiken</string>
+    <string name="route_dns_global_sum">De servers die zijn ingesteld in Instellingen › DNS.</string>
+    <string name="route_dns_custom">Aangepaste DNS-instellingen gebruiken</string>
+    <string name="route_dns_custom_sum">Deze servers vervangen de globale zolang dit routeringsprofiel in gebruik is.</string>
+    <string name="route_dns_object_note">De DNS-instellingen gebruiken een aangepast DNS-object, dus dat object geldt in plaats van de waarden hieronder.</string>
+    <string name="route_dns_scope_note">Lokale overschrijving, het hosts-bestand, vooraf gedefinieerde antwoorden en de geavanceerde DNS-instellingen komen altijd uit Instellingen › DNS.</string>
+    <string name="route_dns_own_servers">Het gebruikt eigen DNS-servers: extern %1$s, direct %2$s.</string>
+    <string name="dns_route_override_note">Het huidige routeringsprofiel \"%1$s\" gebruikt eigen DNS-servers, dus de servers en het gedrag hieronder gelden alleen voor andere routeringsprofielen.</string>
+    <string name="validation_route_dns_remote">Externe DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">Directe DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">De standaard DNS-server moet extern of direct zijn, niet \"%1$s\".</string>
+    <string name="validation_route_dns_dropped">De eigen DNS-instellingen van het profiel zijn weggelaten, dus het gebruikt de globale: %1$s</string>
+    <string name="route_dns_global_servers">Extern %1$s, direct %2$s</string>
+    <string name="dns_server_suggestions">Recente en voorgestelde servers</string>
 </resources>

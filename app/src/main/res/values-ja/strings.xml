@@ -2310,4 +2310,22 @@
     <string name="validation_dns_local_ip">IP アドレスを使用してください（例：223.5.5.5 または tls://1.1.1.1）。このサーバーが、他のサーバーの名前を解決します。</string>
     <string name="validation_dns_cache_small">1024 未満の値は、コアが 1024 に引き上げます。</string>
     <string name="validation_form_unplaced">%1$s（この画面にはありません。%2$s で修正してください）</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">ルール有効</string>
+    <string name="route_rule_disabled">無効：プロファイルには残りますが、生成される設定には含まれません。</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">グローバル DNS 設定を使用</string>
+    <string name="route_dns_global_sum">「設定 › DNS」で指定したサーバー。</string>
+    <string name="route_dns_custom">カスタム DNS 設定を使用</string>
+    <string name="route_dns_custom_sum">このルーティングプロファイルの使用中は、これらのサーバーがグローバルのサーバーの代わりに使われます。</string>
+    <string name="route_dns_object_note">DNS 設定でカスタム DNS オブジェクトを使用しているため、以下の値ではなくそのオブジェクトが適用されます。</string>
+    <string name="route_dns_scope_note">ローカル上書き、hosts ファイル、定義済み応答、DNS の詳細設定は常に「設定 › DNS」のものが使われます。</string>
+    <string name="route_dns_own_servers">独自の DNS サーバーを使用します：リモート %1$s、ダイレクト %2$s。</string>
+    <string name="dns_route_override_note">現在のルーティングプロファイル「%1$s」は独自の DNS サーバーを使用するため、以下のサーバーと動作は他のルーティングプロファイルにのみ適用されます。</string>
+    <string name="validation_route_dns_remote">リモートDNS「%1$s」：%2$s</string>
+    <string name="validation_route_dns_direct">ダイレクトDNS「%1$s」：%2$s</string>
+    <string name="validation_route_dns_final">既定の DNS サーバーはリモートまたはダイレクトである必要があります（「%1$s」は不可）。</string>
+    <string name="validation_route_dns_dropped">プロファイル独自の DNS 設定は破棄されたため、グローバル設定を使用します：%1$s</string>
+    <string name="route_dns_global_servers">リモート %1$s、ダイレクト %2$s</string>
+    <string name="dns_server_suggestions">最近使用したサーバーと推奨サーバー</string>
 </resources>

@@ -70,7 +70,7 @@ data class GeneratorSettings(
     /** platform.http_proxy.bypass_domain <- DataStore.httpProxyBypass split on newlines. */
     val httpProxyBypassDomains: List<String> = emptyList(),
 
-    // ---- dns (SettingsRepo.h:179-197, :296)
+    // ---- dns (SettingsRepo.h:179-197, :296); the RouteDns members come from RouteDns::Current
     /** remote_dns (desktop address syntax, see DnsServers.buildDnsObj). */
     val remoteDns: String = "https://8.8.8.8/dns-query",
     /** remote_dns_disable_ipv6. */
@@ -86,7 +86,7 @@ data class GeneratorSettings(
     /** dns_persist_cache: experimental.cache_file.store_fakeip / store_dns. */
     val dnsPersistCache: Boolean = false,
     val dnsReverseMapping: Boolean = false,
-    /** dns_object: the raw dns section used when BuildContext.useDnsObject is set (never for tests). */
+    /** dns_object: the raw dns section used when BuildContext.useDnsObject is set without routeOwnsDns (not in tests). */
     val dnsObject: String = "",
     /** dns_final_out: "remote" or "direct". */
     val dnsFinalOut: String = "remote",

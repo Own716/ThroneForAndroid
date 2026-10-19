@@ -2348,4 +2348,22 @@
     <string name="validation_dns_local_ip">Bir IP adresi kullanın, örneğin 223.5.5.5 veya tls://1.1.1.1: bu sunucu diğerlerinin adlarını çözümler.</string>
     <string name="validation_dns_cache_small">Çekirdek 1024\'ün altındaki değerleri 1024\'e yükseltir.</string>
     <string name="validation_form_unplaced">%1$s (bu ekranda yok; %2$s üzerinden düzeltin)</string>
+    <!-- desktop sync 2026-10-19 -->
+    <string name="route_rule_enabled">Kural etkin</string>
+    <string name="route_rule_disabled">Devre dışı: profilde tutulur ama oluşturulan yapılandırmaya dahil edilmez.</string>
+    <string name="route_dns_title">DNS</string>
+    <string name="route_dns_global">Genel DNS ayarlarını kullan</string>
+    <string name="route_dns_global_sum">Ayarlar › DNS bölümünde belirlenen sunucular.</string>
+    <string name="route_dns_custom">Özel DNS ayarlarını kullan</string>
+    <string name="route_dns_custom_sum">Bu rota profili kullanımdayken bu sunucular genel sunucuların yerine geçer.</string>
+    <string name="route_dns_object_note">DNS ayarları özel bir DNS nesnesi kullanıyor, bu yüzden aşağıdaki değerler yerine o nesne uygulanır.</string>
+    <string name="route_dns_scope_note">Yerel geçersiz kılma, hosts dosyası, önceden tanımlı yanıtlar ve gelişmiş DNS ayarları her zaman Ayarlar › DNS bölümünden gelir.</string>
+    <string name="route_dns_own_servers">Kendi DNS sunucularını kullanır: uzak %1$s, direkt %2$s.</string>
+    <string name="dns_route_override_note">Geçerli rota profili \"%1$s\" kendi DNS sunucularını kullanıyor, bu yüzden aşağıdaki sunucular ve davranış yalnızca diğer rota profillerine uygulanır.</string>
+    <string name="validation_route_dns_remote">Uzak DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_direct">Direkt DNS \"%1$s\": %2$s</string>
+    <string name="validation_route_dns_final">Varsayılan DNS sunucusu uzak veya direkt olmalıdır, \"%1$s\" olamaz.</string>
+    <string name="validation_route_dns_dropped">Profilin kendi DNS ayarları atıldı, bu yüzden genel ayarları kullanıyor: %1$s</string>
+    <string name="route_dns_global_servers">Uzak %1$s, direkt %2$s</string>
+    <string name="dns_server_suggestions">Son kullanılan ve önerilen sunucular</string>
 </resources>

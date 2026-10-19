@@ -71,6 +71,7 @@ data class RouteRuleEntity(
     @ColumnInfo(name = "tls_fragment", defaultValue = "0") var tlsFragment: Boolean = false,
     @ColumnInfo(name = "tls_fragment_fallback_delay", defaultValue = "") var tlsFragmentFallbackDelay: String = "",
     @ColumnInfo(name = "tls_record_fragment", defaultValue = "0") var tlsRecordFragment: Boolean = false,
+    @ColumnInfo(name = "disabled", defaultValue = "0") var disabled: Boolean = false,
 ) {
 
     fun toModel(): RouteRule = RouteRule().also {
@@ -117,6 +118,7 @@ data class RouteRuleEntity(
         it.tls_fragment = tlsFragment
         it.tls_fragment_fallback_delay = tlsFragmentFallbackDelay
         it.tls_record_fragment = tlsRecordFragment
+        it.disabled = disabled
     }
 
     companion object {
@@ -168,6 +170,7 @@ data class RouteRuleEntity(
             tlsFragment = r.tls_fragment,
             tlsFragmentFallbackDelay = r.tls_fragment_fallback_delay,
             tlsRecordFragment = r.tls_record_fragment,
+            disabled = r.disabled,
         )
 
         /** QListStr2QJsonArray (Utils.cpp:110-118) written compact. */

@@ -62,6 +62,8 @@ class RuleEnv(@JvmField val catalog: RuleSetCatalog? = null, @JvmField val profi
 class RouteRule {
     @JvmField var name: String = ""
     @JvmField var type: Int = RuleType.CUSTOM.id
+    /** Kept in the profile but left out of the generated config. */
+    @JvmField var disabled: Boolean = false
     @JvmField var ip_version: String = ""
     @JvmField var network: String = ""
     @JvmField var protocol: String = ""
@@ -111,6 +113,7 @@ class RouteRule {
         val c = RouteRule()
         c.name = name
         c.type = type
+        c.disabled = disabled
         for (f in STRING_FIELDS) f.set(c, f.get(this))
         for (f in LIST_FIELDS) f.set(c, ArrayList(f.get(this)))
         for (f in BOOL_FIELDS) f.set(c, f.get(this))
