@@ -1,3 +1,36 @@
+#### 2.0.4
+
+* Add DNS settings to routing profiles **1**
+* Add enable/disable toggle for route rules
+* Extend the Multiplex preset and allow custom per-profile Multiplex settings **2**
+* Update Xray and add XDRIVE transport **3**
+* Share WebDAV backups with Throne desktop **4**
+* Add Resolve domain to the profile menu and resolve through the core
+* Improve performance with large profile lists, search, subscriptions and logs
+* Make cloning a remote routing profile create a local copy **5**
+* Move Speed test current connection to the stats bar's long-press menu
+* Update sing-box
+* Fix rule-set list crash on older devices
+* Fix subscription updates failing while disconnected in Proxy mode
+* Fix AmneziaWG on devices with UDP GSO
+* Fix status bar exit country differing from the IP & country test
+* Fixes and Improvements
+
+**1**:
+A routing profile can use its own remote and direct DNS servers instead of the ones in Settings › DNS.
+
+**2**:
+Multiplex in a profile is now Keep default, On, Off or Custom. Custom gives the profile its own mode (max streams or max connections), padding and TCP Brutal speeds. Xray Multiplex adds max connections, XUDP concurrency and UDP/443 handling.
+
+**3**:
+For security reasons, XDRIVE profiles have no share link; import the server's JSON configuration instead.
+
+**4**:
+WebDAV backups now use the same backup list as Throne desktop, so backups from all your devices show up together with their device, platform, app version and contents. Backups can be deleted from the list, downloads are checked against it, and each device can be given a name in WebDAV settings.
+
+**5**:
+Every update of a remote routing profile replaces its rules, so edits made to it are lost. Its clone is a local copy that is never updated and keeps your edits.
+
 #### 2.0.3
 
 * Add multi-group Auto Selector **1**
