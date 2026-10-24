@@ -55,6 +55,13 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
     /** The page is connected to this core and on screen. */
     private var shown = false
 
+    /**
+     * A stopped screen builds no WebView and loads no page (a new renderer for nobody to see): the load waits for
+     * [onStart].
+     */
+    private var started = false
+    private var loadOnStart = false
+
     /** How the current main-frame load failed: its HTTP status, -1 for a network error, 0 not at all. */
     private var mainFrameStatus = 0
     private var clearHistory = false
@@ -83,6 +90,20 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
         binding.dashboardContent.applyInsetMargin(bottom = true, horizontal = true, ime = true)
         requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner, backCallback)
         render(reload = true)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        started = true
+        if (loadOnStart) {
+            loadOnStart = false
+            render(reload = true)
+        }
+    }
+
+    override fun onStop() {
+        started = false
+        super.onStop()
     }
 
     override fun onResume() {
@@ -128,7 +149,9 @@ class DashboardFragment : ToolbarFragment(R.layout.layout_dashboard), Toolbar.On
                 }
             }
 
-            state.connected -> if (reload || origin.isEmpty()) load()
+            state.connected -> if (reload || origin.isEmpty()) {
+                if (started) load() else loadOnStart = true
+            }
 
             state.started -> {
                 unload()

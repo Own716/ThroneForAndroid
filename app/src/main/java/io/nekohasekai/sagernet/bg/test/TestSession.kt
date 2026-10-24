@@ -1,5 +1,6 @@
 package io.nekohasekai.sagernet.bg.test
 
+import android.database.SQLException
 import android.os.RemoteException
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SpeedTestSettings
@@ -218,7 +219,14 @@ internal class TestSession(
     private suspend fun autoClearUnavailable(profiles: List<ProxyEntity>) {
         val group = profiles.firstOrNull()?.let { GroupRepo.get(it.groupId) } ?: return
         if (!group.autoClearUnavailable) return
-        val unavailable = ProfileManager.getProfiles(profiles.map { it.id }).filter { it.isUnavailable() }.map { it.id }
+        val unavailable = try {
+            profiles.map { it.id }.chunked(ProfileManager.CHUNK).flatMap { ids ->
+                SagerDatabase.proxyDao.getWithoutData(ids).filter { it.isUnavailable() }.map { it.id }
+            }
+        } catch (e: SQLException) {
+            Logs.w(e)
+            return
+        }
         if (unavailable.isEmpty()) return
         Logs.i("URL test finished, clearing ${unavailable.size} unavailable profiles")
         ProfileManager.batchDeleteProfiles(unavailable, stopRunning = false)
@@ -338,7 +346,8 @@ internal class TestSession(
 
     /** DisplayTypeAndName, as the desktop's result log lines name a profile. */
     private fun nameOf(profileId: Long): String =
-        tested[profileId]?.outbound?.displayTypeAndName() ?: profileId.toString()
+        tested[profileId]?.let { ProxyEntity.parseOutbound(it.type, it.outboundJson).displayTypeAndName() }
+            ?: profileId.toString()
 
     private fun counted(success: Boolean, failure: Boolean) {
         done.incrementAndGet()
@@ -361,6 +370,12 @@ internal class TestSession(
 
     companion object {
         const val TYPE_AUTO_SELECTOR = "autoselector"
+
+        /** ProxyEntity.displayName, parsed without caching it on [profile], which the session keeps until it ends. */
+        fun displayNameOf(profile: ProxyEntity): String {
+            val outbound = ProxyEntity.parseOutbound(profile.type, profile.outboundJson)
+            return outbound.displayName().ifEmpty { outbound.displayType().ifEmpty { profile.type } }
+        }
 
         /** The latency code of a core result: ms, aborted = untested (0), a VPN tunnel that is up, else failed (-1). */
         fun latencyCode(latencyMs: Int, error: String, connectOnly: Boolean): Int = when {

@@ -311,7 +311,7 @@ class ProfileListFragment : Fragment(R.layout.layout_profile_list) {
             override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
                 super.onSelectedChanged(viewHolder, actionState)
                 if (actionState == ItemTouchHelper.ACTION_STATE_DRAG && viewHolder is ProfileRowHolder) {
-                    adapter.startDrag(viewHolder.profile)
+                    viewHolder.boundProfile?.let(adapter::startDrag)
                 }
             }
 

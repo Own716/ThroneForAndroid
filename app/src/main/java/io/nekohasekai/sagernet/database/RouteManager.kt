@@ -105,14 +105,38 @@ object RouteManager {
 
     /**
      * A share-import resolver for rule outbound names: the first profile whose name matches exactly
-     * (ProfilesRepo::GetProfileByName), then one whose display name does. The profiles are read on first use.
+     * (ProfilesRepo::GetProfileByName), then one whose display name does, each by lowest id. The stored name is the
+     * outbound's, so only the profiles without one are parsed, plus the rare rows a stored name cannot speak for; each
+     * name is looked up once.
      */
     fun profileIdResolver(): (String) -> Long? {
-        val profiles by lazy { SagerDatabase.proxyDao.getAll().sortedBy { it.id } }
+        val dao = SagerDatabase.proxyDao
+        val unnamed by lazy { dao.getUnnamed() }
+        // A row whose type or data does not parse has no outbound name and shows its type, whatever name it stores.
+        val rows by lazy { SagerDatabase.groupDao.allGroups().flatMap { dao.getNamesByGroup(it.id) } }
+        fun firstOf(ids: List<Long>, match: (ProxyEntity) -> Boolean): Long? =
+            ids.chunked(ProfileManager.CHUNK).flatMap { dao.getEntities(it) }.filter(match).minOfOrNull { it.id }
+
+        fun resolve(name: String): Long? {
+            val named = dao.idByName(name)?.let { id ->
+                if (dao.getById(id)?.outbound?.name == name) id
+                else firstOf(rows.filter { it.name == name }.map { it.id }) { it.outbound.name == name }
+            }
+            listOfNotNull(named, unnamed.firstOrNull { it.outbound.name == name }?.id).minOrNull()?.let { return it }
+            val shownType = rows.filter { !it.name.isNullOrEmpty() && it.type == name }.map { it.id }
+            return listOfNotNull(
+                unnamed.firstOrNull { it.displayName() == name }?.id,
+                firstOf(shownType) { it.displayName() == name },
+            ).minOrNull()
+        }
+
+        val resolved = HashMap<String, Long?>()
         return { name ->
-            if (name.isBlank()) null
-            else profiles.firstOrNull { it.outbound.name == name }?.id
-                ?: profiles.firstOrNull { it.displayName() == name }?.id
+            when {
+                name.isBlank() -> null
+                name in resolved -> resolved[name]
+                else -> resolve(name).also { resolved[name] = it }
+            }
         }
     }
 

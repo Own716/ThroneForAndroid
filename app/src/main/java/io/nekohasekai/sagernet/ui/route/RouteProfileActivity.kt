@@ -174,6 +174,12 @@ class RouteProfileActivity : ThemedActivity(R.layout.layout_route_profile) {
     override fun snackbarInternal(text: CharSequence): Snackbar =
         Snackbar.make(findViewById(R.id.coordinator), text, Snackbar.LENGTH_LONG)
 
+    override fun onDestroy() {
+        // The rule editors this screen opens share the server list; it goes with the screen.
+        if (isFinishing) RouteServers.release()
+        super.onDestroy()
+    }
+
     private fun load() {
         val id = intent.getLongExtra(EXTRA_PROFILE_ID, 0L)
         val json = intent.getStringExtra(EXTRA_PROFILE_JSON)

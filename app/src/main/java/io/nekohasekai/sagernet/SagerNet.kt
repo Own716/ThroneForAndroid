@@ -163,12 +163,19 @@ class SagerNet : Application(),
                 ?.getItemAt(0)?.text?.toString() ?: ""
         }
 
-        fun trySetPrimaryClip(clip: String) = try {
-            clipboard.setPrimaryClip(ClipData.newPlainText(null, clip))
-            true
-        } catch (e: RuntimeException) {
-            Logs.w(e)
-            false
+        /** The clip travels as UTF-16 in one binder transaction, whose buffer (about 1 MB) the process shares. */
+        const val MAX_CLIP_CHARS = 400_000
+
+        /** False when the text is over [MAX_CLIP_CHARS] or the clipboard refused it. */
+        fun trySetPrimaryClip(clip: String): Boolean {
+            if (clip.length > MAX_CLIP_CHARS) return false
+            return try {
+                clipboard.setPrimaryClip(ClipData.newPlainText(null, clip))
+                true
+            } catch (e: RuntimeException) {
+                Logs.w(e)
+                false
+            }
         }
 
         fun updateNotificationChannels() {

@@ -32,10 +32,17 @@ internal object SubscriptionFilters {
 
     private val NONE = Outcome(emptyList(), "")
 
-    /** removeFlagged (GroupUpdater.cpp:208-264): each profile is listed under the first enabled action that claims it. */
-    suspend fun removeFlagged(gid: Long, profiles: List<ProxyEntity>, options: SubscriptionOptions): Outcome {
+    /** Rows written per transaction. */
+    private const val WRITE_CHUNK = 500
+
+    /**
+     * removeFlagged (GroupUpdater.cpp:208-264): each profile is listed under the first enabled action that claims it.
+     * The [members] are loaded only when an action is enabled.
+     */
+    suspend fun removeFlagged(gid: Long, options: SubscriptionOptions, members: () -> List<ProxyEntity>): Outcome {
         if (!options.removeDuplicates && !options.removeInsecure && !options.removeInvalid) return NONE
 
+        val profiles = members()
         val flagged = HashSet<Long>()
         val doomed = ArrayList<Long>()
         val sections = StringBuilder()
@@ -164,8 +171,14 @@ internal object SubscriptionFilters {
             outbound.setAddress(address)
             profile.putOutbound(outbound)
             if (profile.outboundJson == before) continue
-            SagerDatabase.proxyDao.updateOutbound(profile.id, profile.type, profile.name, profile.outboundJson)
             changed.add(profile)
+        }
+        for (part in changed.chunked(WRITE_CHUNK)) {
+            SagerDatabase.instance.runInTransaction {
+                for (profile in part) {
+                    SagerDatabase.proxyDao.updateOutbound(profile.id, profile.type, profile.name, profile.outboundJson)
+                }
+            }
         }
         val byGroup = changed.groupBy({ it.groupId }, { it.id })
         GroupSort.repositionLater(byGroup, SortInput.CONFIG)

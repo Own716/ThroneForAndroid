@@ -77,10 +77,12 @@ class TrafficLooper(val data: BaseService.Data, private val sc: CoroutineScope) 
                 Logs.w(e)
             }
             val traffic = ArrayList<TrafficData>()
-            for (item in profiles.values) {
-                if (item.id <= 0L) continue
-                persist(item)
-                traffic.add(TrafficData(id = item.id, rx = item.rx, tx = item.tx))
+            SagerDatabase.instance.runInTransaction {
+                for (item in profiles.values) {
+                    if (item.id <= 0L) continue
+                    persist(item)
+                    traffic.add(TrafficData(id = item.id, rx = item.rx, tx = item.tx))
+                }
             }
             if (traffic.isNotEmpty()) GroupSort.repositionLater(traffic.map { it.id }, SortInput.TRAFFIC)
             data.proxy?.trafficMap?.values?.forEach { entities ->

@@ -1,15 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules xmlns:tools="http://schemas.android.com/tools"
     tools:ignore="FullBackupContent">
-    <!-- sager_net.db holds the profiles, routes and settings (configuration.db is gone since v12) -->
+    <!-- sager_net.db holds the profiles, routes and settings (configuration.db is gone since v12); its latest
+         commits may still be in the write-ahead log -->
     <cloud-backup>
         <include
             domain="database"
             path="sager_net.db" />
+        <include
+            domain="database"
+            path="sager_net.db-wal" />
     </cloud-backup>
     <device-transfer>
         <include
             domain="database"
             path="sager_net.db" />
+        <include
+            domain="database"
+            path="sager_net.db-wal" />
     </device-transfer>
 </data-extraction-rules>

@@ -88,10 +88,13 @@ class QRCodeDialog() : DialogFragment() {
                 )
                 // scaled down, still square, when the padded dialog is narrower than the code
                 adjustViewBounds = true
+                val pixels = IntArray(size * size)
+                for (y in 0 until size) {
+                    val row = y * size
+                    for (x in 0 until size) pixels[row + x] = if (qrBits.get(x, y)) Color.BLACK else Color.WHITE
+                }
                 setImageBitmap(Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565).apply {
-                    for (x in 0 until size) for (y in 0 until size) {
-                        setPixel(x, y, if (qrBits.get(x, y)) Color.BLACK else Color.WHITE)
-                    }
+                    setPixels(pixels, 0, size, 0, 0, size, size)
                 })
             })
 

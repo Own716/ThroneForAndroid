@@ -28,10 +28,10 @@ fun Context.confirmAction(title: CharSequence, message: CharSequence?, @StringRe
         .show()
 }
 
-/** [names] one per line; past [limit] the rest is only counted. */
-fun Context.nameList(names: List<String>, limit: Int = 10): String {
+/** [names] one per line, of [total] in all; past [limit] the rest is only counted. */
+fun Context.nameList(names: List<String>, limit: Int = 10, total: Int = names.size): String {
     val shown = names.take(limit).joinToString("\n")
-    val more = names.size - limit
+    val more = total - minOf(limit, names.size)
     return if (more > 0) shown + "\n" + resources.getQuantityString(R.plurals.confirm_more_names, more, more) else shown
 }
 

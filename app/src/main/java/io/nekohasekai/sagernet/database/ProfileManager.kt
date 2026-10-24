@@ -37,7 +37,7 @@ object ProfileManager {
     )
 
     /** SQLite's bound-parameter limit is 999; id lists are split below it. */
-    private const val CHUNK = 500
+    internal const val CHUNK = 500
 
     private val listeners = ArrayList<Listener>()
     private val creditListeners = CopyOnWriteArrayList<CreditListener>()
@@ -200,7 +200,9 @@ object ProfileManager {
 
     suspend fun resetTraffic(profileIds: LongArray) {
         if (profileIds.isEmpty()) return
-        profileIds.toList().chunked(CHUNK).forEach { dao.resetTraffic(it.toLongArray()) }
+        SagerDatabase.instance.runInTransaction {
+            profileIds.toList().chunked(CHUNK).forEach { dao.resetTraffic(it.toLongArray()) }
+        }
         GroupSort.repositionLater(profileIds.toList(), SortInput.TRAFFIC)
     }
 
@@ -208,11 +210,17 @@ object ProfileManager {
 
     /** Deletes one profile (the list's own delete, no running-profile rule) and closes the gap in its group. */
     suspend fun deleteProfile(groupId: Long, profileId: Long) {
-        if (dao.deleteById(profileId) == 0) return
+        val deleted = SagerDatabase.instance.runInTransaction(Callable {
+            // In a group numbered 0..n-1, shifting the rows behind the gap is the same as renumbering them all.
+            val order = dao.orderInGroup(profileId, groupId)?.takeIf { dao.isDense(groupId) }
+            if (dao.deleteById(profileId) == 0) return@Callable false
+            if (order != null) dao.closeGap(groupId, order) else compactLocked(groupId)
+            true
+        })
+        if (!deleted) return
         if (DataStore.selectedProxy == profileId) {
             DataStore.selectedProxy = 0L
         }
-        compact(groupId)
         iterator { onRemoved(groupId, profileId) }
     }
 
@@ -237,10 +245,10 @@ object ProfileManager {
         val ok = try {
             SagerDatabase.instance.runInTransaction {
                 for (chunk in toDelete.chunked(CHUNK)) {
-                    val rows = dao.getEntities(chunk)
-                    rows.forEach { groups.add(it.groupId) }
+                    groups.addAll(dao.groupsOf(chunk))
+                    val existing = dao.existingIds(chunk)
                     dao.deleteByIds(chunk)
-                    deleted.addAll(rows.map { it.id })
+                    deleted.addAll(existing)
                 }
                 groups.forEach(::compactLocked)
             }
@@ -264,11 +272,11 @@ object ProfileManager {
      */
     suspend fun setOrder(groupId: Long, ids: List<Long>) {
         SagerDatabase.instance.runInTransaction {
-            val current = dao.getIdsByGroup(groupId)
-            val members = current.toHashSet()
+            val current = dao.getPositionsByGroup(groupId)
+            val members = current.mapTo(HashSet(current.size * 2)) { it.id }
             val wanted = ids.distinct().filter { it in members }
             val wantedSet = wanted.toHashSet()
-            writeOrder(wanted + current.filter { it !in wantedSet })
+            writeOrder(current, wanted + current.mapNotNull { row -> row.id.takeIf { it !in wantedSet } })
         }
         GroupRepo.postReload(groupId)
     }
@@ -281,11 +289,12 @@ object ProfileManager {
     suspend fun emplace(groupId: Long, from: Int, to: Int): Boolean {
         GroupSort.setSort(groupId, GroupSortAction())
         val moved = SagerDatabase.instance.runInTransaction(Callable {
-            val ids = ArrayList(dao.getIdsByGroup(groupId))
+            val current = dao.getPositionsByGroup(groupId)
+            val ids = current.mapTo(ArrayList(current.size)) { it.id }
             if (from !in ids.indices || to !in ids.indices) return@Callable false
             ids.add(to + 1, ids[from])
             if (from < to) ids.removeAt(from) else ids.removeAt(from + 1)
-            writeOrder(ids)
+            writeOrder(current, ids)
             true
         })
         if (moved) GroupRepo.postReload(groupId)
@@ -300,11 +309,11 @@ object ProfileManager {
         SagerDatabase.instance.runInTransaction {
             var order = dao.nextOrder(groupId)
             for (chunk in profileIds.distinct().chunked(CHUNK)) {
-                val rows = dao.getEntities(chunk).associateBy { it.id }
+                val movable = dao.idsOutsideGroup(chunk, groupId).toHashSet()
+                if (movable.isEmpty()) continue
+                sources.addAll(dao.groupsOf(movable.toList()))
                 for (id in chunk) {
-                    val row = rows[id] ?: continue
-                    if (row.groupId == groupId) continue
-                    sources.add(row.groupId)
+                    if (id !in movable) continue
                     dao.setGroup(id, groupId, order++)
                     moved.add(id)
                 }
@@ -317,16 +326,22 @@ object ProfileManager {
     }
 
     /** Renumbers the group's members 0..n-1 in their current order. */
-    fun compact(groupId: Long) {
-        SagerDatabase.instance.runInTransaction { compactLocked(groupId) }
-    }
-
     private fun compactLocked(groupId: Long) {
-        writeOrder(dao.getIdsByGroup(groupId))
+        dao.getPositionsByGroup(groupId).forEachIndexed { index, row ->
+            if (row.userOrder != index.toLong()) dao.setUserOrder(row.id, index.toLong())
+        }
     }
 
-    private fun writeOrder(ids: List<Long>) {
-        ids.forEachIndexed { index, id -> dao.setUserOrder(id, index.toLong()) }
+    /**
+     * Inside the transaction that read [current] (the group's getPositionsByGroup): [ids], members of that group, get
+     * positions 0..n-1 in that order. Only the rows whose stored position differs are written.
+     */
+    internal fun writeOrder(current: List<ProfilePosition>, ids: List<Long>) {
+        val stored = HashMap<Long, Long>(current.size * 2)
+        for (row in current) stored[row.id] = row.userOrder
+        ids.forEachIndexed { index, id ->
+            if (stored[id] != index.toLong()) dao.setUserOrder(id, index.toLong())
+        }
     }
 
     // ------------------------------------------------------------------------------------------------ test results
@@ -371,7 +386,8 @@ object ProfileManager {
     }
 
     fun clearTestResults(profileIds: List<Long>) {
-        profileIds.chunked(CHUNK).forEach { dao.clearTestResults(it) }
+        if (profileIds.isEmpty()) return
+        SagerDatabase.instance.runInTransaction { profileIds.chunked(CHUNK).forEach { dao.clearTestResults(it) } }
         GroupSort.repositionLater(profileIds, SortInput.TEST_RESULT)
     }
 

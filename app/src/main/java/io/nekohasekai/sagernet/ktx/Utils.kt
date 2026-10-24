@@ -6,7 +6,6 @@ import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.util.TypedValue
 import android.view.View
 import android.widget.FrameLayout
@@ -54,20 +53,6 @@ val Throwable.readableMessage
 fun broadcastReceiver(callback: (Context, Intent) -> Unit): BroadcastReceiver =
     object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) = callback(context, intent)
-    }
-
-fun Context.listenForPackageChanges(onetime: Boolean = true, callback: () -> Unit) =
-    object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            callback()
-            if (onetime) context.unregisterReceiver(this)
-        }
-    }.apply {
-        registerReceiver(this, IntentFilter().apply {
-            addAction(Intent.ACTION_PACKAGE_ADDED)
-            addAction(Intent.ACTION_PACKAGE_REMOVED)
-            addDataScheme("package")
-        })
     }
 
 fun Preference.remove() = parent!!.removePreference(this)

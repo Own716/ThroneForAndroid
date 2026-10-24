@@ -11,6 +11,7 @@ import io.nekohasekai.sagernet.database.GroupSortMethod
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.TestShowItems
 import io.nekohasekai.sagernet.group.SubscriptionClient
 import io.nekohasekai.sagernet.ktx.Logs
@@ -52,11 +53,12 @@ internal object GroupActions {
             val skip = DataStore.skipDeleteConfirmation
             val seen = HashSet<String>()
             val duplicates = ProfileManager.members(groupId).filter { !seen.add(it.dedupKey()) }
+            val names = shownNames(duplicates)
             host.onUi {
                 if (duplicates.isEmpty()) {
                     snackbar(R.string.profiles_no_duplicates).show()
                 } else {
-                    confirmRemoval(this, skip, R.plurals.confirm_remove_duplicates, duplicates) {
+                    confirmRemoval(this, skip, R.plurals.confirm_remove_duplicates, duplicates.size, names) {
                         deleteProfiles(this, duplicates.map { it.id }, stopRunning = true)
                     }
                 }
@@ -68,13 +70,19 @@ internal object GroupActions {
     fun removeUnavailable(host: ConfigurationFragment, groupId: Long) {
         host.launchIo {
             val skip = DataStore.skipDeleteConfirmation
-            val unavailable = ProfileManager.members(groupId).filter { it.isUnavailable() }
+            // The latency column decides, so the members are read without their data and only the shown ones with it.
+            val unavailable = SagerDatabase.proxyDao.getWithoutDataByGroup(groupId)
+                .filter { it.isUnavailable() }
+                .sortedWith(compareBy<ProxyEntity> { it.userOrder }.thenBy { it.id })
+                .map { it.id }
+            val shown = unavailable.take(NAMES_SHOWN)
+            val names = shownNames(ProfileManager.getProfiles(shown).sortedBy { shown.indexOf(it.id) })
             host.onUi {
                 if (unavailable.isEmpty()) {
                     snackbar(R.string.profiles_no_unavailable).show()
                 } else {
-                    confirmRemoval(this, skip, R.plurals.confirm_remove_unavailable, unavailable) {
-                        deleteProfiles(this, unavailable.map { it.id }, stopRunning = false)
+                    confirmRemoval(this, skip, R.plurals.confirm_remove_unavailable, unavailable.size, names) {
+                        deleteProfiles(this, unavailable, stopRunning = false)
                     }
                 }
             }
@@ -87,11 +95,12 @@ internal object GroupActions {
             val skip = DataStore.skipDeleteConfirmation
             val skipCert = DataStore.skipCert
             val insecure = ProfileManager.members(groupId).filter { it.outbound.effectiveSecurity(skipCert).isInsecure }
+            val names = shownNames(insecure)
             host.onUi {
                 if (insecure.isEmpty()) {
                     snackbar(R.string.profiles_no_insecure).show()
                 } else {
-                    confirmRemoval(this, skip, R.plurals.confirm_remove_insecure, insecure) {
+                    confirmRemoval(this, skip, R.plurals.confirm_remove_insecure, insecure.size, names) {
                         deleteProfiles(this, insecure.map { it.id }, stopRunning = true)
                     }
                 }
@@ -147,18 +156,23 @@ internal object GroupActions {
         }
     }
 
+    /** The names a confirmation lists, worked out off the main thread for the shown ones only. */
+    private fun shownNames(profiles: List<ProxyEntity>): List<String> = profiles.take(NAMES_SHOWN).map { it.displayName() }
+
+    /** [names] are those of the first of [count] profiles; the rest are only counted. */
     private fun confirmRemoval(
         host: ConfigurationFragment,
         skip: Boolean,
         @PluralsRes question: Int,
-        profiles: List<ProxyEntity>,
+        count: Int,
+        names: List<String>,
         remove: () -> Unit,
     ) {
         if (skip) return remove()
         val context = host.requireContext()
         context.confirmAction(
-            context.resources.getQuantityString(question, profiles.size, profiles.size),
-            context.nameList(profiles.map { it.displayName() }),
+            context.resources.getQuantityString(question, count, count),
+            context.nameList(names, total = count),
             R.string.delete,
             remove,
         )
@@ -233,4 +247,7 @@ internal object GroupActions {
             }
         }
     }
+
+    /** nameList's default limit. */
+    private const val NAMES_SHOWN = 10
 }

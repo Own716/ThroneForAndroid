@@ -2,11 +2,18 @@ package io.nekohasekai.sagernet.utils
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
-import io.nekohasekai.sagernet.ktx.listenForPackageChanges
+import io.nekohasekai.sagernet.ktx.runOnIoDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -18,6 +25,8 @@ object PackageCache {
 
     /** UserHandle.PER_USER_RANGE (hidden API). */
     const val PER_USER_RANGE = 100000
+
+    private const val RELOAD_DELAY_MS = 1000L
 
     /**
      * One complete listing. A reload builds the next one aside and publishes it whole, so readers (the core's
@@ -58,10 +67,34 @@ object PackageCache {
     val packageMap: Map<String, Int> get() = snapshot().packageMap
     val uidMap: Map<Int, List<String>> get() = snapshot().uidMap
 
+    /** The coalesced reload after package broadcasts; touched on the main thread only. */
+    private var pendingReload: Job? = null
+
     // called from init (suspend)
     fun register() {
         if (registerd.getAndSet(true)) return
-        app.listenForPackageChanges(false) { reload() }
+        app.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                // An update sends REMOVED (replacing) and then ADDED: the ADDED one is enough.
+                if (intent.action == Intent.ACTION_PACKAGE_REMOVED &&
+                    intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
+                ) return
+                // A burst (store updates) costs one reload, off the main thread, once it settles.
+                pendingReload?.cancel()
+                pendingReload = runOnIoDispatcher {
+                    delay(RELOAD_DELAY_MS)
+                    try {
+                        reload()
+                    } catch (e: Exception) {
+                        Logs.w(e)
+                    }
+                }
+            }
+        }, IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addDataScheme("package")
+        })
         try {
             reload()
         } finally {
@@ -92,7 +125,7 @@ object PackageCache {
             installed.associate { it.packageName to it.uid },
             installed.groupBy({ it.uid }, { it.packageName }),
         )
-        // Reloads run unserialized (package broadcasts on the main thread, app lists on IO), so one that queried
+        // Reloads run unserialized (after package broadcasts and for the app lists, both on IO), so one that queried
         // earlier must not replace a listing published by a later one.
         return synchronized(publishLock) {
             current?.takeIf { it.generation > generation } ?: fresh.also { current = it }

@@ -25,29 +25,38 @@ object SubscriptionReconcile {
 
     private const val HEX = "0123456789abcdef"
 
-    /** Reconcile (SubscriptionReconcile.cpp:19-63). */
+    /**
+     * The identity pass of Reconcile (SubscriptionReconcile.cpp:19-63), once every arrival went through [index] and
+     * before any is stored: an arrival that pairs with a leftover old row gets it as [NewEntry.supersedes], so it
+     * updates that row in place instead of being inserted and deleted again.
+     */
     @JvmStatic
-    fun reconcile(old: List<OldEntry>, incoming: List<NewEntry>, index: ContentIndex): ReconcilePlan {
-        val plan = ReconcilePlan()
-
+    fun pairByIdentity(old: List<OldEntry>, incoming: List<NewEntry>, index: ContentIndex) {
         // Identity pairing only sees what the content pass never saw: leftovers whose key never arrived, arrivals whose key was never known.
         val leftoverByIdentity = HashMap<String, ArrayDeque<Long>>()
         for (entry in old) {
             if (index.isClaimed(entry.id) || index.arrived(entry.content)) continue
             leftoverByIdentity.getOrPut(entry.identity) { ArrayDeque() }.addLast(entry.id)
         }
-
-        val supersededBy = HashMap<Long, Long>()
-        val matchedOld = HashSet<Long>()
         for (entry in incoming) {
-            if (entry.id < 0 || entry.reused || entry.contentKnown) continue
+            if (entry.reused || entry.contentKnown) continue
             val leftovers = leftoverByIdentity[entry.identity]
             if (leftovers.isNullOrEmpty()) continue
-            val oldId = leftovers.removeFirst()
-            plan.updates.add(oldId to entry.id)
+            entry.supersedes = leftovers.removeFirst()
+        }
+    }
+
+    /** Reconcile (SubscriptionReconcile.cpp:19-63) over the stored arrivals, paired by [pairByIdentity]. */
+    @JvmStatic
+    fun reconcile(old: List<OldEntry>, incoming: List<NewEntry>, index: ContentIndex): ReconcilePlan {
+        val plan = ReconcilePlan()
+
+        val matchedOld = HashSet<Long>()
+        for (entry in incoming) {
+            if (entry.supersedes <= 0L) continue
+            plan.updates.add(entry.supersedes)
             plan.updated.add(entry.display)
-            supersededBy[entry.id] = oldId
-            matchedOld.add(oldId)
+            matchedOld.add(entry.supersedes)
         }
 
         for (entry in old) {
@@ -57,19 +66,13 @@ object SubscriptionReconcile {
         }
 
         for (entry in incoming) {
+            if (entry.supersedes > 0L) {
+                plan.order.add(entry.supersedes)
+                continue
+            }
             if (entry.id < 0) continue
-            if (entry.reused) {
-                plan.order.add(entry.id)
-                continue
-            }
-            val oldId = supersededBy[entry.id]
-            if (oldId != null) {
-                plan.order.add(oldId)
-                plan.stale.add(entry.id)
-                continue
-            }
             plan.order.add(entry.id)
-            plan.added.add(entry.display)
+            if (!entry.reused) plan.added.add(entry.display)
         }
         return plan
     }
@@ -83,7 +86,10 @@ class OldEntry(
     @JvmField val display: String,
 )
 
-/** A parsed profile in arrival order; [id] is the claimed old id when [reused], the inserted id otherwise (-1 = failed). */
+/**
+ * A parsed profile in arrival order; [id] is the claimed old id when [reused], the updated old id when it
+ * [supersedes] one, the inserted id otherwise (-1 = not stored).
+ */
 class NewEntry(@JvmField val display: String) {
     @JvmField var id: Long = -1L
     @JvmField var reused: Boolean = false
@@ -92,6 +98,9 @@ class NewEntry(@JvmField val display: String) {
 
     /** Only computed when the content was never known. */
     @JvmField var identity: String = ""
+
+    /** The old row of the same identity that takes this profile's data in place, 0 = none. */
+    @JvmField var supersedes: Long = 0L
 }
 
 /** ContentIndex: each old profile is claimed at most once, in group order, by identical arrivals in arrival order (#1775). */
@@ -131,8 +140,8 @@ class ReconcilePlan {
     /** The group's new list: the document order over old ids (kept or updated in place) and new ids. */
     @JvmField val order = ArrayList<Long>()
 
-    /** (old id, new id): the old row takes the new row's data, the new row is in [stale]. */
-    @JvmField val updates = ArrayList<Pair<Long, Long>>()
+    /** The old ids that took an arrival's data in place. */
+    @JvmField val updates = ArrayList<Long>()
     @JvmField val stale = ArrayList<Long>()
     @JvmField val added = ArrayList<String>()
     @JvmField val updated = ArrayList<String>()

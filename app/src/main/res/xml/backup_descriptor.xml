@@ -2,4 +2,5 @@
 <full-backup-content xmlns:tools="http://schemas.android.com/tools"
                      tools:ignore="FullBackupContent">
     <include domain="database" path="sager_net.db"/>
+    <include domain="database" path="sager_net.db-wal"/>
 </full-backup-content>

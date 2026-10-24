@@ -6,9 +6,14 @@ import android.text.SpannableStringBuilder
 import android.text.format.DateUtils
 import android.text.style.ForegroundColorSpan
 import androidx.core.content.ContextCompat
+import androidx.room.InvalidationTracker
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.ProfileManager
+import io.nekohasekai.sagernet.database.ProxyEntity
+import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.ktx.Logs
+import io.nekohasekai.sagernet.outbound.OutboundFactory
 import io.nekohasekai.sagernet.route.OutboundIds
 import io.nekohasekai.sagernet.route.RouteRule
 import io.nekohasekai.sagernet.route.RuleSets
@@ -117,19 +122,64 @@ internal object RouteTexts {
 /** Server profiles as route targets. Both read the database: call them off the main thread. */
 internal object RouteServers {
 
+    /** [list]'s result until the profiles or groups change or [release] drops it. */
+    @Volatile
+    private var cached: List<Pair<Long, String>>? = null
+    private var generation = 0L
+    private val registration = Any()
+    private var observing = false
+
     /**
      * Every server profile as (id, "[group] name"), groups and profiles in their list order. Auto selectors are left
      * out: they are not a fixed server, so a rule routing to one fails the build (generate.cpp:1281-1286).
      */
     fun list(): List<Pair<Long, String>> {
+        val keep = observe()
+        cached?.let { return it }
+        val start = synchronized(this) { generation }
+        val invalidTypes = HashMap<String, Boolean>()
         val out = ArrayList<Pair<Long, String>>()
         for (group in SagerDatabase.groupDao.allGroups()) {
-            for (profile in SagerDatabase.proxyDao.getByGroup(group.id)) {
-                if (profile.type == "autoselector") continue
-                out.add(profile.id to "[" + group.displayName() + "] " + profile.displayName())
+            val prefix = "[" + group.displayName() + "] "
+            val rows = SagerDatabase.proxyDao.getNamesByGroup(group.id).filter { it.type != "autoselector" }
+            // The name column is the outbound's name, its display name unless it is empty or the outbound unusable.
+            val parsed = names(rows.filter {
+                it.name.isNullOrEmpty() || invalidTypes.getOrPut(it.type) { OutboundFactory.newByType(it.type).invalid }
+            }.map { it.id })
+            for (row in rows) {
+                val name = parsed[row.id] ?: row.name?.takeIf { it.isNotEmpty() } ?: continue
+                out.add(row.id to prefix + name)
             }
         }
+        if (keep) synchronized(this) { if (generation == start) cached = out }
         return out
+    }
+
+    /** Drops [list]'s result; the route profile editor lets go of it when it closes. */
+    fun release() {
+        synchronized(this) {
+            generation++
+            cached = null
+        }
+    }
+
+    /**
+     * Whether writes to the profiles and groups drop [list]'s result, so it may be kept. Its own lock: the tracker
+     * calls [release] while holding the one [InvalidationTracker.addObserver] takes.
+     */
+    private fun observe(): Boolean = synchronized(registration) {
+        if (!observing) observing = try {
+            SagerDatabase.instance.invalidationTracker.addObserver(
+                object : InvalidationTracker.Observer(arrayOf(ProxyEntity.TABLE, ProxyGroup.TABLE)) {
+                    override fun onInvalidated(tables: Set<String>) = release()
+                }
+            )
+            true
+        } catch (e: Exception) {
+            Logs.w(e)
+            false
+        }
+        observing
     }
 
     /** The display names of the server profiles among [ids]; missing ones are left out. */

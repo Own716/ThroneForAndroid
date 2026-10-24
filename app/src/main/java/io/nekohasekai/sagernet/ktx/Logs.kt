@@ -1,6 +1,5 @@
 package io.nekohasekai.sagernet.ktx
 
-import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SettingsRegistry
 import moe.matsuri.nb4a.utils.CoreLog
 import java.io.InputStream
@@ -15,7 +14,8 @@ object Logs {
 
     // Gated at the source by log_level; an unreadable DataStore (JVM tests) lets the line through.
     private fun enabled(required: String): Boolean {
-        return runCatching { SettingsRegistry.logAllows(DataStore.logLevel, required) }.getOrDefault(true)
+        val level = CoreLog.logLevel ?: return true
+        return SettingsRegistry.logAllows(level, required)
     }
 
     // No app context in JVM unit tests: a failed write is ignored.

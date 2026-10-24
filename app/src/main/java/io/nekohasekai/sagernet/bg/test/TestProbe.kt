@@ -128,7 +128,9 @@ internal class Excluded(@JvmField val profileId: Long, @JvmField val reason: Str
  * server, and failed results feed auto_clear_unavailable.
  */
 internal suspend fun TestSession.screenXrayFullConfigs(profiles: List<ProxyEntity>): List<Excluded> {
+    // The type first: reading outbound parses the profile and keeps the result on it for the rest of the sweep.
     val candidates = profiles.mapNotNull { profile ->
+        if (profile.type != "custom") return@mapNotNull null
         (profile.outbound as? Custom)?.takeIf { it.isXrayFullConfig() }?.let { profile to it }
     }
     if (candidates.isEmpty() || cancelled) return emptyList()
@@ -273,7 +275,7 @@ internal abstract class LatencySweep(protected val session: TestSession) {
                         launch { runBuild(profileIds.subList(half, profileIds.size), batch, results, gate) }
                     } else {
                         for (id in profileIds) {
-                            val name = batch.firstOrNull { it.id == id }?.displayName().orEmpty()
+                            val name = batch.firstOrNull { it.id == id }?.let { TestSession.displayNameOf(it) }.orEmpty()
                             results.trySend(ProbeResult(id, error = session.startFailure(name, failure), measured = false))
                         }
                     }

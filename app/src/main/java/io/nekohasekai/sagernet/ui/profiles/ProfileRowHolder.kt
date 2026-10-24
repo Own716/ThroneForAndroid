@@ -239,6 +239,13 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
     lateinit var profile: ProxyEntity
         private set
 
+    /** The row's profile is still loading: the card is blank and ignores taps. */
+    var placeholder = false
+        private set
+
+    /** The bound profile, null while [placeholder] or before the first bind. */
+    val boundProfile: ProxyEntity? get() = if (placeholder || !::profile.isInitialized) null else profile
+
     /** The optional rows of the last bind ([RowContent.rows]), null before the first. */
     var boundRows: Int? = null
         private set
@@ -249,22 +256,23 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
 
     init {
         view.setOnClickListener {
-            if (::profile.isInitialized) adapter.host?.onRowClick(profile)
+            boundProfile?.let { adapter.host?.onRowClick(it) }
         }
         view.setOnLongClickListener { v ->
-            ::profile.isInitialized && adapter.host?.onRowLongClick(this, profile, v.isInTouchMode) == true
+            val profile = boundProfile
+            profile != null && adapter.host?.onRowLongClick(this, profile, v.isInTouchMode) == true
         }
         editButton.setOnClickListener {
-            if (::profile.isInitialized) adapter.host?.itemMenu?.edit(profile, adapter.group)
+            boundProfile?.let { adapter.host?.itemMenu?.edit(it, adapter.group) }
         }
-        shareButton.setOnClickListener {
-            if (::profile.isInitialized) adapter.host?.itemMenu?.showShare(it, profile)
+        shareButton.setOnClickListener { button ->
+            boundProfile?.let { adapter.host?.itemMenu?.showShare(button, it) }
         }
-        moreButton.setOnClickListener {
-            if (::profile.isInitialized) adapter.host?.itemMenu?.showMenu(it, profile, adapter)
+        moreButton.setOnClickListener { button ->
+            boundProfile?.let { adapter.host?.itemMenu?.showMenu(button, it, adapter) }
         }
         val showError = View.OnClickListener {
-            val text = if (::profile.isInitialized) profile.testError else null
+            val text = boundProfile?.testError
             if (!text.isNullOrBlank()) it.context.alert(text).tryToShow()
         }
         result.setOnClickListener(showError)
@@ -275,6 +283,7 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
 
     fun bind(profile: ProxyEntity) {
         this.profile = profile
+        placeholder = false
         val context = itemView.context
         name.text = profile.displayName()
         type.text = TypeLabel.of(profile)
@@ -311,6 +320,20 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
         if (previous != null && previous != rows) adapter.refreshRowNeighbours(bindingAdapterPosition)
     }
 
+    /** A row whose profile is not loaded yet: an empty card of the usual height until [bind]. */
+    fun bindPlaceholder() {
+        placeholder = true
+        name.text = ""
+        type.text = ""
+        for (view in arrayOf(address, result, testProgress, traffic, error, selectCheck, editButton, shareButton, moreButton)) {
+            view.isVisible = false
+        }
+        applyCardColors(selected = false, checked = false)
+        onRecycled()
+        // no optional rows: the real bind that follows lines its grid neighbours up again
+        boundRows = 0
+    }
+
     /** A recycled card belongs to no grid row yet: its next bind must not refresh neighbours. */
     fun onRecycled() {
         boundRows = null
@@ -328,7 +351,7 @@ internal class ProfileRowHolder(view: View, private val adapter: ProfileListAdap
     /** Selection, running state, multi-select check and the row buttons. */
     fun bindState() {
         val host = adapter.host ?: return
-        val id = profile.id
+        val id = boundProfile?.id ?: return
         val selecting = host.selection.active
         val buttons = !host.select && !selecting
         selectCheck.isVisible = selecting

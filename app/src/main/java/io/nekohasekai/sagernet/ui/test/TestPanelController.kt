@@ -872,6 +872,7 @@ class TestPanelController(
             val gone = candidates.filter { it !in existingSet }
             if (gone.isNotEmpty()) TestSessionClient.markRemoved(gone)
             if (existing.isEmpty()) return@runOnDefaultDispatcher
+            val names = existing.take(10).map { it.displayName() }
             val skipConfirmation = DataStore.skipDeleteConfirmation
             onMainDispatcher {
                 if (!fragment.isAdded) return@onMainDispatcher
@@ -882,7 +883,7 @@ class TestPanelController(
                         context.resources.getQuantityString(
                             R.plurals.confirm_remove_unavailable, existing.size, existing.size
                         ),
-                        context.nameList(existing.map { it.displayName() }),
+                        context.nameList(names, total = existing.size),
                         R.string.delete,
                     ) { deleteProfiles(existingIds) }
                 }

@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
         ProxyGroup::class, ProxyEntity::class, RouteProfileEntity::class, RouteRuleEntity::class,
         SettingEntry::class, MarkerEntity::class,
     ],
-    version = 17,
+    version = 18,
     autoMigrations = [
         AutoMigration(from = 8, to = 9),
         AutoMigration(from = 12, to = 13),
@@ -151,6 +151,19 @@ abstract class SagerDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 17 -> 18: the profiles index (gid) becomes (gid, user_order, id). By hand, because an auto-migration rebuilds
+         * the table for an index change, which lowers the AUTOINCREMENT high-water mark and lets deleted ids come back.
+         */
+        val MIGRATION_17_18: Migration = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP INDEX IF EXISTS `index_profiles_gid`")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_profiles_gid_user_order_id` ON `profiles` (`gid`, `user_order`, `id`)"
+                )
+            }
+        }
+
         /** Configs.cpp:35-39: a new database starts with an ordinary group named "Default". */
         private val callback = object : RoomDatabase.Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
@@ -170,9 +183,10 @@ abstract class SagerDatabase : RoomDatabase() {
         @OptIn(DelicateCoroutinesApi::class)
         private fun buildProfileDatabase(): SagerDatabase =
             Room.databaseBuilder(SagerNet.application, SagerDatabase::class.java, Key.DB_PROFILE)
-                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_17_18)
                 .addCallback(callback)
-                .setJournalMode(JournalMode.TRUNCATE)
+                // both processes use the file: WAL lets readers in either one run while the other writes
+                .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .allowMainThreadQueries()
                 .enableMultiInstanceInvalidation()
                 .fallbackToDestructiveMigration()
@@ -208,6 +222,9 @@ abstract class SagerDatabase : RoomDatabase() {
                         dbFile.parentFile, dbFile.name + ".bak_" + System.currentTimeMillis()
                     )
                     dbFile.copyTo(backupFile, overwrite = false)
+                    // the latest commits may still be in the write-ahead log
+                    val wal = File(dbFile.path + "-wal")
+                    if (wal.exists()) wal.copyTo(File(backupFile.path + "-wal"), overwrite = false)
                     Log.i(TAG, "Corrupted database backed up as ${backupFile.name}")
                 }
             }.onFailure {

@@ -43,7 +43,7 @@ internal class SpeedTestRunner(private val session: TestSession) {
             val left = excluded.mapTo(HashSet()) { it.profileId }
             val ids = slice.map { it.id }.filter { it !in left }
             if (ids.isEmpty()) continue
-            val names = slice.associate { it.id to it.displayName() }
+            val names = slice.associate { it.id to TestSession.displayNameOf(it) }
             // The probe boxes bind the bridge ports late; leased until they are over.
             val ports = PortLease()
             try {

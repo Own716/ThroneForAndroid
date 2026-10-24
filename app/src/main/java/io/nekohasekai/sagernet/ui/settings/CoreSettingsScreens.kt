@@ -297,7 +297,8 @@ class CoreSettingsFragment : SettingsScreenFragment(R.xml.settings_core) {
             MaterialAlertDialogBuilder(requireContext()).setTitle(R.string.log_buffer_size)
                 .setView(view)
                 .setPositiveButton(android.R.string.ok) { _, _ ->
-                    DataStore.logBufSize = view.text.toString().toIntOrNull()?.takeIf { it > 0 } ?: 50
+                    DataStore.logBufSize = view.text.toString().toIntOrNull()?.takeIf { it > 0 }
+                        ?.coerceIn(moe.matsuri.nb4a.utils.CoreLog.MIN_SIZE_KB, moe.matsuri.nb4a.utils.CoreLog.MAX_SIZE_KB) ?: 50
                     needRestart()
                 }
                 .setNegativeButton(android.R.string.cancel, null)

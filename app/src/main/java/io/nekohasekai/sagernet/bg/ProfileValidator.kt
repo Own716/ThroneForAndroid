@@ -17,10 +17,9 @@ import io.throneproj.mobile.Mobile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Configs::IsValid (generate.cpp:2425-2535) in the :bg process: the core's CheckConfig on the profile's own build.
@@ -52,14 +51,16 @@ object ProfileValidator {
         if (profiles.isEmpty()) return Scan(invalid, false)
         val ctx = SettingsMapper.buildContext()
         val logLevel = DataStore.logLevel
-        val permits = Semaphore(PARALLELISM)
+        val next = AtomicInteger()
         coroutineScope {
-            for (profile in profiles) launch(Dispatchers.IO) {
-                permits.withPermit {
-                    if (unreachable.get()) return@withPermit
-                    val verdict = validate(profile, ctx, logLevel, HashSet())
-                    if (verdict.coreUnreachable) unreachable.set(true)
-                    else if (!verdict.valid) invalid.add(profile.id)
+            repeat(PARALLELISM) {
+                launch(Dispatchers.IO) {
+                    while (!unreachable.get()) {
+                        val profile = profiles.getOrNull(next.getAndIncrement()) ?: break
+                        val verdict = validate(profile, ctx, logLevel, HashSet())
+                        if (verdict.coreUnreachable) unreachable.set(true)
+                        else if (!verdict.valid) invalid.add(profile.id)
+                    }
                 }
             }
         }

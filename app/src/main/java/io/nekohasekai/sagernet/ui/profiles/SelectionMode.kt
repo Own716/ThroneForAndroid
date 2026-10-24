@@ -141,11 +141,13 @@ class SelectionMode(private val host: ConfigurationFragment) {
     /** [title] above the names of [ids] in list order. */
     private fun confirm(ids: List<Long>, title: String, @StringRes action: Int, run: () -> Unit) {
         host.launchIo {
-            val position = ids.withIndex().associate { it.value to it.index }
-            val names = ProfileManager.getProfiles(ids).sortedBy { position[it.id] }.map { it.displayName() }
+            // only the names the dialog shows are parsed
+            val shown = ids.take(10)
+            val position = shown.withIndex().associate { it.value to it.index }
+            val names = ProfileManager.getProfiles(shown).sortedBy { position[it.id] }.map { it.displayName() }
             host.onUi {
                 val context = requireContext()
-                context.confirmAction(title, context.nameList(names), action, run)
+                context.confirmAction(title, context.nameList(names, total = ids.size), action, run)
             }
         }
     }

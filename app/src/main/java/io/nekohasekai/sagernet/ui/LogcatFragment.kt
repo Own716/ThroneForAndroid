@@ -71,6 +71,10 @@ class LogcatFragment : ToolbarFragment(R.layout.layout_logcat),
         /** What the view and the hold queue each keep; the desktop counts lines (max_log_line), Android has no such setting. */
         private const val MAX_CHARS = 50 * 1024
         private const val MAX_LINE_CHARS = 20000
+
+        /** Highlighted hits per line, so a broad filter ('.') over a long line does not add tens of thousands of spans. */
+        private const val MAX_LINE_HITS = 256
+
         private const val POLL_MS = 500L
         private const val SEARCH_DEBOUNCE_MS = 150L
 
@@ -355,13 +359,17 @@ class LogcatFragment : ToolbarFragment(R.layout.layout_logcat),
         out.append(text)
         out.setSpan(ForegroundColorSpan(colorForLine(text)), start, out.length, SPAN_EXCLUSIVE_EXCLUSIVE)
         val pattern = search ?: return
-        // Last, so search hits paint over the level colour.
-        for (match in pattern.findAll(text)) {
-            if (match.range.isEmpty()) continue
-            val from = start + match.range.first
-            val to = start + match.range.last + 1
+        // Last, so search hits paint over the level colour. One Matcher per line: findAll makes one per hit, and each
+        // copies the whole line.
+        val matcher = pattern.toPattern().matcher(text)
+        var hits = 0
+        while (hits < MAX_LINE_HITS && matcher.find()) {
+            if (matcher.start() == matcher.end()) continue
+            val from = start + matcher.start()
+            val to = start + matcher.end()
             out.setSpan(BackgroundColorSpan(hitBackground), from, to, SPAN_EXCLUSIVE_EXCLUSIVE)
             out.setSpan(ForegroundColorSpan(hitForeground), from, to, SPAN_EXCLUSIVE_EXCLUSIVE)
+            hits++
         }
     }
 

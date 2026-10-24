@@ -38,6 +38,9 @@ object GroupSort {
 
     private const val SORT_ATTEMPTS = 3
 
+    /** About how many rows of a bulk read cost as much as one single-row query. */
+    private const val ROWS_PER_QUERY = 32
+
     private enum class Commit { MOVED, UNCHANGED, STALE }
 
     /** Group.cpp sortReads. */
@@ -139,7 +142,7 @@ object GroupSort {
     /** drainSorts: the groups whose order moved. */
     private fun sortBatch(batch: LinkedHashMap<Long, PendingSort>, loose: Map<SortInput, Set<Long>>): List<Long> {
         for ((input, ids) in loose) {
-            for (profile in ProfileManager.getProfiles(ids.toList())) {
+            for (profile in withoutData(ids)) {
                 val pending = batch.getOrPut(profile.groupId) { PendingSort() }
                 if (!pending.full) pending.changed.getOrPut(input) { HashSet() }.add(profile.id)
             }
@@ -174,6 +177,7 @@ object GroupSort {
             val action = group.sort
             val snapshot = ProfileManager.memberIds(groupId)
             val keys = SortKeys(SortRule(group, action))
+            keys.loadGroup(groupId)
             keys.load(snapshot)
             // Stable, so a re-sort leaves rows with equal keys where they were.
             val order = snapshot.sortedWith(keys)
@@ -220,6 +224,7 @@ object GroupSort {
                     (i + 1 == count || !keys.less(snapshot[i + 1], snapshot[i]))
             }
             if (inPlace) return false
+            if (positions.size * probes * ROWS_PER_QUERY >= count) keys.loadGroup(groupId)
 
             // Lift every changed row, not just the misplaced ones: a fitting row's neighbour may be leaving too.
             val order = ArrayList<Long>(count)
@@ -249,10 +254,13 @@ object GroupSort {
     private fun commit(groupId: Long, snapshot: List<Long>, action: GroupSortAction, order: List<Long>): Commit =
         SagerDatabase.instance.runInTransaction(Callable {
             val group = SagerDatabase.groupDao.getById(groupId) ?: return@Callable Commit.UNCHANGED
-            val dao = SagerDatabase.proxyDao
-            if (group.sort != action || dao.getIdsByGroup(groupId) != snapshot) return@Callable Commit.STALE
+            if (group.sort != action) return@Callable Commit.STALE
+            val current = SagerDatabase.proxyDao.getPositionsByGroup(groupId)
+            if (current.size != snapshot.size || current.indices.any { current[it].id != snapshot[it] }) {
+                return@Callable Commit.STALE
+            }
             if (order == snapshot) return@Callable Commit.UNCHANGED
-            order.forEachIndexed { index, id -> dao.setUserOrder(id, index.toLong()) }
+            ProfileManager.writeOrder(current, order)
             Commit.MOVED
         })
 
@@ -280,6 +288,9 @@ object GroupSort {
         private val byLatency = method == GroupSortMethod.BY_LATENCY ||
             (method == GroupSortMethod.BY_TEST_RESULT && testBy == TestBy.LATENCY)
         private val skipCert = if (method == GroupSortMethod.BY_SECURITY) DataStore.skipCert else false
+
+        /** The key reads plain columns only, never the outbound, so rows without their data are enough. */
+        val readsColumns = byLatency || method == GroupSortMethod.BY_TEST_RESULT || method == GroupSortMethod.BY_TRAFFIC
 
         fun keyOf(profile: ProxyEntity?): SortKey {
             if (profile == null) return SortKey(missing = true)
@@ -325,10 +336,19 @@ object GroupSort {
     private class SortKeys(private val rule: SortRule) : Comparator<Long> {
         private val keys = HashMap<Long, SortKey>()
 
+        /** Every member's key from one query, when the keys need no outbound; otherwise rows load as they are read. */
+        fun loadGroup(groupId: Long) {
+            if (!rule.readsColumns) return
+            for (profile in SagerDatabase.proxyDao.getWithoutDataByGroup(groupId)) {
+                keys.getOrPut(profile.id) { rule.keyOf(profile) }
+            }
+        }
+
         fun load(ids: List<Long>) {
             val absent = ids.filter { it !in keys }.distinct()
             if (absent.isEmpty()) return
-            for (profile in ProfileManager.getProfiles(absent)) keys[profile.id] = rule.keyOf(profile)
+            val rows = if (rule.readsColumns) withoutData(absent) else ProfileManager.getProfiles(absent)
+            for (profile in rows) keys[profile.id] = rule.keyOf(profile)
             for (id in absent) if (id !in keys) keys[id] = rule.keyOf(null)
         }
 
@@ -345,6 +365,10 @@ object GroupSort {
             else -> 0
         }
     }
+
+    /** The rows of [ids] without their data: their group, test results and traffic. */
+    private fun withoutData(ids: Collection<Long>): List<ProxyEntity> =
+        ids.toList().chunked(ProfileManager.CHUNK).flatMap { SagerDatabase.proxyDao.getWithoutData(it) }
 
     /**
      * Group.cpp latencyForSort: measured profiles first, then failures, then untested. A Connect OK tunnel works

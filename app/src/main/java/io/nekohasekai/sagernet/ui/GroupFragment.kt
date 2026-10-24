@@ -59,18 +59,18 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group), Toolbar.OnMenuItem
         }
     }
 
-    /** The group whose members "Export to file" writes. */
+    /** The group whose members "Export to file" writes, and whether as deep links. */
     private var exportGroup: ProxyGroup? = null
+    private var exportDeepLinks = false
 
     private val exportProfiles = registerForActivityResult(SaveDocument("text/plain")) { uri ->
         val group = exportGroup ?: return@registerForActivityResult
         if (uri == null) return@registerForActivityResult
+        val deepLinks = exportDeepLinks
         val context = requireContext().applicationContext
         runOnDefaultDispatcher {
             val message = try {
-                val links = ProfileManager.members(group.id).joinToString("\n") {
-                    it.exportLink().ifEmpty { it.exportJsonLink() }
-                }
+                val links = ProfileManager.members(group.id).joinToString("\n") { linkOf(it, deepLinks) }
                 context.contentResolver.openOutputStream(uri)!!.bufferedWriter().use { it.write(links) }
                 context.getString(R.string.action_export_msg)
             } catch (e: Exception) {
@@ -134,16 +134,34 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group), Toolbar.OnMenuItem
 
     private fun copyLinks(group: ProxyGroup, deepLinks: Boolean) {
         runOnDefaultDispatcher {
-            val links = ProfileManager.members(group.id)
-                // dialog_edit_group.cpp: a profile without a share link (XDRIVE) goes out as its JSON link
-                .map { if (deepLinks) it.exportJsonLink() else it.exportLink().ifEmpty { it.exportJsonLink() } }
-                .filter { it.isNotEmpty() }
-                .joinToString("\n")
+            val links = StringBuilder()
+            for (profile in ProfileManager.members(group.id)) {
+                val link = linkOf(profile, deepLinks)
+                if (link.isEmpty()) continue
+                if (links.isNotEmpty()) links.append('\n')
+                links.append(link)
+                if (links.length > SagerNet.MAX_CLIP_CHARS) break
+            }
             withContext(Dispatchers.Main) {
-                val copied = SagerNet.trySetPrimaryClip(links)
-                snackbar(if (copied) R.string.grp_copied else R.string.action_export_err).show()
+                if (SagerNet.trySetPrimaryClip(links.toString())) {
+                    snackbar(R.string.grp_copied).show()
+                } else {
+                    snackbar(R.string.action_export_err)
+                        .setAction(R.string.action_export_file) { if (isAdded) exportToFile(group, deepLinks) }
+                        .show()
+                }
             }
         }
+    }
+
+    // dialog_edit_group.cpp: a profile without a share link (XDRIVE) goes out as its JSON link
+    private fun linkOf(profile: ProxyEntity, deepLinks: Boolean): String =
+        if (deepLinks) profile.exportJsonLink() else profile.exportLink().ifEmpty { profile.exportJsonLink() }
+
+    private fun exportToFile(group: ProxyGroup, deepLinks: Boolean) {
+        exportGroup = group
+        exportDeepLinks = deepLinks
+        startFilesForResult(exportProfiles, "profiles_${group.displayName()}.txt")
     }
 
     private fun confirmClear(group: ProxyGroup) {
@@ -352,10 +370,7 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group), Toolbar.OnMenuItem
 
                 R.id.action_copy_links -> copyLinks(group, deepLinks = false)
                 R.id.action_copy_deep_links -> copyLinks(group, deepLinks = true)
-                R.id.action_export_file -> {
-                    exportGroup = group
-                    startFilesForResult(exportProfiles, "profiles_${group.displayName()}.txt")
-                }
+                R.id.action_export_file -> exportToFile(group, deepLinks = false)
 
                 R.id.action_clear -> confirmClear(group)
                 R.id.action_move_up -> groupAdapter.step(group, -1)
