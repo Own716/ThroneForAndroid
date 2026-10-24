@@ -185,7 +185,7 @@ class ProfileItemMenu(private val host: ConfigurationFragment) {
                     snackbar(R.string.action_export_msg).show()
                 } else {
                     snackbar(R.string.action_export_err)
-                        .setAction(R.string.action_export_file) { host.launchIo { saveToFile(config, fileName) } }
+                        .setAction(R.string.action_export_file) { launchIo { saveToFile(config, fileName) } }
                         .show()
                 }
             }
