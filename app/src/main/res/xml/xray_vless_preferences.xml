@@ -239,6 +239,106 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        app:key="xrayXDriveCategory"
+        app:title="@string/xdrive_settings">
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:icon="@drawable/ic_baseline_layers_24"
+            app:key="streamSetting.xdrive.service"
+            app:title="@string/xdrive_service"
+            app:entries="@array/xray_xdrive_service"
+            app:entryValues="@array/xray_xdrive_service"
+            app:defaultValue="google-drive"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_format_align_left_24"
+            app:key="streamSetting.xdrive.remoteFolder"
+            app:title="@string/xdrive_folder"
+            app:dialogMessage="@string/xdrive_folder_hint"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_person_24"
+            app:key="streamSetting.xdrive.clientId"
+            app:title="@string/xdrive_client_id"
+            app:dialogLayout="@layout/layout_password_dialog" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_vpn_key_24"
+            app:key="streamSetting.xdrive.clientSecret"
+            app:title="@string/xdrive_client_secret"
+            app:dialogLayout="@layout/layout_password_dialog" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_vpn_key_24"
+            app:key="streamSetting.xdrive.refreshToken"
+            app:title="@string/xdrive_refresh_token"
+            app:dialogMessage="@string/xdrive_refresh_token_hint"
+            app:dialogLayout="@layout/layout_password_dialog" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_vpn_key_24"
+            app:key="streamSetting.xdrive.secrets"
+            app:title="@string/xdrive_secrets"
+            app:dialogMessage="@string/xdrive_secrets_hint" />
+        <moe.matsuri.nb4a.ui.EditConfigPreference
+            app:icon="@drawable/ic_baseline_texture_24"
+            app:jsonAllowEmpty="true"
+            app:key="streamSetting.xdrive.template"
+            app:title="@string/xdrive_template" />
+        <EditTextPreference
+            app:icon="@drawable/ic_hardware_router"
+            app:key="streamSetting.xdrive.frontAddress"
+            app:title="@string/xdrive_front_address"
+            app:dialogMessage="@string/xdrive_front_address_hint"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_maps_directions_boat"
+            app:key="streamSetting.xdrive.frontPort"
+            app:title="@string/xdrive_front_port" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        app:key="xrayXDriveTuningCategory"
+        app:title="@string/xdrive_tuning">
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_tune_24"
+            app:key="streamSetting.xdrive.segmentBytes"
+            app:title="@string/xdrive_segment_bytes"
+            app:dialogMessage="@string/xdrive_segment_bytes_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_timelapse_24"
+            app:key="streamSetting.xdrive.flushIntervalMs"
+            app:title="@string/xdrive_flush_interval"
+            app:dialogMessage="@string/xdrive_flush_interval_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_timelapse_24"
+            app:key="streamSetting.xdrive.pollIntervalMs"
+            app:title="@string/xdrive_poll_interval"
+            app:dialogMessage="@string/xdrive_poll_interval_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_timelapse_24"
+            app:key="streamSetting.xdrive.maxPollIntervalMs"
+            app:title="@string/xdrive_max_poll_interval"
+            app:dialogMessage="@string/xdrive_max_poll_interval_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_timelapse_24"
+            app:key="streamSetting.xdrive.eagerWindowMs"
+            app:title="@string/xdrive_eager_window"
+            app:dialogMessage="@string/xdrive_eager_window_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_timelapse_24"
+            app:key="streamSetting.xdrive.holeTimeoutMs"
+            app:title="@string/xdrive_hole_timeout"
+            app:dialogMessage="@string/xdrive_hole_timeout_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_timelapse_24"
+            app:key="streamSetting.xdrive.sessionTtlSeconds"
+            app:title="@string/xdrive_session_ttl"
+            app:dialogMessage="@string/xdrive_session_ttl_hint" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_low_priority_24"
+            app:key="streamSetting.xdrive.concurrency"
+            app:title="@string/xdrive_concurrency"
+            app:dialogMessage="@string/xdrive_concurrency_hint" />
+    </PreferenceCategory>
+
+    <PreferenceCategory
         app:key="xrayTlsCategory"
         app:title="@string/security_settings">
         <EditTextPreference
@@ -322,22 +422,33 @@
             app:icon="@drawable/ic_baseline_compare_arrows_24"
             app:key="multiplex.enabled"
             app:title="@string/enable_mux"
-            app:entries="@array/tri_state_entry"
-            app:entryValues="@array/int_array_3"
+            app:entries="@array/mux_state_entry"
+            app:entryValues="@array/int_array_4"
             app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
+            app:dialogMessage="@string/xray_mux_concurrency_hint"
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="multiplex.concurrency"
             app:title="@string/xray_mux_concurrency"
-            app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
+            app:dialogMessage="@string/xray_mux_max_connections_hint"
+            app:icon="@drawable/ic_baseline_low_priority_24"
+            app:key="multiplex.maxConnections"
+            app:title="@string/mux_max_connections" />
+        <EditTextPreference
+            app:dialogMessage="@string/xray_mux_xudp_concurrency_hint"
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="multiplex.xudpConcurrency"
             app:title="@string/xray_mux_xudp_concurrency"
-            app:defaultValue="16"
             app:useSimpleSummaryProvider="true" />
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:entries="@array/xray_mux_udp443_entry"
+            app:entryValues="@array/xray_mux_udp443_value"
+            app:icon="@drawable/ic_baseline_block_24"
+            app:key="multiplex.xudpProxyUDP443"
+            app:title="@string/xray_mux_xudp_proxy_udp443" />
     </PreferenceCategory>
 
 </PreferenceScreen>

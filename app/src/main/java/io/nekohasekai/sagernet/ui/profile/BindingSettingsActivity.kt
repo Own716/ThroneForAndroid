@@ -47,6 +47,7 @@ abstract class BindingSettingsActivity<T : Outbound>(
         for (binding in jsonTextBindings) {
             DataStore.profileCacheStore.putString(binding.cacheKey, ProfileJson.text(binding.get(this)))
         }
+        writeUnboundToCache()
         DataStore.profileCacheStore.putString(KEY_RAW_JSON, ProfileJson.text(this))
     }
 
@@ -55,6 +56,14 @@ abstract class BindingSettingsActivity<T : Outbound>(
         for (binding in jsonTextBindings) {
             binding.set(this, JsonInput.parseObject(DataStore.profileCacheStore.getString(binding.cacheKey) ?: ""))
         }
+        readUnboundFromCache()
+    }
+
+    /** Rows no binding expresses: written to the cache after the bindings on init, and read back after them on serialize. */
+    protected open fun T.writeUnboundToCache() {
+    }
+
+    protected open fun T.readUnboundFromCache() {
     }
 
     private var rawJsonPreference: EditConfigPreference? = null

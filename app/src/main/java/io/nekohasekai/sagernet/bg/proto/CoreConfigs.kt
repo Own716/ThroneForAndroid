@@ -43,11 +43,11 @@ object CoreConfigs {
      * leases its bridge ports to [ports] (ConfigGenerator.build). The DNS is that of the very profile routed.
      */
     fun buildMain(profile: ProxyEntity, deferRuleSets: Boolean = false, ports: PortLease? = null): GeneratedConfig {
-        val (landing, front) = groupProxies(profile.groupId)
+        val (landing, front, groupName) = groupProxies(profile.groupId)
         val routing = SettingsMapper.routingInput()
         val dns = routing.profile?.activeDns()
         val settings = SettingsMapper.generatorSettings(dns).copy(deferRuleSets = deferRuleSets)
-        val generated = generator(routing, settings, dns).build(profile.id, landing, front, ports)
+        val generated = generator(routing, settings, dns).build(profile.id, landing, front, ports, groupName)
         if (!generated.ok) error(generated.error ?: "config generation failed")
         return generated
     }
@@ -57,21 +57,21 @@ object CoreConfigs {
      * the current routing profile (BuildTestConfig sets ctx.dns).
      */
     fun buildTest(profileIds: List<Long>, ports: PortLease? = null): GeneratedConfig {
-        val groups = HashMap<Long, Pair<Long, Long>>()
+        val groups = HashMap<Long, Triple<Long, Long, String>>()
         val candidates = profileIds.map { id ->
             val groupId = SagerDatabase.proxyDao.getById(id)?.groupId ?: -1L
-            val (landing, front) = groups.getOrPut(groupId) { groupProxies(groupId) }
-            TestCandidate(id, landing, front)
+            val (landing, front, groupName) = groups.getOrPut(groupId) { groupProxies(groupId) }
+            TestCandidate(id, landing, front, groupName)
         }
         val dns = RouteManager.customDns(DataStore.currentRouteId)
         return generator(settings = SettingsMapper.generatorSettings(dns), dns = dns).buildTest(candidates, ports)
     }
 
-    /** (landing_proxy_id, front_proxy_id) of a group, -1 when unset (any id <= 0 is "none"). */
-    private fun groupProxies(groupId: Long): Pair<Long, Long> {
-        val group: ProxyGroup = (if (groupId > 0) SagerDatabase.groupDao.getById(groupId) else null) ?: return -1L to -1L
+    /** (landing_proxy_id, front_proxy_id, name) of a group, -1 when unset (any id <= 0 is "none"). */
+    private fun groupProxies(groupId: Long): Triple<Long, Long, String> {
+        val group: ProxyGroup = (if (groupId > 0) SagerDatabase.groupDao.getById(groupId) else null) ?: return Triple(-1L, -1L, "")
         val landing = group.landingProxyId.takeIf { it > 0 } ?: -1L
         val front = group.frontProxyId.takeIf { it > 0 } ?: -1L
-        return landing to front
+        return Triple(landing, front, group.displayName())
     }
 }

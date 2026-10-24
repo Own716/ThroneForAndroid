@@ -56,6 +56,27 @@ object XrayVlessChecks {
         if ((normalized.isEmpty() || normalized == "raw") && (security == "tls" || security == "reality")) return ""
         return vtr(R.string.validation_xray_vless_vision)
     }
+
+    /** Xray runs XDRIVE only for VLESS with encryption, no flow, and Mux on (Keep Default counts: the build turns it on). */
+    @JvmStatic
+    fun xrayXDriveEncryption(encryption: String, network: String): String {
+        if (normalizeXrayNetwork(network.trim()) != "xdrive" || XrayVless.isVlessEncrypted(encryption.trim())) return ""
+        return vtr(R.string.validation_xray_xdrive_encryption)
+    }
+
+    @JvmStatic
+    fun xrayXDriveFlow(flow: String, network: String): String {
+        val f = flow.trim()
+        if (normalizeXrayNetwork(network.trim()) != "xdrive" || f.isEmpty() || f.equals("none", ignoreCase = true)) return ""
+        return vtr(R.string.validation_xray_xdrive_flow)
+    }
+
+    /** [muxState] as XrayMultiplex.getMuxState(): 0 Keep Default, 1 On, 2 Off, 3 Custom. */
+    @JvmStatic
+    fun xrayXDriveMux(muxState: Int, network: String): String {
+        if (normalizeXrayNetwork(network.trim()) != "xdrive" || muxState != 2) return ""
+        return vtr(R.string.validation_xray_xdrive_mux)
+    }
 }
 
 /**
@@ -137,6 +158,8 @@ class XrayVless : Outbound("xrayvless") {
 
     /** xrayVless::ExportToLink: no dial-field query items; '+' goes out as %2B so receivers don't decode it as a space. */
     override fun exportToLink(): String {
+        // Callers fall back to exportJsonLink, which keeps the storage settings a vless:// link cannot carry.
+        if (normalizeXrayNetwork(streamSetting.network) == "xdrive") return ""
         val url = LinkBuilder("vless")
         url.plusAsEscape = true
         // a uuid missing from the link or JSON is a null QString on the desktop, which adds no user-info
@@ -179,8 +202,18 @@ class XrayVless : Outbound("xrayvless") {
         obj["settings"] = settingsJson()
         val streamObj = streamSetting.build(ctx)
         if (streamObj.isNotEmpty()) obj["streamSettings"] = streamObj
-        val muxObj = multiplex.build(ctx)
-        if (muxObj.isNotEmpty()) obj["mux"] = muxObj
+        // Xray refuses XDRIVE without Mux, so Keep Default turns it on there.
+        val muxRequired = normalizeXrayNetwork(streamSetting.network) == "xdrive"
+        val muxObj = multiplex.buildMux(ctx, muxRequired || ctx.xrayMuxDefaultOn)
+        if (muxObj.isNotEmpty()) {
+            // It also refuses any traffic leaving the mux there, which a preset may ask for.
+            if (muxRequired) {
+                if (muxObj.int("concurrency") < 0) muxObj.remove("concurrency")
+                if (muxObj.int("xudpConcurrency") < 0) muxObj.remove("xudpConcurrency")
+                if (muxObj.string("xudpProxyUDP443") == "skip") muxObj.remove("xudpProxyUDP443")
+            }
+            obj["mux"] = muxObj
+        }
         return BuildResult(obj)
     }
 
@@ -236,11 +269,12 @@ class XrayVless : Outbound("xrayvless") {
         if (flowMessage.isNotEmpty()) {
             issues.addIssue(Severity.Error, "flow", flowMessage, flow)
         } else {
-            issues.addIssue(
-                Severity.Error, "flow",
-                XrayVlessChecks.xrayVlessVision(flow, encryption, streamSetting.network, streamSetting.security), flow,
-            )
+            val vision = XrayVlessChecks.xrayVlessVision(flow, encryption, streamSetting.network, streamSetting.security)
+            issues.addIssue(Severity.Error, "flow", vision.ifEmpty { XrayVlessChecks.xrayXDriveFlow(flow, streamSetting.network) }, flow)
         }
+        issues.addIssue(Severity.Error, "encryption", XrayVlessChecks.xrayXDriveEncryption(encryption, streamSetting.network))
+        issues.addIssue(Severity.Error, "mux", XrayVlessChecks.xrayXDriveMux(multiplex.getMuxState(), streamSetting.network))
+        multiplex.validate(issues)
     }
 
     companion object {

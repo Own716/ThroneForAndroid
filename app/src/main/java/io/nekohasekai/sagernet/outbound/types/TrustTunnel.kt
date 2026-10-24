@@ -86,9 +86,11 @@ class TrustTunnel : Outbound("trusttunnel") {
 
     /**
      * trusttunnel::ParseFromDeepLink: the official deep link `tt://?<base64url TLV payload>` (DEEP_LINK.md in
-     * TrustTunnel/TrustTunnel). Tags: 0x00 version (at most 1), 0x01 SNI, 0x02 first `host[:port]`, 0x03 custom SNI,
+     * TrustTunnel/TrustTunnel). Tags: 0x00 version (at most 2), 0x01 SNI, 0x02 first `host[:port]`, 0x03 custom SNI,
      * 0x05/0x06 credentials, 0x07 insecure flag, 0x08 DER certificate chain, 0x09 QUIC when the byte is 2,
-     * 0x0A anti-DPI (TLS fragment on), 0x0B client random, 0x0C name; has_ipv6, dns_upstreams and unknown tags are skipped.
+     * 0x0A anti-DPI (TLS fragment on), 0x0B client random, 0x0C name, 0x0E subscription URL (must be https; the
+     * static fields stay required, so a subscription-only link fails); has_ipv6, dns_upstreams,
+     * client_random_auth_key and unknown tags are skipped.
      */
     fun parseFromDeepLink(payload: String): Boolean {
         val data = Base64Strict.decodeLenient(payload, urlSafe = true)
@@ -107,7 +109,7 @@ class TrustTunnel : Outbound("trusttunnel") {
             when (tag) {
                 0x00L -> {
                     val version = ByteCursor(value).readVarInt()
-                    if (version == null || version > 1) return false
+                    if (version == null || version > 2) return false
                 }
                 0x01L -> tls.server_name = text
                 0x02L -> {
@@ -135,6 +137,7 @@ class TrustTunnel : Outbound("trusttunnel") {
                 0x0AL -> if (flag) tls.saveFragmentState(1)
                 0x0BL -> client_random = text.trim()
                 0x0CL -> name = text
+                0x0EL -> if (!text.startsWith("https://")) return false
             }
         }
         if (extraAddresses > 0) {

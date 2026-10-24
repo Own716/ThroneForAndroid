@@ -18,23 +18,86 @@ import io.nekohasekai.sagernet.validation.vtr
 /** muxProtocols (multiplex.h). */
 private val MUX_PROTOCOLS = listOf("smux", "yamux", "h2mux")
 
+/** kMuxCustom (multiplex.h:9-10): "Custom" in the profile's Keep Default / On / Off / Custom multiplex menu. */
+const val MUX_CUSTOM = 3
+
+/**
+ * A multiplex edited through the Keep Default (0) / On (1) / Off (2) / Custom ([MUX_CUSTOM]) menu (multiplex.h:64-82,
+ * xrayMultiplex.h): Custom is On with settings of its own, and [S] is one complete setup of them.
+ */
+interface MuxStateModel<S> {
+    fun getMuxState(): Int
+
+    /** Every state but Custom drops the own settings; Custom takes them from [setCustomSettings]. */
+    fun saveMuxState(state: Int)
+
+    /** The own settings with unset ones taken from [ctx]'s preset; the preset alone when there are none. */
+    fun customSettings(ctx: BuildContext): S
+
+    fun setCustomSettings(settings: S)
+}
+
 /** The Checks of multiplex.h. */
 object MuxChecks {
     @JvmStatic
     fun muxProtocol(protocol: String): String = Validation.oneOf(protocol, MUX_PROTOCOLS)
 
-    /** A warning for a speed build sends as 1 Mbps; text that is not a number is left to an int rule. */
-    @JvmStatic
-    fun brutalSpeed(text: String): String {
-        val value = Validation.toInt(text)
-        if (text.isNotBlank() && (value == null || value > 0)) return ""
-        return vtr(R.string.validation_mux_brutal_speed)
-    }
-
-    /** A warning: brutal is emitted and stored only while multiplex is explicitly On (Keep Default drops it). */
+    /** A warning: brutal is emitted and stored only under a Custom multiplex (Keep Default and Off drop it). */
     @JvmStatic
     fun brutalNeedsMux(brutal: Boolean, muxOn: Boolean): String =
-        if (!brutal || muxOn) "" else vtr(R.string.validation_mux_brutal_needs_mux)
+        if (!brutal || muxOn) "" else vtr(R.string.validation_mux_brutal_needs_custom)
+}
+
+/** MuxSettings (multiplex.h:18-36, multiplex.cpp:191-241): the global preset, or a profile's own under Custom. */
+data class MuxSettings(
+    val protocol: String = "",
+    /** Pool by max_connections + min_streams instead of max_streams per connection. */
+    val by_connections: Boolean = false,
+    val max_streams: Int = 0,
+    val max_connections: Int = 0,
+    val min_streams: Int = 0,
+    val padding: Boolean = false,
+    val brutal: Boolean = false,
+    val brutal_up_mbps: Int = 0,
+    val brutal_down_mbps: Int = 0,
+) {
+    /** MuxSettings::Build (multiplex.cpp:221-241): the enabled multiplex object for the core config. */
+    fun build(): JsonObject {
+        val obj = JsonObject()
+        obj["enabled"] = true
+        if (protocol.isNotEmpty()) obj["protocol"] = protocol
+        if (by_connections) {
+            if (max_connections > 0) obj["max_connections"] = max_connections
+            if (min_streams > 0) obj["min_streams"] = min_streams
+        } else if (max_streams > 0) {
+            obj["max_streams"] = max_streams
+        }
+        if (padding) obj["padding"] = true
+        if (brutal) {
+            val options = TcpBrutal()
+            options.enabled = true
+            options.up_mbps = brutal_up_mbps
+            options.down_mbps = brutal_down_mbps
+            obj["brutal"] = options.exportToJson()
+        }
+        return obj
+    }
+
+    companion object {
+        /** MuxSettings::Preset (multiplex.cpp:191-205). */
+        @JvmStatic
+        fun preset(ctx: BuildContext) = MuxSettings(
+            protocol = ctx.muxProtocol,
+            by_connections = ctx.muxMode == "max_connections",
+            max_streams = ctx.muxConcurrency,
+            max_connections = ctx.muxMaxConnections,
+            min_streams = ctx.muxMinStreams,
+            padding = ctx.muxPadding,
+            brutal = ctx.muxBrutal,
+            brutal_up_mbps = ctx.muxBrutalUpMbps,
+            brutal_down_mbps = ctx.muxBrutalDownMbps,
+        )
+    }
 }
 
 /** TcpBrutal (multiplex.h, multiplex.cpp). */
@@ -89,7 +152,7 @@ class TcpBrutal {
 }
 
 /** Multiplex (multiplex.h, multiplex.cpp). `unspecified` true means "Keep Default". */
-class Multiplex {
+class Multiplex : MuxStateModel<MuxSettings> {
     @JvmField var enabled: Boolean = false
     @JvmField var unspecified: Boolean = true
     @JvmField var protocol: String = ""
@@ -98,6 +161,56 @@ class Multiplex {
     @JvmField var max_streams: Int = 0
     @JvmField var padding: Boolean = false
     @JvmField var brutal: TcpBrutal = TcpBrutal()
+
+    /** Multiplex::getMuxState (multiplex.h:64-69): explicitly enabled with settings of its own is Custom. */
+    override fun getMuxState(): Int = when {
+        unspecified -> 0
+        !enabled -> 2
+        hasOwnSettings() -> MUX_CUSTOM
+        else -> 1
+    }
+
+    /** Multiplex::saveMuxState (multiplex.h:71-76). */
+    override fun saveMuxState(state: Int) {
+        unspecified = state == 0
+        enabled = state == 1 || state == MUX_CUSTOM
+        if (state != MUX_CUSTOM) setCustomSettings(MuxSettings())
+    }
+
+    /** Multiplex::HasOwnSettings (multiplex.cpp:151-154). */
+    fun hasOwnSettings(): Boolean =
+        protocol.isNotEmpty() || max_connections > 0 || min_streams > 0 || max_streams > 0 || padding || brutal.enabled
+
+    /** Multiplex::IsCustom (multiplex.h:79). */
+    fun isCustom(): Boolean = !unspecified && enabled && hasOwnSettings()
+
+    /** Multiplex::CustomSettings (multiplex.cpp:156-177): the pool is taken as a whole, padding and brutal from the profile only. */
+    override fun customSettings(ctx: BuildContext): MuxSettings {
+        val preset = MuxSettings.preset(ctx)
+        if (!hasOwnSettings()) return preset
+        var settings = preset.copy(padding = padding, brutal = brutal.enabled)
+        if (protocol.isNotEmpty()) settings = settings.copy(protocol = protocol)
+        // The core lets max_connections win over max_streams; with neither, the preset's pool applies.
+        if (max_connections > 0) {
+            settings = settings.copy(by_connections = true, max_connections = max_connections, min_streams = min_streams)
+        } else if (max_streams > 0) {
+            settings = settings.copy(by_connections = false, max_streams = max_streams)
+        }
+        if (brutal.enabled) settings = settings.copy(brutal_up_mbps = brutal.up_mbps, brutal_down_mbps = brutal.down_mbps)
+        return settings
+    }
+
+    /** Multiplex::SetCustomSettings (multiplex.cpp:179-189). */
+    override fun setCustomSettings(settings: MuxSettings) {
+        protocol = settings.protocol
+        max_connections = if (settings.by_connections) settings.max_connections else 0
+        min_streams = if (settings.by_connections) settings.min_streams else 0
+        max_streams = if (settings.by_connections) 0 else settings.max_streams
+        padding = settings.padding
+        brutal.enabled = settings.brutal
+        brutal.up_mbps = settings.brutal_up_mbps
+        brutal.down_mbps = settings.brutal_down_mbps
+    }
 
     /** Multiplex::EffectivelyOn (multiplex.cpp): On, or Keep Default with the global multiplex default on. */
     fun effectivelyOn(ctx: BuildContext): Boolean = enabled || (unspecified && ctx.muxDefaultOn)
@@ -201,24 +314,20 @@ class Multiplex {
         return obj
     }
 
-    /** Multiplex::Build (multiplex.cpp): starts from exportToJson, so an unspecified profile switched on by the global keeps only the defaults. */
+    /** Multiplex::Build (multiplex.cpp:140-144): Keep Default (with the default on) and On emit the preset only. */
     fun build(ctx: BuildContext): JsonObject {
-        val obj = exportToJson()
-        if (unspecified && ctx.muxDefaultOn) obj["enabled"] = true
-        if (!obj.bool("enabled")) return JsonObject()
-        if (protocol.isEmpty()) obj["protocol"] = ctx.muxProtocol
-        if (max_streams == 0 && max_connections == 0 && min_streams == 0) obj["max_streams"] = ctx.muxConcurrency
-        if (ctx.muxPadding) obj["padding"] = true
-        return obj
+        if (!effectivelyOn(ctx)) return JsonObject()
+        return (if (isCustom()) customSettings(ctx) else MuxSettings.preset(ctx)).build()
     }
 
-    /** Multiplex::Validate (multiplex.cpp); [ctx] supplies the global multiplex default. */
+    /** Multiplex::Validate (multiplex.cpp:256-270): only a Custom multiplex builds from the profile's own settings. */
+    @Suppress("UNUSED_PARAMETER")
     fun validate(issues: MutableList<Issue>, ctx: BuildContext) {
-        val explicitOn = !unspecified && enabled
-        issues.addIssue(Severity.Warning, "multiplex.brutal", MuxChecks.brutalNeedsMux(brutal.enabled, explicitOn))
-        if (!effectivelyOn(ctx)) return
+        val custom = isCustom()
+        issues.addIssue(Severity.Warning, "multiplex.brutal", MuxChecks.brutalNeedsMux(brutal.enabled, custom))
+        if (!custom) return
         issues.addIssue(Severity.Error, "multiplex.protocol", MuxChecks.muxProtocol(protocol), protocol)
-        if (explicitOn && brutal.enabled && (brutal.up_mbps <= 0 || brutal.down_mbps <= 0)) {
+        if (brutal.enabled && (brutal.up_mbps <= 0 || brutal.down_mbps <= 0)) {
             issues.addIssue(Severity.Warning, "multiplex.brutal", vtr(R.string.validation_mux_brutal_both_speeds))
         }
     }

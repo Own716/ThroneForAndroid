@@ -3,6 +3,8 @@ package io.nekohasekai.sagernet.database
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.SpeedTestSettings
 import io.nekohasekai.sagernet.database.preference.SettingsStore
+import io.nekohasekai.sagernet.outbound.common.XRAY_MUX_MAX_COUNT
+import io.nekohasekai.sagernet.outbound.common.xrayXudpProxyUDP443Modes
 import io.nekohasekai.sagernet.outbound.link.Hosts
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
@@ -104,6 +106,10 @@ object SettingsRegistry {
 
     @JvmField
     val MUX_PROTOCOLS = listOf("h2mux", "smux", "yamux")
+
+    /** SettingsRepo.h:84-85 mux_mode. */
+    @JvmField
+    val MUX_MODES = listOf("max_streams", "max_connections")
 
     @JvmField
     val FRAGMENT_IMPLEMENTATIONS = listOf("built-in", "custom")
@@ -222,10 +228,20 @@ object SettingsRegistry {
     // ------------------------------------------------------------------------------------------------ presets
 
     @JvmField val MUX_PROTOCOL = oneOf("mux_protocol", "smux", MUX_PROTOCOLS)
+    @JvmField val MUX_MODE = oneOf("mux_mode", "max_streams", MUX_MODES)
     @JvmField val MUX_CONCURRENCY = int("mux_concurrency", 8) { it >= 0 }
+    @JvmField val MUX_MAX_CONNECTIONS = int("mux_max_connections", 4) { it >= 0 }
+    @JvmField val MUX_MIN_STREAMS = int("mux_min_streams", 4) { it >= 0 }
     @JvmField val MUX_PADDING = bool("mux_padding", false)
+    @JvmField val MUX_BRUTAL = bool("mux_brutal", false)
+    @JvmField val MUX_BRUTAL_UP_MBPS = int("mux_brutal_up_mbps", 0) { it >= 0 }
+    @JvmField val MUX_BRUTAL_DOWN_MBPS = int("mux_brutal_down_mbps", 0) { it >= 0 }
     @JvmField val MUX_DEFAULT_ON = bool("mux_default_on", false)
-    @JvmField val XRAY_MUX_CONCURRENCY = int("xray_mux_concurrency", 8) { it >= 0 }
+    @JvmField val XRAY_MUX_CONCURRENCY = int("xray_mux_concurrency", 8) { it in -1..XRAY_MUX_MAX_COUNT }
+    /** 0 = no limit. */
+    @JvmField val XRAY_MUX_MAX_CONNECTIONS = int("xray_mux_max_connections", 0) { it in 0..XRAY_MUX_MAX_COUNT }
+    @JvmField val XRAY_MUX_XUDP_CONCURRENCY = int("xray_mux_xudp_concurrency", 16) { it in -1..XRAY_MUX_MAX_COUNT }
+    @JvmField val XRAY_MUX_XUDP_PROXY_UDP443 = oneOf("xray_mux_xudp_proxy_udp443", "reject", xrayXudpProxyUDP443Modes)
     @JvmField val XRAY_MUX_DEFAULT_ON = bool("xray_mux_default_on", false)
     @JvmField val FRAGMENT_DEFAULT_ON = bool("fragment_default_on", false)
     @JvmField val FRAGMENT_IMPLEMENTATION = oneOf("fragment_implementation", "built-in", FRAGMENT_IMPLEMENTATIONS)
@@ -339,6 +355,8 @@ object SettingsRegistry {
     @JvmField val XRAY_GEOSITE_URL = string("xray_geosite_url", "https://github.com/Loyalsoldier/v2ray-rules-dat/raw/release/geosite.dat")
     @JvmField val SKIP_CERT = bool("skip_cert", false)
     @JvmField val USE_MOZILLA_CERTS = bool("use_mozilla_certs", false)
+    /** Xray otherwise trusts only its built-in root certificates (SettingsRepo.h). */
+    @JvmField val XRAY_USE_SYSTEM_CA = bool("xray_use_system_ca", false)
     @JvmField val ENABLE_NTP = bool("enable_ntp", false)
     @JvmField val NTP_SERVER_ADDRESS = string("ntp_server_address", "")
     @JvmField val NTP_SERVER_PORT = int("ntp_server_port", 0) { it in 0..65535 }

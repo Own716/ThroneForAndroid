@@ -1,7 +1,9 @@
 package io.nekohasekai.sagernet.group
 
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.bg.CoreRuntime
 import io.nekohasekai.sagernet.bg.ProfileValidator
+import io.nekohasekai.sagernet.bg.proto.CoreConfigs
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupRepo
 import io.nekohasekai.sagernet.database.GroupSort
@@ -16,18 +18,14 @@ import io.nekohasekai.sagernet.database.SubscriptionOptions
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.ktx.isIpAddress
+import io.nekohasekai.sagernet.ktx.readableMessage
+import io.throneproj.mobile.Mobile
+import io.throneproj.mobile.ResolveRequest
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import java.net.InetAddress
-import java.util.concurrent.ConcurrentLinkedQueue
+import kotlinx.coroutines.withContext
 
 /** The post-update filters (GroupUpdater.cpp:183-296) and the manual group actions that need the core. */
 internal object SubscriptionFilters {
-
-    private const val RESOLVE_PARALLELISM = 8
 
     /** [deleted] ids and the report sections to append to the change text. */
     class Outcome(@JvmField val deleted: List<Long>, @JvmField val report: String)
@@ -132,38 +130,70 @@ internal object SubscriptionFilters {
         return report.trim()
     }
 
+    /** Resolve Domain for group (on_menu_resolve_domain_triggered): [resolveProfiles] over the members of [gid]. */
+    suspend fun resolveDomains(gid: Long): String = resolve(ProfileManager.members(gid))
+
     /**
-     * Resolve Domain for group (mainwindow_profiles.cpp:470-495, outbound::ResolveDomainToIP): every member whose
-     * server is a domain takes the first address the system resolver returns. Returns the report text.
+     * Resolve Domain for the profiles [ids] (on_menu_resolve_selected_triggered), from any groups; unknown ids are
+     * skipped. Returns the report text.
      */
-    suspend fun resolveDomains(gid: Long): String {
-        val targets = ProfileManager.members(gid).filter { profile ->
+    suspend fun resolveProfiles(ids: List<Long>): String = resolve(ProfileManager.getProfiles(ids))
+
+    /**
+     * resolve_profile_domains (mainwindow_profiles.cpp): every profile whose server is a domain takes the first
+     * address the core's dns-direct returns, never the system resolver, which the tun answers from FakeIP or
+     * dns-remote while the VPN runs. Only answered domains are written back.
+     */
+    private suspend fun resolve(profiles: List<ProxyEntity>): String = withContext(Dispatchers.IO) {
+        val targets = profiles.filter { profile ->
             val address = profile.outbound.getAddress()
             !profile.outbound.invalid && address.isNotEmpty() && !address.isIpAddress()
         }
-        val resolved = ConcurrentLinkedQueue<Long>()
-        val permits = Semaphore(RESOLVE_PARALLELISM)
-        coroutineScope {
-            for (profile in targets) launch(Dispatchers.IO) {
-                permits.withPermit {
-                    val outbound = profile.outbound
-                    val address = runCatching {
-                        InetAddress.getAllByName(outbound.getAddress()).firstOrNull()?.hostAddress
-                    }.getOrNull()
-                    if (address.isNullOrEmpty()) return@withPermit
-                    val before = profile.outboundJson
-                    outbound.setAddress(address)
-                    profile.putOutbound(outbound)
-                    if (profile.outboundJson == before) return@withPermit
-                    SagerDatabase.proxyDao.updateOutbound(profile.id, profile.type, profile.name, profile.outboundJson)
-                    resolved.add(profile.id)
-                }
+        val resolved = if (targets.isEmpty()) emptyMap<String, String>() else try {
+            lookup(targets.map { it.outbound.getAddress() }.distinct())
+        } catch (e: Exception) {
+            val message = app.getString(R.string.resolve_domains_failed, e.readableMessage)
+            Logs.w(message)
+            return@withContext message
+        }
+        val changed = ArrayList<ProxyEntity>()
+        for (profile in targets) {
+            val outbound = profile.outbound
+            val address = resolved[outbound.getAddress()] ?: continue
+            val before = profile.outboundJson
+            outbound.setAddress(address)
+            profile.putOutbound(outbound)
+            if (profile.outboundJson == before) continue
+            SagerDatabase.proxyDao.updateOutbound(profile.id, profile.type, profile.name, profile.outboundJson)
+            changed.add(profile)
+        }
+        val byGroup = changed.groupBy({ it.groupId }, { it.id })
+        GroupSort.repositionLater(byGroup, SortInput.CONFIG)
+        for (groupId in byGroup.keys) GroupRepo.postReload(groupId)
+        val report = app.getString(R.string.subs_resolved, changed.size, targets.size)
+        Logs.i(report)
+        report
+    }
+
+    /** Domain -> first address, through the running instance's dns-direct or a probe box of the test config. */
+    private fun lookup(domains: List<String>): Map<String, String> {
+        val probe = CoreConfigs.buildTest(emptyList())
+        if (!probe.ok) error(probe.error.orEmpty())
+        val request = ResolveRequest().apply {
+            coreConfig = probe.coreConfig
+            domains.forEach(::addDomain)
+        }
+        val results = Mobile.resolveDomains(CoreRuntime.running?.instance, CoreRuntime.platform, request)
+        val resolved = HashMap<String, String>()
+        while (results.hasNext()) {
+            val result = results.next()
+            val addresses = result.addresses()
+            if (addresses.hasNext()) {
+                resolved[result.domain] = addresses.next()
+            } else {
+                Logs.w(app.getString(R.string.resolve_domain_failed, result.domain, result.error))
             }
         }
-        GroupSort.repositionLater(mapOf(gid to resolved.toList()), SortInput.CONFIG)
-        GroupRepo.postReload(gid)
-        val report = app.getString(R.string.subs_resolved, resolved.size, targets.size)
-        Logs.i(report)
-        return report
+        return resolved
     }
 }

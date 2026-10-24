@@ -26,6 +26,8 @@ import io.nekohasekai.sagernet.outbound.common.QuicChecks
 import io.nekohasekai.sagernet.outbound.common.TlsChecks
 import io.nekohasekai.sagernet.ui.GroupSettingsActivity
 import io.nekohasekai.sagernet.ui.MainActivity
+import io.nekohasekai.sagernet.ui.profile.MuxBlock
+import io.nekohasekai.sagernet.ui.profile.XrayMuxBlock
 import io.nekohasekai.sagernet.ui.profile.keepUnlistedValue
 import io.nekohasekai.sagernet.validation.Empty
 import io.nekohasekai.sagernet.validation.Validation
@@ -45,13 +47,12 @@ class PresetSettingsFragment : SettingsScreenFragment(R.xml.settings_presets) {
     override fun bind() {
         reloadOn(
             SettingsRegistry.MUX_DEFAULT_ON.key, SettingsRegistry.MUX_PROTOCOL.key, SettingsRegistry.MUX_PADDING.key,
-            SettingsRegistry.XRAY_MUX_DEFAULT_ON.key, SettingsRegistry.FRAGMENT_DEFAULT_ON.key,
-            SettingsRegistry.TLS_TRICKS_DEFAULT_ON.key, SettingsRegistry.UTLS_FINGERPRINT.key,
-            SettingsRegistry.QUIC_DISABLE_PATH_MTU_DISCOVERY.key,
+            SettingsRegistry.XRAY_MUX_DEFAULT_ON.key, SettingsRegistry.XRAY_MUX_XUDP_PROXY_UDP443.key,
+            SettingsRegistry.FRAGMENT_DEFAULT_ON.key, SettingsRegistry.TLS_TRICKS_DEFAULT_ON.key,
+            SettingsRegistry.UTLS_FINGERPRINT.key, SettingsRegistry.QUIC_DISABLE_PATH_MTU_DISCOVERY.key,
         )
-        // Blank keeps the core default, like the desktop's empty field.
-        gateInt(SettingsRegistry.MUX_CONCURRENCY.key, Validation.Rules.int(0, Int.MAX_VALUE.toLong()), blankAs = 0)
-        gateInt(SettingsRegistry.XRAY_MUX_CONCURRENCY.key, Validation.Rules.int(0, MAX_XRAY_MUX_CONCURRENCY), blankAs = 0)
+        bindSingBoxMux()
+        bindXrayMux()
 
         // Size and sleep only feed the custom (dialer-level) fragment (dialog_preset_settings.cpp:40-47).
         val implementation = pref<SimpleMenuPreference>(SettingsRegistry.FRAGMENT_IMPLEMENTATION.key)
@@ -96,6 +97,68 @@ class PresetSettingsFragment : SettingsScreenFragment(R.xml.settings_presets) {
         zeroAsDefault(SettingsRegistry.QUIC_INITIAL_PACKET_SIZE.key)
     }
 
+    /** The sing-box multiplex preset, the desktop's MuxSettingsWidget (dialog_preset_settings.cpp:28, 75, 104). */
+    private fun bindSingBoxMux() {
+        val count = Validation.Rules.int(1, Int.MAX_VALUE.toLong(), Empty.Required)
+        for (setting in listOf(SettingsRegistry.MUX_CONCURRENCY, SettingsRegistry.MUX_MAX_CONNECTIONS)) {
+            gateInt(setting.key, count)
+        }
+        gateInt(SettingsRegistry.MUX_MIN_STREAMS.key, Validation.Rules.int(0, Int.MAX_VALUE.toLong()), blankAs = 0)
+        // The speeds stay on screen so they can be set before TCP Brutal is switched on; like the desktop they are
+        // required only while it is on, and switching it on is refused until both are set.
+        val brutal = pref<SwitchPreference>(SettingsRegistry.MUX_BRUTAL.key)
+        var brutalOn = brutal.isChecked
+        for (setting in listOf(SettingsRegistry.MUX_BRUTAL_UP_MBPS, SettingsRegistry.MUX_BRUTAL_DOWN_MBPS)) {
+            gateInt(setting.key, count).onlyIf { brutalOn }
+        }
+
+        val keys = mapOf(
+            "mode" to SettingsRegistry.MUX_MODE.key,
+            "max_streams" to SettingsRegistry.MUX_CONCURRENCY.key,
+            "max_connections" to SettingsRegistry.MUX_MAX_CONNECTIONS.key,
+            "min_streams" to SettingsRegistry.MUX_MIN_STREAMS.key,
+            "brutal.up_mbps" to SettingsRegistry.MUX_BRUTAL_UP_MBPS.key,
+            "brutal.down_mbps" to SettingsRegistry.MUX_BRUTAL_DOWN_MBPS.key,
+        )
+        val mode = pref<SimpleMenuPreference>(SettingsRegistry.MUX_MODE.key)
+        fun sync(modeValue: String = mode.value.orEmpty()) =
+            MuxBlock.poolVisibility(this, modeValue, brutalOn, speedsAlways = true) { keys.getValue(it) }
+        sync()
+        mode.setOnPreferenceChangeListener { _, newValue ->
+            sync(modeValue = newValue as String)
+            needReload()
+            true
+        }
+        brutal.setOnPreferenceChangeListener { _, newValue ->
+            val on = newValue as Boolean
+            if (on && (DataStore.muxBrutalUpMbps <= 0 || DataStore.muxBrutalDownMbps <= 0)) {
+                refuse(brutal, getString(R.string.validation_mux_brutal_both_speeds))
+                return@setOnPreferenceChangeListener false
+            }
+            brutalOn = on
+            sync()
+            validation.refresh()
+            needReload()
+            true
+        }
+        MuxBlock.modeSummary(this, mode.key)
+    }
+
+    /** The Xray mux preset, the desktop's XrayMuxSettingsWidget (dialog_preset_settings.cpp:30, 76, 106). */
+    private fun bindXrayMux() {
+        gateInt(SettingsRegistry.XRAY_MUX_CONCURRENCY.key, XrayMuxBlock.COUNT_RULE)
+        gateInt(SettingsRegistry.XRAY_MUX_MAX_CONNECTIONS.key, XrayMuxBlock.MAX_CONNECTIONS_RULE, blankAs = 0)
+        gateInt(SettingsRegistry.XRAY_MUX_XUDP_CONCURRENCY.key, XrayMuxBlock.COUNT_RULE)
+        val keys = mapOf(
+            "concurrency" to SettingsRegistry.XRAY_MUX_CONCURRENCY.key,
+            "maxConnections" to SettingsRegistry.XRAY_MUX_MAX_CONNECTIONS.key,
+            "xudpConcurrency" to SettingsRegistry.XRAY_MUX_XUDP_CONCURRENCY.key,
+            "xudpProxyUDP443" to SettingsRegistry.XRAY_MUX_XUDP_PROXY_UDP443.key,
+        )
+        // After the gates, whose number input is unsigned.
+        XrayMuxBlock.inputs(this) { keys.getValue(it) }
+    }
+
     private fun placeholder(key: String, defaultText: String) {
         pref<EditTextPreference>(key).summaryProvider = DefaultSummaryProvider(defaultText)
     }
@@ -115,11 +178,6 @@ class PresetSettingsFragment : SettingsScreenFragment(R.xml.settings_presets) {
             val text = preference.text.orEmpty()
             if (text.isEmpty() || text == "0") getString(R.string.setting_default) else text
         }
-    }
-
-    private companion object {
-        /** Xray decodes mux concurrency into an int16. */
-        const val MAX_XRAY_MUX_CONCURRENCY = 32767L
     }
 }
 
@@ -250,7 +308,8 @@ class CoreSettingsFragment : SettingsScreenFragment(R.xml.settings_core) {
         reloadOn(
             SettingsRegistry.XRAY_LOG_LEVEL.key, SettingsRegistry.ENABLE_STATS.key,
             SettingsRegistry.DISABLE_TRAFFIC_STATS.key, SettingsRegistry.SKIP_CERT.key,
-            SettingsRegistry.USE_MOZILLA_CERTS.key, SettingsRegistry.NTP_OUTBOUND.key,
+            SettingsRegistry.USE_MOZILLA_CERTS.key, SettingsRegistry.XRAY_USE_SYSTEM_CA.key,
+            SettingsRegistry.NTP_OUTBOUND.key,
         )
 
         bindClashApi()

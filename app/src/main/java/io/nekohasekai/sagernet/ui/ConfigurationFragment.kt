@@ -467,6 +467,13 @@ class ConfigurationFragment : ToolbarFragment(R.layout.layout_group_list),
     /** Every group in tab order. */
     fun groups(): List<ProxyGroup> = if (::pagerAdapter.isInitialized) pagerAdapter.groups else emptyList()
 
+    /** Shows group [id], reloading the tabs first when it is not one yet (a group :bg has just created). */
+    fun showGroup(id: Long) {
+        if (view == null || select || !::pagerAdapter.isInitialized) return
+        val index = pagerAdapter.indexOf(id)
+        if (index >= 0) pager.setCurrentItem(index, false) else reloadGroups(switchTo = id)
+    }
+
     private fun reloadGroups(switchTo: Long = 0L) {
         val owner = viewLifecycleOwnerLiveData.value ?: return
         owner.lifecycleScope.launch {

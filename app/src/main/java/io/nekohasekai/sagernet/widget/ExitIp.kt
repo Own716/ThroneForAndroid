@@ -90,8 +90,11 @@ object ExitIp {
         },
     )
 
-    /** "auto", and any id this build does not know: the first service that names a country wins. */
-    private val AUTO_CHAIN = listOf("ip-api", "ipwho", "ipinfo", "cloudflare").map { id ->
+    /**
+     * "auto", and any id this build does not know: the first service that names a country wins. ip2location leads
+     * because the IP & country test asks it too, so both name the same country (ExitLookup.cpp LookupExit).
+     */
+    private val AUTO_CHAIN = listOf("ip2location", "ip-api", "ipwho", "ipinfo", "cloudflare").map { id ->
         PROVIDERS.first { it.id == id }
     }
 

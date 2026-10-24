@@ -63,10 +63,10 @@ class Socks : Outbound("socks") {
         if (url.password.isNotEmpty() || url.userName.isNotEmpty()) {
             username = url.userName
             password = url.password
-            // v2rayN base64-encodes "user:pass" into the username
+            // v2rayN base64-encodes "user:pass" into the username; a plain name like "user" is valid base64 too
             if (password.isEmpty() && username.isNotEmpty()) {
                 val decoded = Base64Strict.decodeToString(username)
-                if (decoded.isNotEmpty()) {
+                if (decoded.contains(':')) {
                     username = QtStrings.substrBefore(decoded, ":")
                     password = QtStrings.substrAfter(decoded, ":")
                 }

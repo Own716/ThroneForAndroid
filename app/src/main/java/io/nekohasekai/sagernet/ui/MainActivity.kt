@@ -16,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.addCallback
 import androidx.annotation.IdRes
+import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.updatePaddingRelative
@@ -33,6 +34,7 @@ import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.bg.SagerConnection
+import io.nekohasekai.sagernet.bg.test.TestSpec
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SettingsRegistry
 import io.nekohasekai.sagernet.database.ProfileManager
@@ -48,6 +50,7 @@ import io.nekohasekai.sagernet.outbound.`import`.ProfileImport
 import io.nekohasekai.sagernet.ui.route.RouteImports
 import io.nekohasekai.sagernet.ui.settings.DnsSettingsFragment
 import io.nekohasekai.sagernet.ui.settings.XrayGeoSettingsFragment
+import io.nekohasekai.sagernet.ui.test.TestSessionClient
 import io.nekohasekai.sagernet.ktx.readableMessage
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ui.MessageStore
@@ -139,7 +142,10 @@ class MainActivity : ThemedActivity(),
 
         binding.fab.setOnClickListener { toggleService() }
         binding.stats.setOnClickListener { if (DataStore.serviceState.connected) binding.stats.testConnection() }
-        binding.stats.setOnLongClickListener { displayFragmentWithId(R.id.nav_live_graphs) }
+        binding.stats.setOnLongClickListener {
+            showStatsMenu()
+            true
+        }
 
         setContentView(binding.root)
         currentMainFragment =
@@ -486,6 +492,30 @@ class MainActivity : ThemedActivity(),
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    /** Shows group [id] when the profiles screen is open; otherwise it opens there next, being the current group. */
+    fun showGroup(id: Long) {
+        (supportFragmentManager.findFragmentById(R.id.fragment_holder) as? ConfigurationFragment)?.showGroup(id)
+    }
+
+    /** The stats bar's long-press menu: the live graphs, and a speed test of the running connection. */
+    private fun showStatsMenu() {
+        val popup = PopupMenu(this, binding.stats)
+        popup.menuInflater.inflate(R.menu.stats_bar_menu, popup.menu)
+        popup.menu.findItem(R.id.action_test_speed_current).isEnabled = DataStore.serviceState.connected
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_live_graphs -> displayFragmentWithId(R.id.nav_live_graphs)
+                R.id.action_test_speed_current -> {
+                    if (!TestSessionClient.startCurrent(TestSpec.KIND_SPEED)) {
+                        snackbar(R.string.profiles_test_busy).show()
+                    }
+                }
+            }
+            true
+        }
+        popup.show()
     }
 
     override fun snackbarInternal(text: CharSequence): Snackbar {

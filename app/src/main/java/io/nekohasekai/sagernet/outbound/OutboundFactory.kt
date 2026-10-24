@@ -199,6 +199,7 @@ object OutboundFactory {
             preference == XrayVlessPreference.AllVLESS ||
             rawHttpOverTls ||
             transport == "xhttp" ||
+            transport == "xdrive" ||
             (security == "reality" && preference == XrayVlessPreference.XhttpAndReality)
     }
 

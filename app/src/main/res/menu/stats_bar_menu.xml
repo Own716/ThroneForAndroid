@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/action_live_graphs"
+        android:title="@string/live_graphs" />
+    <item
+        android:id="@+id/action_test_speed_current"
+        android:title="@string/profiles_test_speed_current" />
+</menu>

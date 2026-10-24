@@ -170,6 +170,11 @@ class RouteFragment : ToolbarFragment(R.layout.layout_route), Toolbar.OnMenuItem
         val copy = profile.copy().apply {
             this.id = 0L
             name = profile.name + " clone"
+            // an update replaces a remote profile's rules, so the clone is the local copy that keeps edits
+            is_remote = false
+            remote_url = ""
+            auto_update = false
+            remote_last_update = 0L
         }
         RouteManager.save(copy)
         onMainDispatcher {

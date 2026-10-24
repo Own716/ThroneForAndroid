@@ -3,6 +3,7 @@ package io.nekohasekai.sagernet.outbound.config
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.Outbound
 import io.nekohasekai.sagernet.outbound.common.setXrayDialerProxy
+import io.nekohasekai.sagernet.outbound.common.useXraySystemCA
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.jsonObjectOf
@@ -24,7 +25,21 @@ internal class ChainRequest(
     val soleXrayInbound: Boolean = false,
     /** Hop 0 is the WARP hop: it becomes `proxy` dialing through hop 1, which becomes `warp-bypass`. */
     val warpWrap: Boolean = false,
+    val origin: HopOrigin = HopOrigin.NONE,
 )
+
+/** A group whose landing / front proxy a chain carries, by name. */
+internal class ChainGroup(val name: String, val landingProxyId: Long, val frontProxyId: Long)
+
+/**
+ * Where the hop ids of a chain come from, for missingHopError (generate.cpp): the profile being built (the desktop's
+ * BuildContext::ent) and the groups whose landing / front proxy the chain carries.
+ */
+internal class HopOrigin(val profile: Outbound? = null, val groups: List<ChainGroup> = emptyList()) {
+    companion object {
+        val NONE = HopOrigin()
+    }
+}
 
 /** hopChainOptions (generate.cpp:1310-1319) without the auxiliary-endpoint members. */
 internal class HopChainOptions(
@@ -153,16 +168,29 @@ internal class ChainBuilder(
         return ""
     }
 
+    // missingHopError: names the setting that still points at a deleted profile, so the user knows what to amend.
+    private fun missingHopError(id: Long, origin: HopOrigin): String {
+        val profile = origin.profile
+        if (profile != null && profile.type == "chain" && id in TypeAccess.chainHops(profile)) {
+            return "Chain \"${profile.name}\" has a hop (profile id $id) that no longer exists, edit the chain to remove it"
+        }
+        for (group in origin.groups) {
+            if (group.frontProxyId == id) return "Group \"${group.name}\" has a front proxy that has been deleted."
+            if (group.landingProxyId == id) return "Group \"${group.name}\" has a landing proxy that has been deleted."
+        }
+        return "A proxy in the chain can no longer be found."
+    }
+
     /**
      * entIDListtoEntList (:1237-1294): resolves the hops exit-first and records where the walk enters and leaves
      * the Xray core, so the caller knows which loopback bridges it must create.
      */
-    private fun resolveHops(hopIds: List<Long>, hops: MutableList<Hop>): String {
+    private fun resolveHops(hopIds: List<Long>, hops: MutableList<Hop>, origin: HopOrigin): String {
         val scan = ChainScan()
         var inXray = false
         for (id in hopIds) {
             if (id == WarpHop.PROFILE_ID) {
-                val warpHop = warp ?: return "Null proxy in chain, you may want to check your configs"
+                val warpHop = warp ?: return missingHopError(id, origin)
                 if (inXray) {
                     state.xrayToSingTransitioned = true
                     scan.coreTransitions++
@@ -171,7 +199,7 @@ internal class ChainBuilder(
                 hops.add(Hop(id, warpHop))
                 continue
             }
-            val outbound = profiles.get(id) ?: return "Null proxy in chain, you may want to check your configs"
+            val outbound = profiles.get(id) ?: return missingHopError(id, origin)
             if (outbound.invalid) return "Profile $id has a type this build cannot use: ${outbound.type}"
             if (!inXray && outbound.isXray()) {
                 state.singToXrayTransitioned = true
@@ -205,9 +233,9 @@ internal class ChainBuilder(
      * Stands in for the desktop's IsValid (generate.cpp:2408-2525) before a test candidate is built: the hop walk
      * and every hop's Build() / BuildXray() run once, and the first error is the reason to skip the candidate.
      */
-    fun candidateError(hopIds: List<Long>): String {
+    fun candidateError(hopIds: List<Long>, origin: HopOrigin = HopOrigin.NONE): String {
         val hops = ArrayList<Hop>()
-        val scanError = resolveHops(hopIds, hops)
+        val scanError = resolveHops(hopIds, hops, origin)
         if (scanError.isNotEmpty()) return scanError
         if (hops.isEmpty()) return "The profile has no hops"
         for (hop in hops) {
@@ -238,7 +266,7 @@ internal class ChainBuilder(
         state.singToXrayTransitioned = false
         state.xrayToSingTransitioned = false
         val hops = ArrayList<Hop>()
-        val scanError = resolveHops(req.hopIds, hops)
+        val scanError = resolveHops(req.hopIds, hops, req.origin)
         if (scanError.isNotEmpty()) {
             state.error = scanError
             return ingressTag
@@ -278,6 +306,9 @@ internal class ChainBuilder(
             inbounds.add(bridgeInbound)
             if (!state.forTest && !req.soleXrayInbound) for (item in userXrayConfig.array("inbounds")) inbounds.add(item)
             userXrayConfig["inbounds"] = inbounds
+            if (ctx.xrayUseSystemCA) {
+                for (outbound in userXrayConfig.array("outbounds")) if (outbound is JsonObject) useXraySystemCA(outbound)
+            }
             state.xrayConfig = userXrayConfig
             state.isXrayNeeded = true
         }
@@ -397,6 +428,7 @@ internal class ChainBuilder(
             obj["tag"] = tag
             // Xray removed outbound-level proxySettings; sockopt.dialerProxy is its 1:1 replacement, the XHTTP download leg included.
             if (nextTag.isNotEmpty() && (opts.link || bridge.needed)) setXrayDialerProxy(obj, nextTag)
+            if (ctx.xrayUseSystemCA) useXraySystemCA(obj)
             state.xrayOutbounds.add(obj)
         }
         if (bridge.needed) {

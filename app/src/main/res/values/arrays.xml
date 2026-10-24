@@ -236,6 +236,12 @@
         <item>@string/tri_state_on</item>
         <item>@string/tri_state_off</item>
     </string-array>
+    <string-array name="mux_state_entry">
+        <item>@string/tri_state_default</item>
+        <item>@string/tri_state_on</item>
+        <item>@string/tri_state_off</item>
+        <item>@string/mux_state_custom</item>
+    </string-array>
     <string-array name="socks_version_entry" translatable="false">
         <item>SOCKS4</item>
         <item>SOCKS4a</item>
@@ -296,6 +302,7 @@
         <item>WebSocket</item>
         <item>HTTPUpgrade</item>
         <item>gRPC</item>
+        <item>XDRIVE</item>
     </string-array>
     <string-array name="xray_network_value" translatable="false">
         <item>raw</item>
@@ -303,23 +310,35 @@
         <item>ws</item>
         <item>httpupgrade</item>
         <item>grpc</item>
+        <item>xdrive</item>
+    </string-array>
+    <string-array name="xray_xdrive_service" translatable="false">
+        <item>google-drive</item>
+        <item>template</item>
+        <item>local</item>
     </string-array>
     <string-array name="xray_security_entry" translatable="false">
         <item>none</item>
         <item>tls</item>
         <item>reality</item>
     </string-array>
-    <string-array name="mux_protocol_entry">
-        <item>@string/mux_protocol_default</item>
-        <item>h2mux</item>
-        <item>smux</item>
-        <item>yamux</item>
+    <string-array name="mux_mode_entry">
+        <item>@string/mux_concurrency</item>
+        <item>@string/mux_max_connections</item>
     </string-array>
-    <string-array name="mux_protocol_value" translatable="false">
-        <item></item>
-        <item>h2mux</item>
-        <item>smux</item>
-        <item>yamux</item>
+    <string-array name="mux_mode_value" translatable="false">
+        <item>max_streams</item>
+        <item>max_connections</item>
+    </string-array>
+    <string-array name="xray_mux_udp443_entry">
+        <item>@string/xray_mux_udp443_reject</item>
+        <item>@string/xray_mux_udp443_allow</item>
+        <item>@string/xray_mux_udp443_skip</item>
+    </string-array>
+    <string-array name="xray_mux_udp443_value" translatable="false">
+        <item>reject</item>
+        <item>allow</item>
+        <item>skip</item>
     </string-array>
     <string-array name="hysteria_auth_type_entry">
         <item>@string/ssh_auth_type_none</item>

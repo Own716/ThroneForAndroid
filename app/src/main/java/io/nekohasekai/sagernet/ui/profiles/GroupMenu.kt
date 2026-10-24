@@ -6,7 +6,6 @@ import android.view.View
 import androidx.core.view.MenuCompat
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.bg.test.TestSpec
-import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.GroupSortMethod
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.TestBy
@@ -84,7 +83,6 @@ class GroupMenu(private val host: ConfigurationFragment) {
     fun prepare(menu: Menu) {
         val group = host.currentGroup()
         menu.findItem(R.id.action_update_subscription)?.isVisible = group?.isSubscription == true
-        menu.findItem(R.id.action_test_speed_current)?.isEnabled = DataStore.serviceState.connected
         menu.findItem(R.id.action_test_stop)?.isVisible = host.testState.running
         if (group != null && group.keepsSorted()) sortDescending = group.sort.descending
         menu.findItem(if (sortDescending) R.id.action_sort_descending else R.id.action_sort_ascending)?.isChecked = true
@@ -115,7 +113,6 @@ class GroupMenu(private val host: ConfigurationFragment) {
     fun onMenuItemClick(item: MenuItem): Boolean {
         when (item.itemId) {
             R.id.action_update_all_subscriptions -> GroupActions.updateAll(host)
-            R.id.action_test_speed_current -> ProfileTests.startCurrent(host)
             R.id.action_test_stop -> TestSessionClient.stop()
             R.id.action_route_profile -> RouteQuickSwitch.show(host)
             R.id.action_layout_single -> host.setDoubleColumn(false)

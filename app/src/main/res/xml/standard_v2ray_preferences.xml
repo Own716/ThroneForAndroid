@@ -261,35 +261,37 @@
             app:icon="@drawable/ic_baseline_compare_arrows_24"
             app:key="multiplex.enabled"
             app:title="@string/enable_mux"
-            app:entries="@array/tri_state_entry"
-            app:entryValues="@array/int_array_3"
+            app:entries="@array/mux_state_entry"
+            app:entryValues="@array/int_array_4"
             app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <moe.matsuri.nb4a.ui.SimpleMenuPreference
             app:icon="@drawable/ic_baseline_layers_24"
             app:key="multiplex.protocol"
             app:title="@string/mux_type"
-            app:entries="@array/mux_protocol_entry"
-            app:entryValues="@array/mux_protocol_value"
-            app:defaultValue=""
+            app:entries="@array/mux_protocol_preset"
+            app:entryValues="@array/mux_protocol_preset"
             app:useSimpleSummaryProvider="true" />
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:icon="@drawable/ic_baseline_tune_24"
+            app:key="multiplex.mode"
+            app:title="@string/mux_mode"
+            app:entries="@array/mux_mode_entry"
+            app:entryValues="@array/mux_mode_value" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="multiplex.max_streams"
             app:title="@string/mux_concurrency"
-            app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="multiplex.max_connections"
             app:title="@string/mux_max_connections"
-            app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="multiplex.min_streams"
             app:title="@string/mux_min_streams"
-            app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <SwitchPreference
             app:icon="@drawable/baseline_developer_board_24"
@@ -298,18 +300,17 @@
         <SwitchPreference
             app:icon="@drawable/ic_baseline_speed_24"
             app:key="multiplex.brutal.enabled"
+            app:summary="@string/mux_brutal_sum"
             app:title="@string/mux_brutal" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_upload_24"
             app:key="multiplex.brutal.up_mbps"
             app:title="@string/mux_brutal_up_mbps"
-            app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_download_24"
             app:key="multiplex.brutal.down_mbps"
             app:title="@string/mux_brutal_down_mbps"
-            app:defaultValue="0"
             app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 

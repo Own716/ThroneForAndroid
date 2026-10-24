@@ -7,6 +7,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.FragmentActivity
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.nekohasekai.sagernet.R
+import io.nekohasekai.sagernet.database.GroupRepo
 import io.nekohasekai.sagernet.databinding.LayoutRouteRemotePromptBinding
 import io.nekohasekai.sagernet.databinding.LayoutSubscribeChoiceBinding
 import io.nekohasekai.sagernet.group.SubscriptionClient
@@ -185,10 +186,15 @@ object SubscribeFlows {
         }
     }
 
+    /** SubscribeUrl, then SubscriptionNewGroup(gid): the new group is focused on creation, not when its download ends. */
     private fun subscribe(activity: FragmentActivity, url: String, name: String, autoUpdate: Boolean) {
         runOnDefaultDispatcher {
             try {
-                SubscriptionClient.subscribeUrl(url, name, autoUpdate)
+                val gid = SubscriptionClient.subscribeUrl(url, name, autoUpdate)
+                if (gid > 0) {
+                    GroupRepo.setCurrent(gid)
+                    onMainDispatcher { (activity as? MainActivity)?.showGroup(gid) }
+                }
             } catch (e: Exception) {
                 Logs.w(e)
                 onMainDispatcher { notify(activity, e.readableMessage) }

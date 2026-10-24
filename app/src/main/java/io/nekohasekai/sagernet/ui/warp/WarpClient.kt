@@ -6,6 +6,7 @@ import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.ktx.LOCALHOST
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
+import io.nekohasekai.sagernet.ktx.appRequestsNeedProxy
 import io.nekohasekai.sagernet.ktx.appRequestsViaProxy
 import io.nekohasekai.sagernet.outbound.json.JsonInput
 import io.nekohasekai.sagernet.outbound.link.LinkCodec
@@ -78,12 +79,15 @@ object WarpClient {
 
     /**
      * warpProxy (warp.cpp:10-25) with the Android app-request rule of ktx/Nets.kt httpGet: when app requests use the
-     * proxy they need a running profile (D22) and go through the mixed inbound, which speaks HTTP; without that
-     * inbound a VPN tunnels the request. "" is a direct request.
+     * proxy they go through the mixed inbound, which speaks HTTP; without that inbound a VPN tunnels the request.
+     * While no profile runs only net_use_proxy fails, the proxy service mode goes direct. "" is a direct request.
      */
     fun proxy(): String {
         if (!appRequestsViaProxy()) return ""
-        if (!DataStore.serviceState.connected) error(app.getString(R.string.warp_proxy_not_started))
+        if (!DataStore.serviceState.connected) {
+            if (appRequestsNeedProxy()) error(app.getString(R.string.warp_proxy_not_started))
+            return ""
+        }
         if (DataStore.mixedInboundDisabled) return ""
         var host = DataStore.inboundAddress.let { if (it == "::") LOCALHOST else it }
         if (host.contains(':')) host = "[$host]"

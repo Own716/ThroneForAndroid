@@ -17,6 +17,7 @@ interface ICoreService {
   void importUrl(String url, long gid);
   void importFile(String path, long gid);
   String groupAction(long gid, String action);
+  String resolveProfiles(in long[] ids);
   void registerSubscriptionCallback(ISubscriptionCallback cb);
   void unregisterSubscriptionCallback(ISubscriptionCallback cb);
 

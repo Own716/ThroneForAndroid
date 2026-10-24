@@ -133,6 +133,17 @@ class AboutFragment : ToolbarFragment(R.layout.layout_about) {
                                     )
                                 }
                                 .build())
+                        .addItem(
+                            MaterialAboutActionItem.Builder()
+                                .icon(R.drawable.ic_baseline_favorite_24)
+                                .text(R.string.support_throne)
+                                .setOnClickAction {
+                                    // dialog_about.cpp:72-75
+                                    requireContext().launchCustomTab(
+                                        "https://github.com/throneproj/Throne/blob/dev/.github/donate/Donate.md"
+                                    )
+                                }
+                                .build())
                         .build())
                 .build()
 

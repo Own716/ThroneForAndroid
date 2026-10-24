@@ -8,16 +8,46 @@
             app:key="mux_protocol"
             app:title="@string/mux_type"
             app:useSimpleSummaryProvider="true" />
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:entries="@array/mux_mode_entry"
+            app:entryValues="@array/mux_mode_value"
+            app:icon="@drawable/ic_baseline_tune_24"
+            app:key="mux_mode"
+            app:title="@string/mux_mode" />
         <EditTextPreference
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="mux_concurrency"
-            app:title="@string/preset_concurrency"
+            app:title="@string/mux_concurrency"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_low_priority_24"
+            app:key="mux_max_connections"
+            app:title="@string/mux_max_connections"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_low_priority_24"
+            app:key="mux_min_streams"
+            app:title="@string/mux_min_streams"
             app:useSimpleSummaryProvider="true" />
         <SwitchPreference
             app:icon="@drawable/baseline_developer_board_24"
             app:key="mux_padding"
-            app:summary="@string/preset_mux_padding_sum"
             app:title="@string/padding" />
+        <SwitchPreference
+            app:icon="@drawable/ic_baseline_speed_24"
+            app:key="mux_brutal"
+            app:summary="@string/mux_brutal_sum"
+            app:title="@string/mux_brutal" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_upload_24"
+            app:key="mux_brutal_up_mbps"
+            app:title="@string/mux_brutal_up_mbps"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:icon="@drawable/ic_baseline_download_24"
+            app:key="mux_brutal_down_mbps"
+            app:title="@string/mux_brutal_down_mbps"
+            app:useSimpleSummaryProvider="true" />
         <SwitchPreference
             app:icon="@drawable/ic_baseline_compare_arrows_24"
             app:key="mux_default_on"
@@ -27,10 +57,28 @@
 
     <PreferenceCategory app:title="@string/cag_mux_xray">
         <EditTextPreference
+            app:dialogMessage="@string/xray_mux_concurrency_hint"
             app:icon="@drawable/ic_baseline_low_priority_24"
             app:key="xray_mux_concurrency"
             app:title="@string/preset_concurrency"
             app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:dialogMessage="@string/xray_mux_max_connections_hint"
+            app:icon="@drawable/ic_baseline_low_priority_24"
+            app:key="xray_mux_max_connections"
+            app:title="@string/mux_max_connections" />
+        <EditTextPreference
+            app:dialogMessage="@string/xray_mux_xudp_concurrency_hint"
+            app:icon="@drawable/ic_baseline_low_priority_24"
+            app:key="xray_mux_xudp_concurrency"
+            app:title="@string/xray_mux_xudp_concurrency"
+            app:useSimpleSummaryProvider="true" />
+        <moe.matsuri.nb4a.ui.SimpleMenuPreference
+            app:entries="@array/xray_mux_udp443_entry"
+            app:entryValues="@array/xray_mux_udp443_value"
+            app:icon="@drawable/ic_baseline_block_24"
+            app:key="xray_mux_xudp_proxy_udp443"
+            app:title="@string/xray_mux_xudp_proxy_udp443" />
         <SwitchPreference
             app:icon="@drawable/ic_baseline_compare_arrows_24"
             app:key="xray_mux_default_on"

@@ -3,8 +3,11 @@ package moe.matsuri.nb4a.proxy
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.SettingsMapper
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.readableMessage
+import io.nekohasekai.sagernet.outbound.common.MUX_CUSTOM
+import io.nekohasekai.sagernet.outbound.common.MuxStateModel
 import java.lang.reflect.Field
 import java.lang.reflect.ParameterizedType
 
@@ -19,6 +22,19 @@ object Type {
      * Boolean companion named by [PreferenceBinding.unspecifiedField] that is true while the value is unspecified.
      */
     const val TriState = 4
+
+    /**
+     * A "keep default / on / off / custom" menu stored as "0".."3" in the cache, bound to a [MuxStateModel] member
+     * itself (the field path names the object). Its [PreferenceBinding.customRows] are filled from customSettings()
+     * whatever the state, so switching to Custom starts from them, and are read back only under Custom.
+     */
+    const val MuxState = 5
+}
+
+/** The rows a Custom [Type.MuxState] edits: one complete [S] in the profile cache. */
+interface CustomRows<S> {
+    fun write(settings: S)
+    fun read(): S
 }
 
 /**
@@ -37,6 +53,7 @@ class PreferenceBinding(
 
     var cacheName = fieldName
     var disable = false
+    var customRows: CustomRows<Any?>? = null
 
     fun readStringFromCache(): String {
         return DataStore.profileCacheStore.getString(cacheName) ?: ""
@@ -87,6 +104,9 @@ class PreferenceBinding(
         else -> null
     }
 
+    @Suppress("UNCHECKED_CAST")
+    private fun muxModel(target: Target): MuxStateModel<Any?>? = target.field.get(target.owner) as? MuxStateModel<Any?>
+
     private fun valueToText(value: Any?): String = when (value) {
         null -> ""
         is String -> value
@@ -112,6 +132,12 @@ class PreferenceBinding(
                 f.set(target.owner, state == 1)
                 unspecifiedField?.let { resolve(it) }?.let { it.field.set(it.owner, state == 0) }
             }
+
+            Type.MuxState -> muxModel(target)?.let { model ->
+                val state = readStringToIntFromCache()
+                model.saveMuxState(state)
+                if (state == MUX_CUSTOM) customRows?.let { model.setCustomSettings(it.read()) }
+            }
         }
     }
 
@@ -132,6 +158,11 @@ class PreferenceBinding(
                 val unspecified = unspecifiedField?.let { resolve(it) }?.let { it.field.get(it.owner) == true } ?: false
                 val state = if (enabled) 1 else if (unspecified) 0 else 2
                 DataStore.profileCacheStore.putString(cacheName, state.toString())
+            }
+
+            Type.MuxState -> muxModel(target)?.let { model ->
+                DataStore.profileCacheStore.putString(cacheName, model.getMuxState().toString())
+                customRows?.write(model.customSettings(SettingsMapper.buildContext()))
             }
         }
     }

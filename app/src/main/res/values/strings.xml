@@ -113,7 +113,11 @@
     <string name="mux_concurrency">Max streams</string>
     <string name="mux_max_connections">Max connections</string>
     <string name="mux_min_streams">Min streams</string>
+    <string name="mux_mode">Mode</string>
+    <string name="mux_mode_max_streams_sum">Max streams: reuse a connection until it carries that many streams, then open another</string>
+    <string name="mux_mode_max_connections_sum">Max connections: keep at most that many connections, and open a new one only while the least busy one already carries Min streams streams</string>
     <string name="mux_brutal">TCP Brutal</string>
+    <string name="mux_brutal_sum">TCP Brutal congestion control at the speeds below; the server must support it. Every stream then shares one connection, so the mode is ignored.</string>
     <string name="mux_brutal_up_mbps">Upload (Mbps)</string>
     <string name="mux_brutal_down_mbps">Download (Mbps)</string>
     <string name="proxied_apps">Apps VPN mode</string>
@@ -416,6 +420,37 @@
     <string name="xhttp_xmux_h_max_reusable_secs">XMUX max reusable seconds</string>
     <string name="xhttp_xmux_h_keep_alive_period">XMUX keep-alive period</string>
     <string name="xhttp_download_settings">Download settings (JSON)</string>
+    <string name="xdrive_settings">XDRIVE settings</string>
+    <string name="xdrive_tuning">XDRIVE tuning</string>
+    <string name="xdrive_service">Service</string>
+    <string name="xdrive_folder">Folder</string>
+    <string name="xdrive_folder_hint">google-drive: the folder ID. local: a directory path. template: read as {folder}.</string>
+    <string name="xdrive_client_id">Client ID</string>
+    <string name="xdrive_client_secret">Client secret</string>
+    <string name="xdrive_refresh_token">Refresh token</string>
+    <string name="xdrive_refresh_token_hint">The OAuth refresh token for the Google account that owns the folder.</string>
+    <string name="xdrive_secrets">Secrets</string>
+    <string name="xdrive_secrets_hint">Values the template reads as {secret0}, {secret1}, …, one per line.</string>
+    <string name="xdrive_template">Template (JSON)</string>
+    <string name="xdrive_front_address">Front address</string>
+    <string name="xdrive_front_address_hint">Optional domain front: the storage API is dialed at this address while TLS still names the API host.</string>
+    <string name="xdrive_front_port">Front port</string>
+    <string name="xdrive_segment_bytes">Segment bytes</string>
+    <string name="xdrive_segment_bytes_hint">Largest upload per file, in bytes. Xray caps it at 16 MiB.</string>
+    <string name="xdrive_flush_interval">Flush interval (ms)</string>
+    <string name="xdrive_flush_interval_hint">How long writes are gathered before an upload.</string>
+    <string name="xdrive_poll_interval">Poll interval (ms)</string>
+    <string name="xdrive_poll_interval_hint">Shortest wait between checks for new files.</string>
+    <string name="xdrive_max_poll_interval">Max poll interval (ms)</string>
+    <string name="xdrive_max_poll_interval_hint">Longest wait between checks while the stream is idle.</string>
+    <string name="xdrive_eager_window">Eager window (ms)</string>
+    <string name="xdrive_eager_window_hint">How long after traffic polling stays at the shortest wait.</string>
+    <string name="xdrive_hole_timeout">Hole timeout (ms)</string>
+    <string name="xdrive_hole_timeout_hint">How long a missing segment is waited for before the stream fails.</string>
+    <string name="xdrive_session_ttl">Session TTL (s)</string>
+    <string name="xdrive_session_ttl_hint">How long an idle session lives before its files are cleaned up.</string>
+    <string name="xdrive_concurrency">Concurrency</string>
+    <string name="xdrive_concurrency_hint">Parallel storage requests per stream. Xray caps it at 64.</string>
     <string name="xray_pinned_peer_cert_sha256">Pinned peer certificate SHA256</string>
     <string name="xray_verify_peer_cert_by_name">Verify peer certificate by name</string>
     <string name="xray_ech_config_list">ECH config list</string>
@@ -423,7 +458,18 @@
     <string name="reality_settings">Reality settings</string>
     <string name="reality_spider_x">SpiderX</string>
     <string name="xray_mux_concurrency">Concurrency</string>
+    <string name="xray_mux_concurrency_hint">Streams one connection carries before another opens. 0 uses Xray\'s 8, and -1 sends TCP outside the mux.</string>
+    <string name="xray_mux_max_connections_hint">Keep at most this many connections, for TCP and for XUDP each. Once every one carries Concurrency streams, new streams join the least busy one. Empty means no limit.</string>
+    <string name="xray_mux_no_limit">No limit</string>
     <string name="xray_mux_xudp_concurrency">XUDP concurrency</string>
+    <string name="xray_mux_xudp_concurrency_hint">UDP streams per connection, on connections of their own. 0 carries UDP on the TCP connections, and -1 sends it outside the mux.</string>
+    <string name="xray_mux_xudp_proxy_udp443">UDP/443</string>
+    <string name="xray_mux_udp443_reject">Reject</string>
+    <string name="xray_mux_udp443_allow">Allow</string>
+    <string name="xray_mux_udp443_skip">Skip</string>
+    <string name="xray_mux_udp443_reject_sum">Reject: UDP to port 443, mostly QUIC, is refused so browsers fall back to TCP (Xray\'s default)</string>
+    <string name="xray_mux_udp443_allow_sum">Allow: UDP to port 443 is carried through the mux</string>
+    <string name="xray_mux_udp443_skip_sum">Skip: UDP to port 443 is sent outside the mux</string>
     <string name="ss_plugin">SIP003 plugin</string>
     <string name="ss_plugin_opts">Plugin options</string>
     <string name="hysteria_server_ports">Port hopping ranges</string>
@@ -514,10 +560,11 @@
     <string name="edit_as_json">Edit as JSON</string>
     <string name="raw_json_invalid">The JSON is not a valid profile of this type</string>
     <string name="project_website">Project website</string>
+    <string name="support_throne">Support Throne</string>
     <string name="tri_state_default">Keep default</string>
     <string name="tri_state_on">On</string>
     <string name="tri_state_off">Off</string>
-    <string name="mux_protocol_default">Default</string>
+    <string name="mux_state_custom">Custom</string>
 
     <!-- settings screens (desktop-aligned) -->
     <string name="settings_general">General</string>
@@ -708,6 +755,8 @@
     <string name="xray_geo_test_warning_title">Xray configs left untested</string>
     <string name="skip_cert_sum">Skip TLS certificate verification by default (allowInsecure)</string>
     <string name="use_mozilla_certs">Use Mozilla certificate store</string>
+    <string name="xray_use_system_ca">Trust system certificates in Xray</string>
+    <string name="xray_use_system_ca_sum">Xray verifies servers only against its built-in root certificates. Turn this on to also trust Android\'s system root certificates; certificates you installed yourself are not included. A profile or Xray config that sets useSystemCA itself keeps its own value.</string>
     <string name="enable_ntp">NTP client</string>
     <string name="enable_ntp_sum">Sync the core\'s clock with an NTP server</string>
     <string name="ntp_server_address">Server</string>
@@ -814,6 +863,7 @@
     <string name="route_profile_name">Name</string>
     <string name="route_profile_default_outbound">Default outbound</string>
     <string name="route_profile_remote_source">Remote source</string>
+    <string name="route_profile_remote_rules_note">Every update replaces this profile\'s rules with the ones from the URL, so rules you add or change here are lost. To keep your own rules, use Clone in the routing profile list: the clone is a local copy that is never updated.</string>
     <string name="route_profile_url">URL</string>
     <string name="route_profile_url_hint">https://… (throne://route link, base64, or JSON)</string>
     <string name="route_profile_auto_update">Auto update</string>
@@ -1073,6 +1123,8 @@
     <!-- Group actions (mainwindow_profiles.cpp) -->
     <string name="subs_no_invalid">No invalid profiles found.</string>
     <string name="subs_resolved">Resolved %1$d of %2$d domain server addresses.</string>
+    <string name="resolve_domain_failed">Failed to resolve %1$s: %2$s</string>
+    <string name="resolve_domains_failed">Failed to resolve domains: %1$s</string>
     <string name="subs_unknown_action">Unknown group action: %1$s</string>
 
     <!-- profiles screen -->
@@ -1092,6 +1144,7 @@
     <string name="profiles_remove_invalid">Invalid</string>
     <string name="profiles_remove_insecure">Insecure configs</string>
     <string name="profiles_resolve_domains">Resolve domains</string>
+    <string name="profiles_resolve_domain">Resolve domain</string>
     <string name="profiles_sort">Sort</string>
     <string name="profiles_sort_ascending">Ascending</string>
     <string name="profiles_sort_descending">Descending</string>
@@ -1556,7 +1609,6 @@
     <string name="preset_keep_default">Keep default (%s)</string>
     <string name="preset_default">Default (preset: %s)</string>
     <string name="preset_zero_default">0 = preset (%s)</string>
-    <string name="preset_forced_on">Forced on by preset</string>
     <string name="preset_insecure_forced">Forced on by \"Always allow insecure\" in Settings › Core</string>
     <string name="preset_fragment_custom_only">Needs the custom fragment implementation (Settings › Presets)</string>
     <string name="preset_fallback_delay_unused">Not used by the custom fragment implementation (Settings › Presets)</string>
@@ -1564,7 +1616,6 @@
 
     <!-- Settings › Presets -->
     <string name="preset_mux_default_on_sum">Multiplex profiles whose Multiplex setting is left on \"Keep default\"</string>
-    <string name="preset_mux_padding_sum">Pads every multiplexed profile, whatever the profile sets</string>
     <string name="preset_xray_mux_default_on_sum">Multiplex Xray profiles whose Mux setting is left on \"Keep default\"</string>
     <string name="preset_fragment_implementation_sum">%s\nWhich ClientHello fragmentation profiles use: built-in (sing-box tls.fragment) or custom (dialer-level fragmentation)</string>
     <string name="preset_fragment_size_message">Custom implementation only: bytes per ClientHello fragment, as a range min-max (e.g. 10-100).</string>
@@ -2220,8 +2271,7 @@
     <string name="validation_transport_quic_tls">The QUIC transport needs TLS. Turn on Enable TLS.</string>
     <string name="validation_transport_quic_reality">Reality does not work with the QUIC transport. Clear the Reality key, or choose another transport.</string>
     <string name="validation_transport_quic_utls">uTLS is not used with the QUIC transport.</string>
-    <string name="validation_mux_brutal_speed">A missing, 0 or negative speed is sent as 1 Mbps. Enter your speed in Mbps, for example 100.</string>
-    <string name="validation_mux_brutal_needs_mux">TCP Brutal only works with multiplex on. Set Multiplex to On.</string>
+    <string name="validation_mux_brutal_needs_custom">TCP Brutal only works with a custom multiplex. Set Multiplex to Custom.</string>
     <string name="validation_mux_brutal_both_speeds">TCP Brutal needs both speeds; a missing one is sent as 1 Mbps.</string>
     <string name="validation_quic_receive_window">The receive window must be a whole number of bytes or a size such as 8m, so it was ignored.</string>
     <string name="validation_quic_initial_packet_size">Must be 0 (the default) or from 1200 to 1452.</string>
@@ -2235,7 +2285,7 @@
     <string name="validation_xray_extra_invalid">The extra value is not a valid JSON object, so it was ignored.</string>
     <string name="validation_xray_finalmask_json">The finalmask value is not valid JSON (%1$s), so it was ignored.</string>
     <string name="validation_xray_finalmask_object">The finalmask value must be a JSON object, so it was ignored.</string>
-    <string name="validation_xray_network">Throne does not support the Xray transport \"%1$s\". Use raw, xhttp, ws, httpupgrade or grpc.</string>
+    <string name="validation_xray_network">Throne does not support the Xray transport \"%1$s\". Use raw, xhttp, ws, httpupgrade, grpc or xdrive.</string>
     <string name="validation_xray_security">Xray does not support the security \"%1$s\". Use none, tls or reality.</string>
     <string name="validation_xray_reality_network">REALITY works only with the raw, xhttp or grpc transport.</string>
     <string name="validation_xray_reality_hellogolang">REALITY cannot use the hellogolang fingerprint; choose another one.</string>
@@ -2260,6 +2310,16 @@
     <string name="validation_xray_vless_encryption_rtt">The part after the mode must be 1rtt or 0rtt.</string>
     <string name="validation_xray_vless_encryption_key">Each key in the string must be URL-safe base64 of 32 or 1184 bytes, without padding.</string>
     <string name="validation_xray_vless_vision">XTLS Vision needs the raw network with TLS or REALITY, or VLESS encryption: change the network or security, or clear the flow.</string>
+    <string name="validation_xray_xdrive_no_link">XDRIVE has no share-link format. Import the server\'s JSON configuration instead.</string>
+    <string name="validation_xray_xdrive_service">Must be google-drive, template or local.</string>
+    <string name="validation_xray_xdrive_folder_local">Enter the directory both ends share.</string>
+    <string name="validation_xray_xdrive_folder_drive">Enter the ID of the Google Drive folder both ends share.</string>
+    <string name="validation_xray_xdrive_secrets">Google Drive needs the client ID, client secret and refresh token.</string>
+    <string name="validation_xray_xdrive_template">The template service needs a template describing the storage API.</string>
+    <string name="validation_xray_xdrive_front_port_alone">The front port is used only together with a front address.</string>
+    <string name="validation_xray_xdrive_encryption">XDRIVE needs VLESS encryption: enter the mlkem768x25519plus string the server gives.</string>
+    <string name="validation_xray_xdrive_flow">XDRIVE does not support a flow; clear it.</string>
+    <string name="validation_xray_xdrive_mux">XDRIVE needs the multiplexer: set it to On or Keep default.</string>
     <string name="validation_hysteria_hop_minimum">Port hopping needs at least 5s between hops, for example 30s.</string>
     <string name="validation_hysteria_hop_maximum_zero">Needs a Hop Interval above 0 as well, for example 30s with a maximum of 60s.</string>
     <string name="validation_hysteria_hop_maximum_shorter">Must not be shorter than Hop Interval.</string>

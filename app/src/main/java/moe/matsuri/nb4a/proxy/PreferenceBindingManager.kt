@@ -23,6 +23,14 @@ class PreferenceBindingManager {
     fun tri(path: String, unspecifiedPath: String, cacheName: String = path) =
         add(PreferenceBinding(Type.TriState, path, unspecifiedField = unspecifiedPath).apply { this.cacheName = cacheName })
 
+    /** A [Type.MuxState] menu keyed [cacheName] over the model object at [path]. */
+    @Suppress("UNCHECKED_CAST")
+    fun <S> muxState(path: String, rows: CustomRows<S>, cacheName: String = "$path.enabled") =
+        add(PreferenceBinding(Type.MuxState, path).apply {
+            this.cacheName = cacheName
+            customRows = rows as CustomRows<Any?>
+        })
+
     fun fromCacheAll(bean: Any) {
         items.forEach {
             it.bean = bean

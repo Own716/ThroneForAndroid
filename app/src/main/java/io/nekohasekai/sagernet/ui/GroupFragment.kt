@@ -135,7 +135,8 @@ class GroupFragment : ToolbarFragment(R.layout.layout_group), Toolbar.OnMenuItem
     private fun copyLinks(group: ProxyGroup, deepLinks: Boolean) {
         runOnDefaultDispatcher {
             val links = ProfileManager.members(group.id)
-                .map { if (deepLinks) it.exportJsonLink() else it.exportLink() }
+                // dialog_edit_group.cpp: a profile without a share link (XDRIVE) goes out as its JSON link
+                .map { if (deepLinks) it.exportJsonLink() else it.exportLink().ifEmpty { it.exportJsonLink() } }
                 .filter { it.isNotEmpty() }
                 .joinToString("\n")
             withContext(Dispatchers.Main) {

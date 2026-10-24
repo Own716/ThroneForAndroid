@@ -42,19 +42,21 @@ class ConfigGenerator @JvmOverloads constructor(
      * entry of the main chain when > 0 (the group's landing / front proxy, generate.cpp:1815-1832). An auto-selector
      * ignores both: each member is built with the landing / front proxy of the tracked group it came from, the one its
      * plan checked it against. The bridge ports go to [ports], which the box running the config closes; without one
-     * they are leased for the build only.
+     * they are leased for the build only. [groupName] names the group when its landing / front proxy is gone.
      */
     @JvmOverloads
-    fun build(profileId: Long, landingProxyId: Long = -1, frontProxyId: Long = -1, ports: PortLease? = null): GeneratedConfig {
+    fun build(
+        profileId: Long, landingProxyId: Long = -1, frontProxyId: Long = -1, ports: PortLease? = null, groupName: String = "",
+    ): GeneratedConfig {
         val lease = ports ?: PortLease()
         try {
-            return buildLeased(profileId, landingProxyId, frontProxyId, lease)
+            return buildLeased(profileId, landingProxyId, frontProxyId, lease, groupName)
         } finally {
             if (ports == null) lease.close()
         }
     }
 
-    private fun buildLeased(profileId: Long, landingProxyId: Long, frontProxyId: Long, ports: PortLease): GeneratedConfig {
+    private fun buildLeased(profileId: Long, landingProxyId: Long, frontProxyId: Long, ports: PortLease, groupName: String): GeneratedConfig {
         val reads = RecordingProfiles(profiles)
         val profile = reads.get(profileId) ?: return GeneratedConfig.failure("Profile $profileId does not exist")
         if (profile.invalid) return GeneratedConfig.failure("Profile $profileId has a type this build cannot use: ${profile.type}")
@@ -95,7 +97,8 @@ class ConfigGenerator @JvmOverloads constructor(
         buildNtpSection(state)
         buildCertificateSection(state)
         buildInboundSection(state)
-        buildOutboundsSection(state, chains, reads, profile, profileId, landing, front, plan)
+        val origin = HopOrigin(profile, listOf(ChainGroup(groupName, landing, front)))
+        buildOutboundsSection(state, chains, reads, profile, profileId, landing, front, plan, origin)
         if (state.failed) return GeneratedConfig.failure(state.error)
         buildDnsSection(state, useDnsObj = true)
         buildRouteSection(state, route)
@@ -401,7 +404,8 @@ class ConfigGenerator @JvmOverloads constructor(
             if (candidate.landingProxyId > 0) hopIds.add(candidate.landingProxyId)
             hopIds.addAll(chains.unwrapChain(id))
             if (candidate.frontProxyId > 0) hopIds.add(candidate.frontProxyId)
-            val invalid = chains.candidateError(hopIds)
+            val origin = HopOrigin(outbound, listOf(ChainGroup(candidate.groupName, candidate.landingProxyId, candidate.frontProxyId)))
+            val invalid = chains.candidateError(hopIds, origin)
             if (invalid.isNotEmpty()) {
                 skipped[id] = invalid
                 continue
@@ -417,7 +421,7 @@ class ConfigGenerator @JvmOverloads constructor(
             val tag = chains.buildOutboundChain(
                 ChainRequest(
                     hopIds, "${Tags.TEST_CHAIN_PREFIX}-$id",
-                    singToXrayPort = singToXrayPort, xrayToSingPort = xrayToSingPort,
+                    singToXrayPort = singToXrayPort, xrayToSingPort = xrayToSingPort, origin = origin,
                 ),
             )
             // skipFailedBuild (generate.cpp): a profile whose chain fails halfway is reported failed; the rest still test.
@@ -602,11 +606,11 @@ class ConfigGenerator @JvmOverloads constructor(
 
     /**
      * buildOutboundsSection (:1795-1911): the main chain (WARP in front of it with enable_warp) or the auto-selector
-     * group, one chain per route outbound, then bridges and `direct`.
+     * group, one chain per route outbound, then bridges and `direct`. [origin] names a deleted hop of the main and route chains.
      */
     private fun buildOutboundsSection(
         state: BuildState, chains: ChainBuilder, reads: ProfileProvider, profile: Outbound, profileId: Long,
-        landingProxyId: Long, frontProxyId: Long, plan: AutoSelectorPlan?,
+        landingProxyId: Long, frontProxyId: Long, plan: AutoSelectorPlan?, origin: HopOrigin,
     ) {
         val warpWrap = settings.enableWarp
         if (profile is AutoSelector && plan != null) {
@@ -627,13 +631,17 @@ class ConfigGenerator @JvmOverloads constructor(
                 return
             }
             if (warpWrap) hopIds.add(0, WarpHop.PROFILE_ID)
-            chains.buildOutboundChain(ChainRequest(hopIds, Tags.MAIN_CHAIN_PREFIX, includeProxy = true, warpWrap = warpWrap))
+            chains.buildOutboundChain(
+                ChainRequest(hopIds, Tags.MAIN_CHAIN_PREFIX, includeProxy = true, warpWrap = warpWrap, origin = origin),
+            )
             if (state.failed) return
         }
 
         var routeSuffix = 0
         for (group in state.prerequisites.routeOutboundGroups) {
-            chains.buildOutboundChain(ChainRequest(group, Tags.ROUTE_CHAIN_PREFIX, link = group.size > 1, startSuffix = routeSuffix))
+            chains.buildOutboundChain(
+                ChainRequest(group, Tags.ROUTE_CHAIN_PREFIX, link = group.size > 1, startSuffix = routeSuffix, origin = origin),
+            )
             if (state.failed) return
             routeSuffix += group.size
         }
@@ -672,7 +680,7 @@ class ConfigGenerator @JvmOverloads constructor(
         }
         val groupTag = if (warpWrap) Tags.WARP_BYPASS else Tags.PROXY
 
-        class PlannedMember(val member: SelectorMember, val hopIds: List<Long>, val bridges: MemberBridges)
+        class PlannedMember(val member: SelectorMember, val hopIds: List<Long>, val bridges: MemberBridges, val origin: HopOrigin)
 
         // One member the core rejects fails the whole group's start, so drop it instead.
         val rejected = rejectedMembers(chains, reads, plan.build)
@@ -689,7 +697,8 @@ class ConfigGenerator @JvmOverloads constructor(
             if (memberGroup.frontProxyId > 0) hopIds.add(memberGroup.frontProxyId)
             val bridges = chains.bridgesFor(hopIds)
             bridgeCount += bridges.count
-            plannedMembers.add(PlannedMember(member, hopIds, bridges))
+            val origin = HopOrigin(selector, listOf(ChainGroup(memberGroup.name, memberGroup.landingProxyId, memberGroup.frontProxyId)))
+            plannedMembers.add(PlannedMember(member, hopIds, bridges, origin))
         }
         // One batch for every member: reserving per member can deal the same port twice.
         val bridgePorts = state.ports.reserve(bridgeCount)
@@ -710,6 +719,7 @@ class ConfigGenerator @JvmOverloads constructor(
                     xrayToSingPort = if (bridges.xrayToSing) bridgePorts[portIdx++] else -1,
                     xrayFullConfigPort = if (bridges.xrayFullConfig) bridgePorts[portIdx++] else -1,
                     soleXrayInbound = bridges.xrayFullConfig,
+                    origin = planned.origin,
                 ),
             )
             if (state.failed) return

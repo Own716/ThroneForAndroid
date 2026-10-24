@@ -266,14 +266,21 @@ object SubscriptionQueue {
         if (action != ACTION_REMOVE_INVALID && action != ACTION_RESOLVE_DOMAINS) {
             return app.getString(R.string.subs_unknown_action, action)
         }
+        return runQueued {
+            if (action == ACTION_REMOVE_INVALID) SubscriptionFilters.removeInvalid(gid)
+            else SubscriptionFilters.resolveDomains(gid)
+        }
+    }
+
+    /** "Resolve Domain" for chosen profiles (on_menu_resolve_selected_triggered), queued like [groupAction]. */
+    fun resolveProfiles(ids: List<Long>): String = runQueued { SubscriptionFilters.resolveProfiles(ids) }
+
+    private fun runQueued(action: suspend () -> String): String {
         val result = CompletableDeferred<String>()
         synchronized(lock) {
             enqueueLocked(Job(-1L, batch = false, foreground = true) {
                 try {
-                    result.complete(
-                        if (action == ACTION_REMOVE_INVALID) SubscriptionFilters.removeInvalid(gid)
-                        else SubscriptionFilters.resolveDomains(gid)
-                    )
+                    result.complete(action())
                 } catch (e: Throwable) {
                     result.complete(e.readableMessage)
                     throw e

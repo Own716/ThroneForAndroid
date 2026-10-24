@@ -29,9 +29,13 @@ import io.nekohasekai.sagernet.validation.addIssue
 import io.nekohasekai.sagernet.validation.jsonStringList
 import io.nekohasekai.sagernet.validation.readQueryInt
 import io.nekohasekai.sagernet.validation.vtr
+import kotlin.reflect.KMutableProperty1
 
 /** XrayNetworks (xrayStreamSetting.h). */
-val xrayNetworks = listOf("raw", "xhttp", "ws", "httpupgrade", "grpc")
+val xrayNetworks = listOf("raw", "xhttp", "ws", "httpupgrade", "grpc", "xdrive")
+
+/** XrayXDriveServices (xrayStreamSetting.h): Xray still takes "Google Drive" for google-drive; XrayXDrive.parseFromJson folds it. */
+val xrayXDriveServices = listOf("google-drive", "template", "local")
 val xrayXhttpModes = listOf("auto", "packet-up", "stream-up", "stream-one")
 val xrayXhttpMetaPlacements = listOf("", "path", "cookie", "header", "query")
 val xrayXhttpUplinkDataPlacements = listOf("", "auto", "body", "cookie", "header")
@@ -268,6 +272,22 @@ fun stripXrayDialerState(stream: JsonObject): Boolean {
         if (xrayStripDialerKeys(sockopt)) changed = true
     }
     return changed
+}
+
+// Xray reads tlsSettings only while security is tls.
+private fun xrayUseSystemCAIn(streams: List<XrayNode>) {
+    if (xrayLower(xrayLast(streams, "security", false).first as? String ?: "") != "tls") return
+    xrayEditLive(streams, "tlsSettings", true) { tls ->
+        if (xrayLast(tls, "useSystemCA", false).first == null) tls.last().obj["useSystemCA"] = true
+    }
+}
+
+/** UseXraySystemCA: turns on useSystemCA in every TLS block of an Xray outbound, the XHTTP download leg included, unless the block sets it itself. */
+fun useXraySystemCA(outbound: JsonObject) {
+    xrayEditLive(xrayRoot(outbound), "streamSettings", false) { streams ->
+        xrayUseSystemCAIn(streams)
+        xrayEditDownloadLeg(streams, ::xrayUseSystemCAIn)
+    }
 }
 
 // Xray infra/conf ParseRangeString plus ensureOrder: (from, to), or null where Xray refuses the text.
@@ -517,7 +537,51 @@ object XrayChecks {
             xrayEditDownloadLeg(streams) { leg -> xrayDownloadEndpoint(issues, leg) }
         }
     }
+
+    @JvmStatic
+    fun xrayXDriveService(service: String): String {
+        if (service.trim() in xrayXDriveServices) return ""
+        return vtr(R.string.validation_xray_xdrive_service)
+    }
+
+    @JvmStatic
+    fun xrayXDriveFolder(service: String, folder: String): String {
+        val s = service.trim()
+        if (folder.trim().isNotEmpty() || (s != "google-drive" && s != "local")) return ""
+        if (s == "local") return vtr(R.string.validation_xray_xdrive_folder_local)
+        return vtr(R.string.validation_xray_xdrive_folder_drive)
+    }
+
+    /** google-drive takes exactly ClientID, ClientSecret and RefreshToken, none empty (Xray drive.go). */
+    @JvmStatic
+    fun xrayXDriveSecrets(service: String, secrets: List<String>): String {
+        if (service.trim() != "google-drive") return ""
+        if (secrets.size == 3 && secrets.none { it.trim().isEmpty() }) return ""
+        return vtr(R.string.validation_xray_xdrive_secrets)
+    }
+
+    @JvmStatic
+    fun xrayXDriveTemplate(service: String, templateSpec: JsonObject): String {
+        if (service.trim() != "template" || templateSpec.isNotEmpty()) return ""
+        return vtr(R.string.validation_xray_xdrive_template)
+    }
+
+    /** A tuning value: Xray reads a uint32, and 0 keeps its default. */
+    @JvmStatic
+    fun xrayXDriveTuning(text: String): String = Validation.int(text, 0, XRAY_UINT32_MAX)
+
+    @JvmStatic
+    fun xrayXDriveFrontPort(port: String): String = Validation.port(port, Empty.Allowed)
+
+    /** A warning: the front port is dialed only together with a front address. */
+    @JvmStatic
+    fun xrayXDriveFrontPortAlone(address: String, port: String): String {
+        if (address.trim().isNotEmpty() || (Validation.toInt(port.trim()) ?: 0L) == 0L) return ""
+        return vtr(R.string.validation_xray_xdrive_front_port_alone)
+    }
 }
+
+private const val XRAY_UINT32_MAX = 4294967295L
 
 /** xrayTLS (xrayStreamSetting.h, xrayStreamSetting.cpp). No insecure flag is modelled. */
 class XrayTls {
@@ -530,6 +594,8 @@ class XrayTls {
     @JvmField var cipherSuites: String = ""
     /** Base64 ECHConfigList, or "<query domain>+<DoH url>" for Xray to fetch it itself. */
     @JvmField var echConfigList: String = ""
+    /** Only stored; the global xray_use_system_ca also turns it on at build time ([useXraySystemCA]). */
+    @JvmField var useSystemCA: Boolean = false
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
@@ -567,6 +633,7 @@ class XrayTls {
         }
         if (obj.contains("cipherSuites")) cipherSuites = obj.string("cipherSuites")
         if (obj.contains("echConfigList")) echConfigList = obj.string("echConfigList")
+        if (obj.contains("useSystemCA")) useSystemCA = obj.bool("useSystemCA")
         return true
     }
 
@@ -613,6 +680,7 @@ class XrayTls {
         if (fingerprint.isNotEmpty()) obj["fingerprint"] = fingerprint
         if (cipherSuites.isNotEmpty()) obj["cipherSuites"] = cipherSuites
         if (echConfigList.isNotEmpty()) obj["echConfigList"] = echConfigList
+        if (useSystemCA) obj["useSystemCA"] = true
         return obj
     }
 
@@ -714,7 +782,7 @@ class XrayReality {
     fun build(ctx: BuildContext): JsonObject {
         val obj = exportToJson()
         if (fingerprint.isEmpty() && ctx.utlsFingerprint.isNotEmpty()) obj["fingerprint"] = ctx.utlsFingerprint
-        if (obj.string("fingerprint") == TLS_UNSAFE_FINGERPRINT) obj.remove("fingerprint")
+        if (obj.string("fingerprint").lowercase() == TLS_UNSAFE_FINGERPRINT) obj.remove("fingerprint")
         return obj
     }
 }
@@ -1212,6 +1280,80 @@ class XrayGrpc {
 }
 
 /**
+ * xrayXDrive (xrayStreamSetting.h, xrayStreamSetting.cpp). XDRIVE has no share-link format: a link would carry the
+ * storage secrets, so profiles travel as JSON.
+ */
+class XrayXDrive {
+    @JvmField var service: String = "google-drive"
+    @JvmField var remoteFolder: String = ""
+    /** google-drive: ClientID, ClientSecret, RefreshToken; template: read as {secret0}, {secret1}, ... */
+    @JvmField var secrets: MutableList<String> = ArrayList()
+    @JvmField var templateSpec: JsonObject = JsonObject()
+    /** The stream's own address and port: a front the storage API is dialed through. */
+    @JvmField var frontAddress: String = ""
+    @JvmField var frontPort: Int = 0
+    // 0 keeps Xray's default.
+    @JvmField var segmentBytes: Long = 0
+    @JvmField var flushIntervalMs: Long = 0
+    @JvmField var pollIntervalMs: Long = 0
+    @JvmField var maxPollIntervalMs: Long = 0
+    @JvmField var sessionTtlSeconds: Long = 0
+    @JvmField var concurrency: Long = 0
+    @JvmField var eagerWindowMs: Long = 0
+    @JvmField var holeTimeoutMs: Long = 0
+    /** Kept as written; the editor has no fields for it. */
+    @JvmField var xmux: JsonObject = JsonObject()
+
+    companion object {
+        /** xdriveTuning (xrayStreamSetting.cpp): the Xray key of each tuning field. */
+        @JvmField
+        val TUNING: List<Pair<String, KMutableProperty1<XrayXDrive, Long>>> = listOf(
+            "segmentBytes" to XrayXDrive::segmentBytes,
+            "flushIntervalMs" to XrayXDrive::flushIntervalMs,
+            "pollIntervalMs" to XrayXDrive::pollIntervalMs,
+            "maxPollIntervalMs" to XrayXDrive::maxPollIntervalMs,
+            "sessionTtlSeconds" to XrayXDrive::sessionTtlSeconds,
+            "concurrency" to XrayXDrive::concurrency,
+            "eagerWindowMs" to XrayXDrive::eagerWindowMs,
+            "holeTimeoutMs" to XrayXDrive::holeTimeoutMs,
+        )
+    }
+
+    /** xrayXDrive::ParseFromJson. */
+    fun parseFromJson(obj: JsonObject): Boolean {
+        if (obj.isEmpty()) return false
+        if (obj.contains("service")) {
+            service = obj.string("service")
+            if (service == "Google Drive") service = "google-drive"
+        }
+        if (obj.contains("remoteFolder")) remoteFolder = obj.string("remoteFolder")
+        if (obj.contains("secrets")) secrets = jsonStringList(obj["secrets"], "xdriveSettings.secrets")
+        if (obj.isObject("template")) templateSpec = obj.obj("template").copy()
+        for ((key, property) in TUNING) if (obj.contains(key)) property.set(this, obj.integer(key))
+        if (obj.isObject("xmux")) xmux = obj.obj("xmux").copy()
+        return true
+    }
+
+    /** xrayXDrive::ExportToJson. */
+    fun exportToJson(): JsonObject {
+        val obj = JsonObject()
+        obj["service"] = service
+        if (remoteFolder.isNotEmpty()) obj["remoteFolder"] = remoteFolder
+        if (secrets.isNotEmpty()) obj["secrets"] = JsonValues.stringArray(secrets)
+        if (templateSpec.isNotEmpty()) obj["template"] = templateSpec.copy()
+        for ((key, property) in TUNING) {
+            val value = property.get(this)
+            if (value != 0L) obj[key] = value
+        }
+        if (xmux.isNotEmpty()) obj["xmux"] = xmux.copy()
+        return obj
+    }
+
+    /** xrayXDrive::Build. */
+    fun build(ctx: BuildContext): JsonObject = exportToJson()
+}
+
+/**
  * xrayStreamSetting (xrayStreamSetting.h, xrayStreamSetting.cpp). Field `TLS` is named `tls` here. The desktop's
  * `sockopt` is not modelled: binding and DNS are wired by the core.
  */
@@ -1226,6 +1368,7 @@ class XrayStreamSetting {
     @JvmField var ws: XrayWs = XrayWs()
     @JvmField var httpupgrade: XrayHttpUpgrade = XrayHttpUpgrade()
     @JvmField var grpc: XrayGrpc = XrayGrpc()
+    @JvmField var xdrive: XrayXDrive = XrayXDrive()
 
     fun parseFromLink(link: String): Boolean = parseFromLink(LinkParser.parse(link))
 
@@ -1252,6 +1395,10 @@ class XrayStreamSetting {
         if (network !in xrayNetworks) {
             // A share link has no lossless fallback, unlike an Xray JSON outbound, which is then kept verbatim.
             ParseDiag.error("type", XrayChecks.xrayNetwork(network), network)
+            return false
+        }
+        if (network == "xdrive") {
+            ParseDiag.error("type", vtr(R.string.validation_xray_xdrive_no_link), network)
             return false
         }
         if (network == "raw" && q.value("headerType") == "http") {
@@ -1302,6 +1449,11 @@ class XrayStreamSetting {
         if (network == "ws" && obj.isObject("wsSettings")) ws.parseFromJson(obj.obj("wsSettings"))
         if (network == "httpupgrade" && obj.isObject("httpupgradeSettings")) httpupgrade.parseFromJson(obj.obj("httpupgradeSettings"))
         if (network == "grpc" && obj.isObject("grpcSettings")) grpc.parseFromJson(obj.obj("grpcSettings"))
+        if (network == "xdrive") {
+            if (obj.isObject("xdriveSettings")) xdrive.parseFromJson(obj.obj("xdriveSettings"))
+            if (obj.contains("address")) xdrive.frontAddress = obj.string("address")
+            if (obj.contains("port")) xdrive.frontPort = obj.int("port")
+        }
         return true
     }
 
@@ -1375,6 +1527,11 @@ class XrayStreamSetting {
             "ws" -> obj["wsSettings"] = ws.exportToJson()
             "httpupgrade" -> obj["httpupgradeSettings"] = httpupgrade.exportToJson()
             "grpc" -> obj["grpcSettings"] = grpc.exportToJson()
+            "xdrive" -> {
+                obj["xdriveSettings"] = xdrive.exportToJson()
+                if (xdrive.frontAddress.isNotEmpty()) obj["address"] = Hosts.toAceHost(xdrive.frontAddress)
+                if (xdrive.frontPort > 0) obj["port"] = xdrive.frontPort
+            }
         }
         return obj
     }
@@ -1392,11 +1549,21 @@ class XrayStreamSetting {
             if (tls.fingerprint.isNotEmpty()) obj["fingerprint"] = tls.fingerprint
             if (tls.echConfigList.isNotEmpty()) obj["ech"] = if (tls.echConfigList.contains("://")) tls.echConfigList else "static"
         }
+        // The VLESS address is nominal on XDRIVE; the storage is what tells two profiles apart.
+        if (network == "xdrive") {
+            obj["service"] = xdrive.service
+            if (xdrive.remoteFolder.isNotEmpty()) obj["folder"] = xdrive.remoteFolder
+        }
         return obj
     }
 
     /** xrayStreamSetting::Build: binding and DNS are wired by the core, not the config. */
-    fun build(ctx: BuildContext): JsonObject = exportToJson()
+    fun build(ctx: BuildContext): JsonObject {
+        val obj = exportToJson()
+        if (security == "tls") obj["tlsSettings"] = tls.build(ctx)
+        else if (security == "reality") obj["realitySettings"] = reality.build(ctx)
+        return obj
+    }
 
     /** xrayStreamSetting::Validate; [ctx] gives the global uTLS fingerprint an empty TLS fingerprint falls back to. */
     fun validate(issues: MutableList<Issue>, serverAddress: String, ctx: BuildContext) {
@@ -1434,6 +1601,22 @@ class XrayStreamSetting {
         val net = normalizeXrayNetwork(network)
         if (net == "httpupgrade") {
             issues.addIssue(Severity.Error, root + "httpupgradeSettings.headers", XrayChecks.xrayHeadersHost(httpupgrade.headers))
+        }
+        if (net == "xdrive") {
+            val d = xdrive
+            val key = root + "xdriveSettings."
+            val frontPort = if (d.frontPort == 0) "" else d.frontPort.toString()
+            issues.addIssue(Severity.Error, key + "service", XrayChecks.xrayXDriveService(d.service), d.service)
+            issues.addIssue(Severity.Error, key + "remoteFolder", XrayChecks.xrayXDriveFolder(d.service, d.remoteFolder))
+            issues.addIssue(Severity.Error, key + "secrets", XrayChecks.xrayXDriveSecrets(d.service, d.secrets))
+            issues.addIssue(Severity.Error, key + "template", XrayChecks.xrayXDriveTemplate(d.service, d.templateSpec))
+            for ((name, property) in XrayXDrive.TUNING) {
+                val value = property.get(d).toString()
+                issues.addIssue(Severity.Error, key + name, XrayChecks.xrayXDriveTuning(value), value)
+            }
+            issues.addIssue(Severity.Error, root + "port", XrayChecks.xrayXDriveFrontPort(frontPort), frontPort)
+            issues.addIssue(Severity.Warning, root + "port", XrayChecks.xrayXDriveFrontPortAlone(d.frontAddress, frontPort), frontPort)
+            return
         }
         if (net != "xhttp") return
         val x = xhttp

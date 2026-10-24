@@ -218,10 +218,19 @@ object DataStore : OnPreferenceDataStoreChangeListener {
 
     // presets
     var muxProtocol by SettingsRegistry.MUX_PROTOCOL
+    var muxMode by SettingsRegistry.MUX_MODE
     var muxConcurrency by SettingsRegistry.MUX_CONCURRENCY
+    var muxMaxConnections by SettingsRegistry.MUX_MAX_CONNECTIONS
+    var muxMinStreams by SettingsRegistry.MUX_MIN_STREAMS
     var muxPadding by SettingsRegistry.MUX_PADDING
+    var muxBrutal by SettingsRegistry.MUX_BRUTAL
+    var muxBrutalUpMbps by SettingsRegistry.MUX_BRUTAL_UP_MBPS
+    var muxBrutalDownMbps by SettingsRegistry.MUX_BRUTAL_DOWN_MBPS
     var muxDefaultOn by SettingsRegistry.MUX_DEFAULT_ON
     var xrayMuxConcurrency by SettingsRegistry.XRAY_MUX_CONCURRENCY
+    var xrayMuxMaxConnections by SettingsRegistry.XRAY_MUX_MAX_CONNECTIONS
+    var xrayMuxXudpConcurrency by SettingsRegistry.XRAY_MUX_XUDP_CONCURRENCY
+    var xrayMuxXudpProxyUdp443 by SettingsRegistry.XRAY_MUX_XUDP_PROXY_UDP443
     var xrayMuxDefaultOn by SettingsRegistry.XRAY_MUX_DEFAULT_ON
     var fragmentDefaultOn by SettingsRegistry.FRAGMENT_DEFAULT_ON
     var fragmentImplementation by SettingsRegistry.FRAGMENT_IMPLEMENTATION
@@ -305,6 +314,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var xrayGeositeUrl by SettingsRegistry.XRAY_GEOSITE_URL
     var skipCert by SettingsRegistry.SKIP_CERT
     var useMozillaCerts by SettingsRegistry.USE_MOZILLA_CERTS
+    var xrayUseSystemCa by SettingsRegistry.XRAY_USE_SYSTEM_CA
     var enableNtp by SettingsRegistry.ENABLE_NTP
     var ntpServerAddress by SettingsRegistry.NTP_SERVER_ADDRESS
     var ntpServerPort by SettingsRegistry.NTP_SERVER_PORT

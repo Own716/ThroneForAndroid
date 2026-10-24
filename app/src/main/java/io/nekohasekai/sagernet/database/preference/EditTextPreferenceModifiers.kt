@@ -33,4 +33,14 @@ object EditTextPreferenceModifiers {
             editText.setSelection(editText.text.length)
         }
     }
+
+    /** [Number] that also takes a leading minus sign. */
+    object SignedNumber : EditTextPreference.OnBindEditTextListener {
+
+        override fun onBindEditText(editText: EditText) {
+            editText.inputType = EditorInfo.TYPE_CLASS_NUMBER or EditorInfo.TYPE_NUMBER_FLAG_SIGNED
+            editText.setSingleLine()
+            editText.setSelection(editText.text.length)
+        }
+    }
 }

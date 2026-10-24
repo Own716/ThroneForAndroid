@@ -7,7 +7,10 @@ import io.nekohasekai.sagernet.ktx.snackbar
 import io.nekohasekai.sagernet.ui.ConfigurationFragment
 import io.nekohasekai.sagernet.ui.test.TestSessionClient
 
-/** The test entry points of the profiles screen (desktop TestRunner scopes: group, selection, one profile, current). */
+/**
+ * The test entry points of the profiles screen (desktop TestRunner scopes: group, selection, one profile); the
+ * running connection's speed test is on the stats bar's long-press menu (MainActivity).
+ */
 internal object ProfileTests {
 
     /** Url Test / Speedtest / Resolve out IP for the group, in list order. */
@@ -19,11 +22,6 @@ internal object ProfileTests {
     fun startProfiles(host: ConfigurationFragment, kind: Int, ids: List<Long>, groupId: Long) {
         if (ids.isEmpty()) return
         confirmSpeed(host, kind, many = ids.size > 1) { TestSessionClient.startProfiles(kind, ids, groupId) }
-    }
-
-    /** "Speedtest Current": the running instance, whatever profile it carries. */
-    fun startCurrent(host: ConfigurationFragment) {
-        report(host, TestSessionClient.startCurrent(TestSpec.KIND_SPEED))
     }
 
     /** Speed tests of more than one profile ask first: they move a lot of data. */
