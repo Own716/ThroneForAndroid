@@ -1,75 +1,77 @@
-# Throne for Android (Formerly NekoBox for Android)
+# Throne for Android
 
-[![API](https://img.shields.io/badge/API-24%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=24)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-orange.svg)](https://www.gnu.org/licenses/gpl-3.0)
+Android GUI proxy utility, empowered by [Sing-box](https://github.com/SagerNet/sing-box), sharing its core and data model with [Throne](https://github.com/throneproj/Throne) on desktop.
 
-## 使用前须知
+Supports Android 7.0 (API 24) and newer, including Android TV.
 
-> 免责声明：本项目仅用于技术研究与代码学习之目的，不提供任何形式的网络代理服务。请勿将本项目用于违反当地法律法规的任何活动。请勿在生产环境中使用本项目，使用者应自行承担使用本项目可能带来的全部风险。若您下载或引用本项目，请在 24 小时内自行删除相关内容，并避免长期存储、分享或传播本项目的任何部分。**作者保留随时修改、更新或移除本项目及其内容的权利，恕不另行通知。**
-> 
-> Disclaimer: This project is intended solely for technical research and code learning purposes and does not provide any form of network proxy service. Please do not use this project for any activities that violate local laws and regulations. Do not use this project in production environments. Users are fully responsible for any risks that may arise from using this project. If you download or reference this project, please delete all related content within 24 hours and avoid long-term storage, distribution, or dissemination of any part of this project. **The author reserves the right to modify, update, or remove any part of this project or its contents at any time without prior notice.**
+Formerly NekoBox for Android: since v2.0.0 the app runs the same core as Throne desktop, so profiles, subscriptions, route profiles and `.thrbackup` backups move freely between the two.
 
-## 下载 / Downloads
+Documentation: [throneproj.github.io](https://throneproj.github.io) · Issues: [GitHub Issues](https://github.com/throneproj/ThroneForAndroid/issues)
+
+### Supporting Throne
+If Throne is useful to you, you can support its development with [crypto](https://github.com/throneproj/Throne/blob/dev/.github/donate/Donate.md) (USDT, USDC, TRX or Monero) or through [GitHub Sponsors](https://github.com/sponsors/Mahdi-zarei).
+
+### Note on upgrading from 1.x
+Releases from v2.0.0 on are signed with a new key, so Android refuses to install them over a 1.x release (signature conflict). Uninstall the old release first, then import your subscriptions and profiles again: old local configurations are not migrated.
+
+### GitHub Releases (APK)
 
 [![GitHub All Releases](https://img.shields.io/github/downloads/throneproj/ThroneForAndroid/total?label=downloads-total&logo=github&style=flat-square)](https://github.com/throneproj/ThroneForAndroid/releases)
 
-[GitHub Releases 下载](https://github.com/throneproj/ThroneForAndroid/releases)
+Each release has one APK per ABI: `Throne-<version>-arm64-v8a.apk` fits almost every current phone, `armeabi-v7a` older 32-bit devices and `x86_64` emulators and x86 Chromebooks. `SHA256SUMS` lists their checksums.
 
-> 1.7.0 is signed with a new key and starts with a fresh database: uninstall older versions first, then add your subscriptions again.
-> 1.7.0 使用新的签名密钥，数据库也会重新开始：请先卸载旧版本，再重新添加订阅。
-
-## 交流反馈 / Feedback
-
-https://github.com/throneproj/ThroneForAndroid/issues
-
-## 项目主页 & 文档 / Homepage & Documents
-
-https://throneproj.github.io
+GitHub builds update themselves: the in-app updater checks the stable or pre-release channel, downloads the APK matching your installed ABI and verifies it before installing.
 
 ## Features
 
-* Groups and subscriptions that work like Throne desktop: per-group subscription options (filters, clean-up,
-  URL test after an update), front / landing proxy, HWID headers, scheduled updates with change reports
-* Backups in the desktop's `.thrbackup` format, restorable on either side: save, share or sync over WebDAV
-* Auto selector profiles that keep the best server of a group ranked and switch automatically
-* Cloudflare WARP: registration (WireGuard or MASQUE identity) and a built-in WARP mode for routing
-* URL, IP / country and speed tests, with a bulk-test panel (live progress, latency histogram, fastest servers,
-  sort / remove unavailable / connect to fastest)
-* The sing-box dashboard built in (live traffic, connections, logs), already connected to the running core
-* Xray configs with geoip: / geosite: rules: the data files are downloaded when a config first needs them
-* JSON editor with sing-box schema checking, completion and formatting
-* In-app updater for GitHub builds (stable or pre-release channel, verified downloads)
-* Home-screen widgets, and server switching from the notification
-* Route rules by Wi-Fi network (SSID / BSSID)
-* Android TV: launcher banner, D-pad navigation, previous / next server
+- Groups and subscriptions that work like Throne desktop: per-group subscription options (filters, clean-up, URL test after an update), front / landing proxy, HWID headers, scheduled updates with change reports
+- Backups in the desktop's `.thrbackup` format, restorable on either side: save, share or sync over WebDAV
+- Route profiles shared with desktop, preloaded from [routeprofiles](https://github.com/throneproj/routeprofiles), plus Android-only rule conditions: apps, Wi-Fi network (SSID / BSSID), network type and metered networks
+- Auto Selector profiles that keep the best server of one or more groups ranked and switch automatically
+- Cloudflare WARP: registration (WireGuard or MASQUE identity) and a built-in WARP mode for routing
+- URL, IP / country and speed tests, with a bulk-test panel (live progress, latency histogram, fastest servers, sort / remove unavailable / connect to fastest)
+- The sing-box dashboard built in (live traffic, connections, logs), already connected to the running core
+- Xray configs with `geoip:` / `geosite:` rules: the data files are downloaded when a config first needs them
+- JSON editor with sing-box schema checking, completion and formatting
+- Home-screen widgets, a quick settings tile, and server switching from the notification
+- Android TV: launcher banner, D-pad navigation, previous / next server
 
-## 支持的代理协议 / Supported Proxy Protocols
+## Supported protocols
 
-* SOCKS (4/4a/5)
-* HTTP(S)
-* Shadowsocks
-* VMess
-* VLESS (sing-box 与 Xray / sing-box and Xray, incl. XHTTP, REALITY)
-* Trojan
-* Hysteria 1/2 (incl. realm)
-* TUIC
-* Juicity
-* AnyTLS
-* ShadowTLS
-* SSH
-* NaïveProxy
-* Mieru
-* Snell v4/v6
-* WireGuard / AmneziaWG
-* TrustTunnel
-* MASQUE
-* OpenVPN
-* OpenConnect
-* 代理链 / Chain
-* 自定义 JSON / Custom JSON
+- SOCKS
+- HTTP(S)
+- Shadowsocks
+- Trojan
+- VMess
+- VLESS
+- TUIC
+- Hysteria
+- Hysteria2
+- AnyTLS
+- Mieru
+- Snell
+- NaïveProxy
+- Juicity
+- TrustTunnel
+- ShadowTLS
+- Wireguard
+- AmneziaWG
+- MASQUE
+- SSH
+- Xray VLESS
+- OpenVPN/OpenConnect
+- Custom Outbound (Both Sing-box and Xray)
+- Custom Config (Both Sing-box and Xray)
+- Chaining outbounds
+
+## Subscription Formats
+
+Various formats are supported, including share links, various JSON representation of Sing-box configs, and v2rayN link format as well as limited support for Shadowsocks and Clash formats. Only the outbounds (servers) of a subscription are imported; its routing rules are ignored.
+
+Deeplinks are also supported, read the [documentation](https://throneproj.github.io/advanced/deeplinks/) for more information.
 
 <details>
-<summary>XHTTP Extra TLS配置示例</summary>
+<summary>XHTTP extra example (TLS)</summary>
 
 <pre><code class="language-json">
 {
@@ -144,7 +146,7 @@ https://throneproj.github.io
 </details>
 
 <details>
-<summary>XHTTP Extra Reality配置示例</summary>
+<summary>XHTTP extra example (REALITY)</summary>
 
 <pre><code class="language-json">
 {
@@ -222,21 +224,9 @@ https://throneproj.github.io
 </code></pre>
 </details>
 
-## 支持的订阅格式 / Supported Subscription Format
-
-* 一些广泛使用的格式 (如 Shadowsocks, ClashMeta 和 v2rayN)
-* sing-box 订阅格式
-
-仅支持解析出站，即节点。分流规则等信息会被忽略。
-
-* Some widely used formats (like Shadowsocks, ClashMeta and v2rayN)
-* sing-box outbound
-
-Only resolving outbound, i.e. nodes, is supported. Information such as diversion rules are ignored.
-
 ## Credits
 
-Core: [ThroneCore](https://github.com/throneproj/Throne), built from the `THRONE_CORE_REF` commit pinned in `nb4a.properties`（核心版本以 `nb4a.properties` 中的 `THRONE_CORE_REF` 为准）:
+Core: ThroneCore from [Throne](https://github.com/throneproj/Throne), built at the `THRONE_CORE_REF` commit pinned in `nb4a.properties`:
 
 - [throneproj/sing-box](https://github.com/throneproj/sing-box), a fork of [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
 - [throneproj/Xray-core](https://github.com/throneproj/Xray-core), a fork of [XTLS/Xray-core](https://github.com/XTLS/Xray-core)
@@ -244,8 +234,19 @@ Core: [ThroneCore](https://github.com/throneproj/Throne), built from the `THRONE
 
 Android GUI:
 
-- [shadowsocks/shadowsocks-android](https://github.com/shadowsocks/shadowsocks-android)
+- [MatsuriDayo/NekoBoxForAndroid](https://github.com/MatsuriDayo/NekoBoxForAndroid)
 - [SagerNet/SagerNet](https://github.com/SagerNet/SagerNet)
+- [shadowsocks/shadowsocks-android](https://github.com/shadowsocks/shadowsocks-android)
+
+## FAQ
+**How does this project differ from NekoBox for Android?** <br/>
+It started as a NekoBox for Android fork. v2.0.0 replaced its core and data model with Throne desktop's: the same sing-box and Xray core, profile types, share links, route profiles and backup format. The legacy plugin system was removed, since the built-in core covers what the plugins provided.
+
+**Where are the downloadable route profiles/rulesets coming from?**<br/>
+They are located at the [routeprofiles](https://github.com/throneproj/routeprofiles) repository, the same one Throne desktop uses.
+
+**Why are some servers skipped when I import a link or a subscription?**<br/>
+As on desktop, Extra Core, Chain and Auto Selector profiles are never imported from links, subscriptions or shared route profiles; create them in the app instead. Nodes the app cannot run are skipped too, and the import reports what was left out.
 
 ## Star History
 
