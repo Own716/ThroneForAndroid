@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.SpannableStringBuilder
 import android.text.format.Formatter
 import android.view.View
 import android.widget.Button
@@ -160,7 +161,7 @@ class UpdateActivity : ThemedActivity() {
     }
 
     private fun renderOffer(offer: UpdateChecker.Offer) {
-        val message = buildString {
+        val message = SpannableStringBuilder(buildString {
             appendLine(getString(R.string.update_current_version, BuildConfig.VERSION_NAME))
             val newVersion = if (offer.release.prerelease) R.string.update_new_version_pre else R.string.update_new_version
             appendLine(getString(newVersion, offer.versionName))
@@ -169,16 +170,9 @@ class UpdateActivity : ThemedActivity() {
                 appendLine()
                 appendLine(getString(R.string.update_browser_only, it))
             }
-            val notes = offer.release.body.trim()
-            if (notes.isNotEmpty()) {
-                appendLine()
-                appendLine(notes.take(4000))
-            }
-            if (offer.installable) {
-                appendLine()
-                append(getString(R.string.update_restart_note))
-            }
-        }.trim()
+        }.trim())
+        if (offer.notes.isNotEmpty()) message.append("\n\n").append(ReleaseNotes.render(offer.notes, binding.message))
+        if (offer.installable) message.append("\n\n").append(getString(R.string.update_restart_note))
         show(getString(R.string.update_dialog_title), message)
         val later = getString(R.string.update_action_later) to {
             UpdateManager.dismiss()
@@ -237,10 +231,10 @@ class UpdateActivity : ThemedActivity() {
     }
 
     /** [progress]: null hides the bar, true is indeterminate. */
-    private fun show(title: String, message: String?, progress: Boolean? = null) {
+    private fun show(title: String, message: CharSequence?, progress: Boolean? = null) {
         progressBar(progress)
         binding.title.text = title
-        binding.message.text = message.orEmpty()
+        binding.message.text = message ?: ""
         binding.messageScroll.visibility = if (message.isNullOrEmpty()) View.GONE else View.VISIBLE
     }
 

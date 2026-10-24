@@ -39,10 +39,12 @@
         android:layout_marginTop="16dp"
         android:layout_weight="1">
 
+        <!-- Selectable text opens links on tap only while autoLink is set. -->
         <TextView
             android:id="@+id/message"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:autoLink="web"
             android:textAppearance="?attr/textAppearanceBody2"
             android:textIsSelectable="true" />
 

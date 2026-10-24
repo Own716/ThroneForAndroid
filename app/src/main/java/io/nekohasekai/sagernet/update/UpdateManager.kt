@@ -77,7 +77,7 @@ object UpdateManager {
         if (_state.value.busy) return
         _state.value = State.Checking
         job = scope.launch {
-            val result = UpdateChecker.check(app)
+            val result = UpdateChecker.check(app, withNotes = true)
             ensureActive()
             _state.value = when (result) {
                 is UpdateChecker.Result.UpToDate -> State.UpToDate

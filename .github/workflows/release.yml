@@ -37,7 +37,14 @@ jobs:
             echo "::error::$TAG already exists: raise VERSION_NAME in nb4a.properties for a new release"
             exit 1
           fi
+          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      # The release notes are the version's CHANGELOG.md section; a missing one fails before the build.
+      - name: Changelog
+        if: ${{ inputs.publish }}
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version }}
+        run: bash buildScript/release_notes.sh "$VERSION_NAME" > /dev/null
       - name: Build
         uses: ./.github/actions/android-build
         with:
@@ -60,7 +67,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          VERSION_NAME: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+          bash buildScript/release_notes.sh "$VERSION_NAME" > "$RUNNER_TEMP/release.md"
+          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --notes-file "$RUNNER_TEMP/release.md"
