@@ -1,75 +1,93 @@
 name: Release
+
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish the release v<VERSION_NAME> at this commit (otherwise the APKs are only uploaded as a workflow artifact)
-        type: boolean
-        default: true
+
 concurrency:
   group: release
-  cancel-in-progress: false
+  cancel-in-progress: true
+
 permissions:
   contents: write
+
 jobs:
-  release:
-    name: Build and publish a release
+  build-and-release:
+    name: Build APK and Release
     runs-on: ubuntu-latest
-    env:
-      SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
-      SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-      SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-      SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      # The tag is v<VERSION_NAME>; a published release never reuses an existing tag.
-      - name: Version
-        id: version
-        env:
-          PUBLISH: ${{ inputs.publish }}
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: ThroneCore AAR and schema
+        uses: ./.github/actions/throne-core
+
+      - name: Fetch routeprofiles snapshot
+        uses: ./.github/actions/routeprofiles
+
+      - name: Fetch sing-box dashboard
+        uses: ./.github/actions/sing-box-dashboard
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build Release APK
         run: |
-          set -euo pipefail
-          VERSION_NAME=$(sed -n 's/^VERSION_NAME=//p' nb4a.properties | tr -d '\r[:space:]')
-          test -n "$VERSION_NAME"
-          TAG="v$VERSION_NAME"
-          if [ "$PUBLISH" = "true" ] && git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null; then
-            echo "::error::$TAG already exists: raise VERSION_NAME in nb4a.properties for a new release"
+          ./gradlew --stacktrace :app:assembleOssRelease
+
+      - name: Prepare Single APK
+        id: prepare
+        run: |
+          mkdir -p dist
+          APK_FILE=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            echo "::error::No APK found in app/build/outputs/apk"
             exit 1
           fi
-          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          VERSION_NAME=$(sed -n 's/^VERSION_NAME=//p' nb4a.properties | tr -d '\r[:space:]')
+          TARGET_NAME="Throne-v${VERSION_NAME}.apk"
+          cp "$APK_FILE" "dist/$TARGET_NAME"
+          echo "Package created: dist/$TARGET_NAME"
+          ls -la dist/
+          TAG="v${VERSION_NAME}-live-update-$(date +'%Y%m%d%H%M')"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-      # The release notes are the version's CHANGELOG.md section; a missing one fails before the build.
-      - name: Changelog
-        if: ${{ inputs.publish }}
-        env:
-          VERSION_NAME: ${{ steps.version.outputs.version }}
-        run: bash buildScript/release_notes.sh "$VERSION_NAME" > /dev/null
-      - name: Build
-        uses: ./.github/actions/android-build
-        with:
-          tasks: app:assembleOssRelease
-          channel: stable
-          build-number: '999'
-          sign: 'true'
-      - name: Release assets
-        run: python3 buildScript/release_assets.py app/build/outputs/apk/oss/release dist stable
-      - name: Upload artifact
-        if: ${{ !inputs.publish }}
+          echo "apk_path=dist/$TARGET_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Throne-${{ steps.version.outputs.tag }}
-          path: dist/
-          if-no-files-found: error
+          name: ThroneForAndroid-APK
+          path: ${{ steps.prepare.outputs.apk_path }}
           retention-days: 14
-      - name: Publish release
-        if: ${{ inputs.publish }}
+
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          VERSION_NAME: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+          APK_PATH: ${{ steps.prepare.outputs.apk_path }}
+          VERSION: ${{ steps.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          bash buildScript/release_notes.sh "$VERSION_NAME" > "$RUNNER_TEMP/release.md"
-          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TAG" --notes-file "$RUNNER_TEMP/release.md"
+          RELEASE_TITLE="Throne for Android v$VERSION (Live Update 实况通知岛版本)"
+          RELEASE_BODY="### Throne for Android v$VERSION - Live Update 实况通知岛版本
+
+          新增功能：**Live Update（实况通知岛/灵动岛）**
+          - **自由开关**：可在「设置」➔「外观」➔「通知」自由开启和关闭。
+          - **完全自定义内容**：支持模板预设以及完全自定义文本与动态变量（如 \`{profile}\`, \`{down}\`, \`{up}\`, \`{traffic_total}\`, \`{duration}\` 等）。
+          - **多系统适配**：适配 Android 16 原生 Live Updates 胶囊及各大厂商系统实况通知/焦点通知协议。
+
+          下方已附加打包生成的单体 APK 安装包，下载即可直接安装使用。"
+
+          gh release create "$TAG" "$APK_PATH" --target "$GITHUB_SHA" --title "$RELEASE_TITLE" --notes "$RELEASE_BODY"

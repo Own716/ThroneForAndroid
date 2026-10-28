@@ -180,7 +180,7 @@ fun Project.setupApp() {
         // ThroneCore is built for android/arm64, android/arm and android/amd64 only.
         splits.abi {
             reset()
-            isEnable = true
+            isEnable = false
             isUniversalApk = false
             include("armeabi-v7a")
             include("arm64-v8a")

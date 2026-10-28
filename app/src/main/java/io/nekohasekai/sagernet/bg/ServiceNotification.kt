@@ -43,8 +43,10 @@ import kotlinx.coroutines.sync.withLock
  * See also: https://github.com/aosp-mirror/platform_frameworks_base/commit/070d142993403cc2c42eca808ff3fafcee220ac4
  */
 class ServiceNotification(
-    private val service: BaseService.Interface, title: String,
-    channel: String, visible: Boolean = false,
+    private val service: BaseService.Interface,
+    private val title: String,
+    channel: String,
+    visible: Boolean = false,
 ) : BroadcastReceiver() {
     companion object {
         const val notificationId = 1
