@@ -183,6 +183,10 @@ class SagerNet : Application(),
                 notification.createNotificationChannels(
                     listOf(
                         NotificationChannel(
+                            "service-live-update",
+                            application.getText(R.string.live_update_channel),
+                            NotificationManager.IMPORTANCE_LOW
+                        ), NotificationChannel(
                             "service-vpn",
                             application.getText(R.string.service_vpn),
                             if (Build.VERSION.SDK_INT >= 28) NotificationManager.IMPORTANCE_MIN

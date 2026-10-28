@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
 import android.os.Build
+import android.os.Bundle
+import org.json.JSONObject
 import android.text.format.Formatter
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -75,9 +77,63 @@ class ServiceNotification(
     /** Whether the screen is on; the traffic looper stops polling the core while it is off. */
     val screenOn = MutableStateFlow(SagerNet.power.isInteractive)
 
+    private val connectStartTime = System.currentTimeMillis()
+
+    private fun applyLiveUpdateProperties(
+        builder: NotificationCompat.Builder,
+        titleText: String,
+        contentText: String,
+        subText: String?
+    ) {
+        builder.setOngoing(true)
+        builder.setCategory(NotificationCompat.CATEGORY_STATUS)
+        builder.priority = NotificationCompat.PRIORITY_LOW
+
+        try {
+            val method = builder.javaClass.getMethod("setRequestPromotedOngoing", Boolean::class.javaPrimitiveType)
+            method.invoke(builder, true)
+        } catch (_: Throwable) {}
+
+        builder.addExtras(Bundle().apply {
+            putBoolean("android.requestPromotedOngoing", true)
+            try {
+                val focusParam = JSONObject().apply {
+                    put("type", 1)
+                    put("baseInfo", JSONObject().apply {
+                        put("title", titleText)
+                        put("content", contentText)
+                        if (!subText.isNullOrEmpty()) {
+                            put("subTitle", subText)
+                        }
+                    })
+                }
+                putString("miui.focus.param", focusParam.toString())
+            } catch (_: Throwable) {}
+        })
+    }
+
     suspend fun postNotificationSpeedUpdate(stats: SpeedDisplayData) {
         useBuilder {
-            if (showDirectSpeed) {
+            if (DataStore.liveUpdateEnabled) {
+                val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
+                val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
+                val info = LiveUpdateFormatter.buildInfo(service as Context, profile, stats, connectStartTime)
+                val (titleTpl, contentTpl, subTextTpl) = LiveUpdateFormatter.getTemplates()
+
+                val formattedTitle = LiveUpdateFormatter.format(titleTpl, info).ifEmpty { title }
+                val formattedContent = LiveUpdateFormatter.format(contentTpl, info)
+                val formattedSubText = LiveUpdateFormatter.format(subTextTpl, info)
+
+                it.setContentTitle(formattedTitle)
+                it.setContentText(formattedContent)
+                if (formattedSubText.isNotEmpty()) {
+                    it.setSubText(formattedSubText)
+                } else {
+                    it.setSubText(null)
+                }
+                it.setStyle(NotificationCompat.BigTextStyle().bigText(formattedContent))
+                applyLiveUpdateProperties(it, formattedTitle, formattedContent, formattedSubText)
+            } else if (showDirectSpeed) {
                 val speedDetail = (service as Context).getString(
                     R.string.speed_detail, service.getString(
                         R.string.speed, Formatter.formatFileSize(service, stats.txRateProxy)
@@ -116,7 +172,9 @@ class ServiceNotification(
 
     suspend fun postNotificationTitle(newTitle: String) {
         useBuilder {
-            it.setContentTitle(newTitle)
+            if (!DataStore.liveUpdateEnabled) {
+                it.setContentTitle(newTitle)
+            }
         }
         update()
     }
@@ -125,10 +183,25 @@ class ServiceNotification(
     suspend fun refresh(newTitle: String) {
         updateActions()
         useBuilder {
-            it.setContentTitle(newTitle)
-            it.setContentText(null)
-            it.setSubText(null)
-            it.setStyle(null)
+            if (DataStore.liveUpdateEnabled) {
+                val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
+                val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
+                val info = LiveUpdateFormatter.buildInfo(service as Context, profile, SpeedDisplayData(), connectStartTime)
+                val (titleTpl, contentTpl, subTextTpl) = LiveUpdateFormatter.getTemplates()
+                val formattedTitle = LiveUpdateFormatter.format(titleTpl, info).ifEmpty { newTitle }
+                val formattedContent = LiveUpdateFormatter.format(contentTpl, info)
+                val formattedSubText = LiveUpdateFormatter.format(subTextTpl, info)
+                it.setContentTitle(formattedTitle)
+                it.setContentText(formattedContent.ifEmpty { null })
+                it.setSubText(formattedSubText.ifEmpty { null })
+                it.setStyle(null)
+                applyLiveUpdateProperties(it, formattedTitle, formattedContent, formattedSubText)
+            } else {
+                it.setContentTitle(newTitle)
+                it.setContentText(null)
+                it.setSubText(null)
+                it.setStyle(null)
+            }
         }
         update()
     }
@@ -174,6 +247,23 @@ class ServiceNotification(
         Theme.apply(app)
         Theme.apply(service)
         builder.color = service.getColorAttr(R.attr.colorPrimary)
+
+        if (DataStore.liveUpdateEnabled) {
+            builder.setOngoing(true)
+            builder.setCategory(NotificationCompat.CATEGORY_STATUS)
+            builder.priority = NotificationCompat.PRIORITY_LOW
+            val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
+            val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
+            val info = LiveUpdateFormatter.buildInfo(service as Context, profile, SpeedDisplayData(), connectStartTime)
+            val (titleTpl, contentTpl, subTextTpl) = LiveUpdateFormatter.getTemplates()
+            val formattedTitle = LiveUpdateFormatter.format(titleTpl, info).ifEmpty { title }
+            val formattedContent = LiveUpdateFormatter.format(contentTpl, info)
+            val formattedSubText = LiveUpdateFormatter.format(subTextTpl, info)
+            builder.setContentTitle(formattedTitle)
+            if (formattedContent.isNotEmpty()) builder.setContentText(formattedContent)
+            if (formattedSubText.isNotEmpty()) builder.setSubText(formattedSubText)
+            applyLiveUpdateProperties(builder, formattedTitle, formattedContent, formattedSubText)
+        }
 
         service.registerReceiver(this, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)

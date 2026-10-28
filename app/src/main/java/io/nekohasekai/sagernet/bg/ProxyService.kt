@@ -2,12 +2,17 @@ package io.nekohasekai.sagernet.bg
 
 import android.app.Service
 import android.content.Intent
+import io.nekohasekai.sagernet.database.DataStore
 
 class ProxyService : Service(), BaseService.Interface {
     override val data = BaseService.Data(this)
     override val tag: String get() = "SagerNetProxyService"
     override fun createNotification(profileName: String): ServiceNotification =
-        ServiceNotification(this, profileName, "service-proxy", true)
+        ServiceNotification(
+            this, profileName,
+            if (DataStore.liveUpdateEnabled) "service-live-update" else "service-proxy",
+            true
+        )
 
     override var upstreamInterfaceName: String? = null
 

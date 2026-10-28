@@ -48,6 +48,19 @@
         <item>4</item>
     </string-array>
 
+    <string-array name="live_update_preset_entries">
+        <item>@string/live_update_preset_standard</item>
+        <item>@string/live_update_preset_compact</item>
+        <item>@string/live_update_preset_detailed</item>
+        <item>@string/live_update_preset_custom</item>
+    </string-array>
+    <string-array name="live_update_preset_values" translatable="false">
+        <item>standard</item>
+        <item>compact</item>
+        <item>detailed</item>
+        <item>custom</item>
+    </string-array>
+
     <string-array name="speed_test_modes">
         <item>@string/speed_test_mode_download_upload</item>
         <item>@string/speed_test_mode_download</item>

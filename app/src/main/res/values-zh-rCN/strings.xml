@@ -144,6 +144,24 @@
     <string name="grpc_service_name">gRPC 服务名称</string>
     <string name="alpn">应用层协议协商</string>
     <string name="version_x">版本 (%s)</string>
+    <string name="live_update">实况通知岛 (Live Update)</string>
+    <string name="live_update_sum">在状态栏与锁屏以动态灵动岛/实况胶囊形式展示实时连接与流量状态</string>
+    <string name="live_update_channel">实况通知</string>
+    <string name="live_update_preset">通知岛模板预设</string>
+    <string name="live_update_preset_standard">标准模式（节点 + 实时网速 + 总流量）</string>
+    <string name="live_update_preset_compact">极简胶囊（仅核心网速）</string>
+    <string name="live_update_preset_detailed">全能监控（分组 + 节点 + 网速 + 流量 + 时长）</string>
+    <string name="live_update_preset_custom">完全自定义</string>
+    <string name="live_update_title_format">主标题模板</string>
+    <string name="live_update_title_format_sum">状态栏胶囊与主标题。支持 {profile}、{group}、{protocol} 等</string>
+    <string name="live_update_content_format">详细内容模板</string>
+    <string name="live_update_content_format_sum">通知正文主行内容。支持 {down}、{up}、{traffic_total}、{duration} 等</string>
+    <string name="live_update_subtext_format">次要摘要模板</string>
+    <string name="live_update_subtext_format_sum">通知右侧或小标题信息。支持 {traffic_total}、{duration} 等</string>
+    <string name="live_update_preview">效果预览与变量说明</string>
+    <string name="live_update_preview_dialog_title">实况通知岛预览与变量说明</string>
+    <string name="live_update_preview_dialog_message">当前渲染效果预览：\n\n标题：%1$s\n内容：%2$s\n次要摘要：%3$s\n\n支持的变量占位符：\n• {profile} ：当前连接节点名称\n• {group} ：节点所属分组/订阅名称\n• {down} ：实时下载速度（自动带单位）\n• {up} ：实时上传速度（自动带单位）\n• {traffic_down} ：本次连接已接收总流量\n• {traffic_up} ：本次连接已发送总流量\n• {traffic_total} ：本次连接总消耗流量\n• {duration} ：连接持续运行时长\n• {protocol} ：节点出站协议类型\n• {latency} ：节点延迟\n• {direct_down} ：直连下载速度\n• {direct_up} ：直连上传速度</string>
+
     <string name="show_direct_speed">显示直连速度</string>
     <string name="show_direct_speed_sum">在通知中也显示不经过代理的流量速度</string>
     <string name="select_profile">选择配置</string>

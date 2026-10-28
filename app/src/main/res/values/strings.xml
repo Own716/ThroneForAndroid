@@ -46,6 +46,24 @@
     <string name="cag_ws">WebSocket settings</string>
     <string name="ws_max_early_data" translatable="false">Max early data</string>
     <string name="cag_misc">Other</string>
+    <string name="live_update">Live Update (Notification Island)</string>
+    <string name="live_update_sum">Display real-time traffic and connection status as a dynamic capsule/island on the status bar and lock screen</string>
+    <string name="live_update_channel">Live Update</string>
+    <string name="live_update_preset">Island Template Preset</string>
+    <string name="live_update_preset_standard">Standard (Profile + Speed + Traffic)</string>
+    <string name="live_update_preset_compact">Compact (Minimal Speed)</string>
+    <string name="live_update_preset_detailed">Detailed (Group + Profile + Speed + Traffic + Duration)</string>
+    <string name="live_update_preset_custom">Custom</string>
+    <string name="live_update_title_format">Title Format</string>
+    <string name="live_update_title_format_sum">Title/Capsule main text. Supported: {profile}, {group}, {protocol}, etc.</string>
+    <string name="live_update_content_format">Content Format</string>
+    <string name="live_update_content_format_sum">Body line text. Supported: {down}, {up}, {traffic_total}, {duration}, etc.</string>
+    <string name="live_update_subtext_format">Subtext Format</string>
+    <string name="live_update_subtext_format_sum">Secondary/trailing text. Supported: {traffic_total}, {duration}, etc.</string>
+    <string name="live_update_preview">Live Preview</string>
+    <string name="live_update_preview_dialog_title">Live Update Preview &amp; Help</string>
+    <string name="live_update_preview_dialog_message">Current Preview:\n\nTitle: %1$s\nContent: %2$s\nSubtext: %3$s\n\nSupported Variable Placeholders:\n• {profile} : Active node/profile name\n• {group} : Subscription/group name\n• {down} : Real-time download speed\n• {up} : Real-time upload speed\n• {traffic_down} : Total session downloaded traffic\n• {traffic_up} : Total session uploaded traffic\n• {traffic_total} : Total session traffic (down + up)\n• {duration} : Connection duration (hh:mm:ss)\n• {protocol} : Outbound protocol type\n• {latency} : Node latency\n• {direct_down} : Direct download speed\n• {direct_up} : Direct upload speed</string>
+
     <string name="show_direct_speed">Show direct speed</string>
     <string name="show_direct_speed_sum">Show the traffic speed without proxy in the notification as
         well</string>

@@ -23,6 +23,11 @@ object Key {
     const val SHOW_DIRECT_SPEED = "showDirectSpeed"
     const val SHOW_GROUP_IN_NOTIFICATION = "showGroupInNotification"
     const val NOTIFICATION_ACTIONS = "notificationActions"
+    const val LIVE_UPDATE_ENABLED = "liveUpdateEnabled"
+    const val LIVE_UPDATE_PRESET = "liveUpdatePreset"
+    const val LIVE_UPDATE_TITLE_FORMAT = "liveUpdateTitleFormat"
+    const val LIVE_UPDATE_CONTENT_FORMAT = "liveUpdateContentFormat"
+    const val LIVE_UPDATE_SUBTEXT_FORMAT = "liveUpdateSubtextFormat"
 
     const val APPEND_HTTP_PROXY = "appendHttpProxy"
     const val HTTP_PROXY_BYPASS = "httpProxyBypass"
