@@ -119,7 +119,12 @@ fun Project.setupAppCommon() {
     setupCommon()
 
     val keystoreB64 = System.getenv("SIGNING_KEYSTORE_B64")?.trim()
-    if (keystoreB64.isNullOrEmpty()) return
+    if (keystoreB64.isNullOrEmpty()) {
+        android.apply {
+            buildTypes.getByName("release").signingConfig = signingConfigs.getByName("debug")
+        }
+        return
+    }
     fun requireEnv(name: String) = System.getenv(name)?.takeIf { it.isNotEmpty() }
         ?: throw GradleException("SIGNING_KEYSTORE_B64 is set but $name is missing")
     val storePass = requireEnv("SIGNING_STORE_PASSWORD")
