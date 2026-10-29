@@ -49,15 +49,17 @@
     </string-array>
 
     <string-array name="live_update_preset_entries">
-        <item>@string/live_update_preset_standard</item>
-        <item>@string/live_update_preset_compact</item>
-        <item>@string/live_update_preset_detailed</item>
+        <item>@string/live_update_preset_group_first</item>
+        <item>@string/live_update_preset_node_first</item>
+        <item>@string/live_update_preset_minimal_ip</item>
+        <item>@string/live_update_preset_full_stats</item>
         <item>@string/live_update_preset_custom</item>
     </string-array>
     <string-array name="live_update_preset_values" translatable="false">
-        <item>standard</item>
-        <item>compact</item>
-        <item>detailed</item>
+        <item>group_first</item>
+        <item>node_first</item>
+        <item>minimal_ip</item>
+        <item>full_stats</item>
         <item>custom</item>
     </string-array>
 

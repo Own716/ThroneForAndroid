@@ -181,45 +181,26 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
             val renderedTitle = LiveUpdateFormatter.format(tpls.title, mockInfo)
             val renderedContent = LiveUpdateFormatter.format(tpls.content, mockInfo)
             val renderedSub = LiveUpdateFormatter.format(tpls.subText, mockInfo)
-            liveUpdatePreview.summary = getString(
-                R.string.live_update_preview_summary_format,
-                renderedCollapsed,
-                renderedTitle,
-                renderedContent,
-                renderedSub
-            )
-        }
-
-        fun syncCustomFieldVisibility(preset: String) {
-            val isCustom = preset == LiveUpdateFormatter.PRESET_CUSTOM
-            liveUpdateCollapsed.isEnabled = isCustom
-            liveUpdateTitle.isEnabled = isCustom
-            liveUpdateContent.isEnabled = isCustom
-            liveUpdateSubtext.isEnabled = isCustom
-
-            when (preset) {
-                LiveUpdateFormatter.PRESET_STANDARD -> {
-                    liveUpdateCollapsed.text = LiveUpdateFormatter.DEFAULT_STANDARD_COLLAPSED
-                    liveUpdateTitle.text = LiveUpdateFormatter.DEFAULT_STANDARD_TITLE
-                    liveUpdateContent.text = LiveUpdateFormatter.DEFAULT_STANDARD_CONTENT
-                    liveUpdateSubtext.text = LiveUpdateFormatter.DEFAULT_STANDARD_SUBTEXT
-                }
-                LiveUpdateFormatter.PRESET_COMPACT -> {
-                    liveUpdateCollapsed.text = LiveUpdateFormatter.DEFAULT_COMPACT_COLLAPSED
-                    liveUpdateTitle.text = LiveUpdateFormatter.DEFAULT_COMPACT_TITLE
-                    liveUpdateContent.text = LiveUpdateFormatter.DEFAULT_COMPACT_CONTENT
-                    liveUpdateSubtext.text = LiveUpdateFormatter.DEFAULT_COMPACT_SUBTEXT
-                }
-                LiveUpdateFormatter.PRESET_DETAILED -> {
-                    liveUpdateCollapsed.text = LiveUpdateFormatter.DEFAULT_DETAILED_COLLAPSED
-                    liveUpdateTitle.text = LiveUpdateFormatter.DEFAULT_DETAILED_TITLE
-                    liveUpdateContent.text = LiveUpdateFormatter.DEFAULT_DETAILED_CONTENT
-                    liveUpdateSubtext.text = LiveUpdateFormatter.DEFAULT_DETAILED_SUBTEXT
-                }
+            liveUpdatePreview.summary = if (renderedSub.isNotEmpty()) {
+                getString(
+                    R.string.live_update_preview_summary_format,
+                    renderedCollapsed,
+                    renderedTitle,
+                    renderedContent,
+                    renderedSub
+                )
+            } else {
+                getString(
+                    R.string.live_update_preview_summary_format_no_sub,
+                    renderedCollapsed,
+                    renderedTitle,
+                    renderedContent
+                )
             }
         }
 
-        liveUpdateEnabled.setOnPreferenceChangeListener { _, _ ->
+        liveUpdateEnabled.setOnPreferenceChangeListener { _, newValue ->
+            DataStore.liveUpdateEnabled = newValue as Boolean
             view?.post {
                 updateLiveUpdatePreview()
                 notifyNotificationUpdate()
@@ -228,19 +209,36 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
             true
         }
 
-        liveUpdateShowCapsule.setOnPreferenceChangeListener { _, _ ->
+        liveUpdateShowCapsule.setOnPreferenceChangeListener { _, newValue ->
+            DataStore.liveUpdateShowCapsule = newValue as Boolean
             view?.post {
                 notifyNotificationUpdate()
             }
             true
         }
 
-        syncCustomFieldVisibility(DataStore.liveUpdatePreset)
+        liveUpdateCollapsed.isEnabled = true
+        liveUpdateTitle.isEnabled = true
+        liveUpdateContent.isEnabled = true
+        liveUpdateSubtext.isEnabled = true
+
         updateLiveUpdatePreview()
 
         liveUpdatePreset.setOnPreferenceChangeListener { _, newValue ->
             val newPreset = newValue as String
-            syncCustomFieldVisibility(newPreset)
+            if (newPreset != LiveUpdateFormatter.PRESET_CUSTOM) {
+                val tpls = LiveUpdateFormatter.getPresetTemplates(newPreset)
+                DataStore.liveUpdateCollapsedFormat = tpls.collapsed
+                DataStore.liveUpdateTitleFormat = tpls.title
+                DataStore.liveUpdateContentFormat = tpls.content
+                DataStore.liveUpdateSubtextFormat = tpls.subText
+
+                liveUpdateCollapsed.text = tpls.collapsed
+                liveUpdateTitle.text = tpls.title
+                liveUpdateContent.text = tpls.content
+                liveUpdateSubtext.text = tpls.subText
+            }
+            DataStore.liveUpdatePreset = newPreset
             view?.post {
                 updateLiveUpdatePreview()
                 notifyNotificationUpdate()
@@ -249,18 +247,25 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
             true
         }
 
-        val onFormatChangeListener = Preference.OnPreferenceChangeListener { _, _ ->
-            view?.post {
-                updateLiveUpdatePreview()
-                notifyNotificationUpdate()
+        fun bindFormatField(pref: EditTextPreference, onSave: (String) -> Unit) {
+            pref.setOnPreferenceChangeListener { _, newValue ->
+                val str = (newValue as? String).orEmpty().trim()
+                onSave(str)
+                DataStore.liveUpdatePreset = LiveUpdateFormatter.PRESET_CUSTOM
+                liveUpdatePreset.value = LiveUpdateFormatter.PRESET_CUSTOM
+                view?.post {
+                    updateLiveUpdatePreview()
+                    notifyNotificationUpdate()
+                }
+                needReload()
+                true
             }
-            needReload()
-            true
         }
-        liveUpdateCollapsed.onPreferenceChangeListener = onFormatChangeListener
-        liveUpdateTitle.onPreferenceChangeListener = onFormatChangeListener
-        liveUpdateContent.onPreferenceChangeListener = onFormatChangeListener
-        liveUpdateSubtext.onPreferenceChangeListener = onFormatChangeListener
+
+        bindFormatField(liveUpdateCollapsed) { DataStore.liveUpdateCollapsedFormat = it }
+        bindFormatField(liveUpdateTitle) { DataStore.liveUpdateTitleFormat = it }
+        bindFormatField(liveUpdateContent) { DataStore.liveUpdateContentFormat = it }
+        bindFormatField(liveUpdateSubtext) { DataStore.liveUpdateSubtextFormat = it }
 
         liveUpdatePreview.setOnPreferenceClickListener {
             val mockInfo = LiveUpdateFormatter.getMockInfo(requireContext())
@@ -268,7 +273,9 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
             val renderedCollapsed = LiveUpdateFormatter.format(tpls.collapsed, mockInfo)
             val renderedTitle = LiveUpdateFormatter.format(tpls.title, mockInfo)
             val renderedContent = LiveUpdateFormatter.format(tpls.content, mockInfo)
-            val renderedSub = LiveUpdateFormatter.format(tpls.subText, mockInfo)
+            val renderedSub = LiveUpdateFormatter.format(tpls.subText, mockInfo).ifEmpty {
+                getString(androidx.preference.R.string.not_set)
+            }
 
             MaterialAlertDialogBuilder(requireContext())
                 .setTitle(R.string.live_update_preview_dialog_title)

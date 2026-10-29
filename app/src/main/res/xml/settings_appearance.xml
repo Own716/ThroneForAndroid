@@ -64,7 +64,7 @@
             app:summary="@string/live_update_show_capsule_sum"
             app:title="@string/live_update_show_capsule" />
         <moe.matsuri.nb4a.ui.SimpleMenuPreference
-            app:defaultValue="standard"
+            app:defaultValue="group_first"
             app:dependency="liveUpdateEnabled"
             app:entries="@array/live_update_preset_entries"
             app:entryValues="@array/live_update_preset_values"

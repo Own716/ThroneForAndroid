@@ -158,14 +158,11 @@ class ServiceNotification(
 
                 val bigTextStyle = NotificationCompat.BigTextStyle()
                 bigTextStyle.setBigContentTitle(formattedTitle)
-                val bigText = if (formattedSubText.isNotEmpty()) {
-                    "$formattedContent\n$formattedSubText"
-                } else {
-                    formattedContent
-                }
-                bigTextStyle.bigText(bigText)
+                bigTextStyle.bigText(formattedContent.ifEmpty { formattedTitle })
                 if (formattedSubText.isNotEmpty()) {
                     bigTextStyle.setSummaryText(formattedSubText)
+                } else {
+                    bigTextStyle.setSummaryText(null)
                 }
                 it.setStyle(bigTextStyle)
 
@@ -256,20 +253,13 @@ class ServiceNotification(
 
                 val bigTextStyle = NotificationCompat.BigTextStyle()
                 bigTextStyle.setBigContentTitle(formattedTitle)
-                val bigText = if (formattedSubText.isNotEmpty()) {
-                    "$formattedContent\n$formattedSubText"
+                bigTextStyle.bigText(formattedContent.ifEmpty { formattedTitle })
+                if (formattedSubText.isNotEmpty()) {
+                    bigTextStyle.setSummaryText(formattedSubText)
                 } else {
-                    formattedContent
+                    bigTextStyle.setSummaryText(null)
                 }
-                if (bigText.isNotEmpty()) {
-                    bigTextStyle.bigText(bigText)
-                    if (formattedSubText.isNotEmpty()) {
-                        bigTextStyle.setSummaryText(formattedSubText)
-                    }
-                    it.setStyle(bigTextStyle)
-                } else {
-                    it.setStyle(null)
-                }
+                it.setStyle(bigTextStyle)
 
                 applyLiveUpdateProperties(
                     it,
@@ -362,15 +352,16 @@ class ServiceNotification(
             val formattedSubText = LiveUpdateFormatter.format(tpls.subText, info)
             builder.setContentTitle(formattedCollapsed)
             if (formattedContent.isNotEmpty()) builder.setContentText(formattedContent)
-            if (formattedSubText.isNotEmpty()) builder.setSubText(formattedSubText)
+            if (formattedSubText.isNotEmpty()) builder.setSubText(formattedSubText) else builder.setSubText(null)
             val bigTextStyle = NotificationCompat.BigTextStyle()
             bigTextStyle.setBigContentTitle(formattedTitle)
-            val bigText = if (formattedSubText.isNotEmpty()) "$formattedContent\n$formattedSubText" else formattedContent
-            if (bigText.isNotEmpty()) {
-                bigTextStyle.bigText(bigText)
-                if (formattedSubText.isNotEmpty()) bigTextStyle.setSummaryText(formattedSubText)
-                builder.setStyle(bigTextStyle)
+            bigTextStyle.bigText(formattedContent.ifEmpty { formattedTitle })
+            if (formattedSubText.isNotEmpty()) {
+                bigTextStyle.setSummaryText(formattedSubText)
+            } else {
+                bigTextStyle.setSummaryText(null)
             }
+            builder.setStyle(bigTextStyle)
             applyLiveUpdateProperties(
                 builder,
                 DataStore.liveUpdateShowCapsule,

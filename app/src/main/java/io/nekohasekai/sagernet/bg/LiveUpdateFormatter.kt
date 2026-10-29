@@ -13,25 +13,40 @@ import java.util.Locale
 
 object LiveUpdateFormatter {
 
+    const val PRESET_GROUP_FIRST = "group_first"
+    const val PRESET_NODE_FIRST = "node_first"
+    const val PRESET_MINIMAL_IP = "minimal_ip"
+    const val PRESET_FULL_STATS = "full_stats"
+    const val PRESET_CUSTOM = "custom"
+
+    // Backward compatibility aliases
     const val PRESET_STANDARD = "standard"
     const val PRESET_COMPACT = "compact"
     const val PRESET_DETAILED = "detailed"
-    const val PRESET_CUSTOM = "custom"
 
-    const val DEFAULT_STANDARD_COLLAPSED = "{profile}"
-    const val DEFAULT_STANDARD_TITLE = "{group}"
-    const val DEFAULT_STANDARD_CONTENT = "↓ {down}   ↑ {up}"
-    const val DEFAULT_STANDARD_SUBTEXT = "{profile}"
+    // 1. Group First (Recommended for AutoSelector / Strategy Groups)
+    const val TPL_GROUP_FIRST_COLLAPSED = "{group}"
+    const val TPL_GROUP_FIRST_TITLE = "{group}"
+    const val TPL_GROUP_FIRST_CONTENT = "↓ {down}   ↑ {up}"
+    const val TPL_GROUP_FIRST_SUBTEXT = "{profile} | {ip}"
 
-    const val DEFAULT_COMPACT_COLLAPSED = "{group}"
-    const val DEFAULT_COMPACT_TITLE = "{profile}"
-    const val DEFAULT_COMPACT_CONTENT = "↓ {down}  ↑ {up}"
-    const val DEFAULT_COMPACT_SUBTEXT = "{ip}"
+    // 2. Node First
+    const val TPL_NODE_FIRST_COLLAPSED = "{profile}"
+    const val TPL_NODE_FIRST_TITLE = "{profile}"
+    const val TPL_NODE_FIRST_CONTENT = "↓ {down}   ↑ {up}"
+    const val TPL_NODE_FIRST_SUBTEXT = "{group} | {ip}"
 
-    const val DEFAULT_DETAILED_COLLAPSED = "[{group}] {profile}"
-    const val DEFAULT_DETAILED_TITLE = "[{group}] {profile}"
-    const val DEFAULT_DETAILED_CONTENT = "↓ {down}  ↑ {up}  |  {ip}"
-    const val DEFAULT_DETAILED_SUBTEXT = "{traffic_total} ({duration})"
+    // 3. Minimal & IP
+    const val TPL_MINIMAL_IP_COLLAPSED = "{profile}"
+    const val TPL_MINIMAL_IP_TITLE = "{profile}"
+    const val TPL_MINIMAL_IP_CONTENT = "↓ {down}  ↑ {up}"
+    const val TPL_MINIMAL_IP_SUBTEXT = "{ip}"
+
+    // 4. Full Stats
+    const val TPL_FULL_STATS_COLLAPSED = "{profile}"
+    const val TPL_FULL_STATS_TITLE = "[{group}] {profile}"
+    const val TPL_FULL_STATS_CONTENT = "↓ {down}  ↑ {up}  |  {ip}"
+    const val TPL_FULL_STATS_SUBTEXT = "{traffic_total} ({duration})"
 
     data class Templates(
         val collapsed: String,
@@ -181,34 +196,45 @@ object LiveUpdateFormatter {
         if (info.ip.isEmpty()) {
             res = res.replace("()", "").replace("（）", "")
         }
+        res = res.replace(Regex("\\|\\s*\\|"), "|")
+        res = res.trim().removePrefix("|").removeSuffix("|").trim()
         return res.replace(Regex("\\s+"), " ").trim()
     }
 
     fun getTemplates(): Templates {
-        return when (DataStore.liveUpdatePreset) {
-            PRESET_COMPACT -> Templates(
-                DEFAULT_COMPACT_COLLAPSED,
-                DEFAULT_COMPACT_TITLE,
-                DEFAULT_COMPACT_CONTENT,
-                DEFAULT_COMPACT_SUBTEXT
+        return Templates(
+            collapsed = DataStore.liveUpdateCollapsedFormat.ifEmpty { TPL_GROUP_FIRST_COLLAPSED },
+            title = DataStore.liveUpdateTitleFormat.ifEmpty { TPL_GROUP_FIRST_TITLE },
+            content = DataStore.liveUpdateContentFormat.ifEmpty { TPL_GROUP_FIRST_CONTENT },
+            subText = DataStore.liveUpdateSubtextFormat,
+        )
+    }
+
+    fun getPresetTemplates(preset: String): Templates {
+        return when (preset) {
+            PRESET_NODE_FIRST, PRESET_COMPACT -> Templates(
+                TPL_NODE_FIRST_COLLAPSED,
+                TPL_NODE_FIRST_TITLE,
+                TPL_NODE_FIRST_CONTENT,
+                TPL_NODE_FIRST_SUBTEXT
             )
-            PRESET_DETAILED -> Templates(
-                DEFAULT_DETAILED_COLLAPSED,
-                DEFAULT_DETAILED_TITLE,
-                DEFAULT_DETAILED_CONTENT,
-                DEFAULT_DETAILED_SUBTEXT
+            PRESET_MINIMAL_IP -> Templates(
+                TPL_MINIMAL_IP_COLLAPSED,
+                TPL_MINIMAL_IP_TITLE,
+                TPL_MINIMAL_IP_CONTENT,
+                TPL_MINIMAL_IP_SUBTEXT
             )
-            PRESET_CUSTOM -> Templates(
-                DataStore.liveUpdateCollapsedFormat.ifEmpty { DEFAULT_STANDARD_COLLAPSED },
-                DataStore.liveUpdateTitleFormat.ifEmpty { DEFAULT_STANDARD_TITLE },
-                DataStore.liveUpdateContentFormat.ifEmpty { DEFAULT_STANDARD_CONTENT },
-                DataStore.liveUpdateSubtextFormat.ifEmpty { DEFAULT_STANDARD_SUBTEXT }
+            PRESET_FULL_STATS, PRESET_DETAILED -> Templates(
+                TPL_FULL_STATS_COLLAPSED,
+                TPL_FULL_STATS_TITLE,
+                TPL_FULL_STATS_CONTENT,
+                TPL_FULL_STATS_SUBTEXT
             )
             else -> Templates(
-                DEFAULT_STANDARD_COLLAPSED,
-                DEFAULT_STANDARD_TITLE,
-                DEFAULT_STANDARD_CONTENT,
-                DEFAULT_STANDARD_SUBTEXT
+                TPL_GROUP_FIRST_COLLAPSED,
+                TPL_GROUP_FIRST_TITLE,
+                TPL_GROUP_FIRST_CONTENT,
+                TPL_GROUP_FIRST_SUBTEXT
             )
         }
     }

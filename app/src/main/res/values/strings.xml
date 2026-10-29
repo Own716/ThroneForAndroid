@@ -52,9 +52,10 @@
     <string name="live_update_show_capsule">Show Status Bar Capsule</string>
     <string name="live_update_show_capsule_sum">Show live dynamic capsule in status bar when collapsed (e.g. ColorOS Fluid Cloud, HyperOS); turn off to hide in collapsed state</string>
     <string name="live_update_preset">Island Template Preset</string>
-    <string name="live_update_preset_standard">Standard (Profile + Speed + Subtext)</string>
-    <string name="live_update_preset_compact">Compact (Minimal Speed &amp; IP)</string>
-    <string name="live_update_preset_detailed">Detailed (Group + Profile + Speed + IP + Duration)</string>
+    <string name="live_update_preset_group_first">Strategy Group Mode (Recommended)</string>
+    <string name="live_update_preset_node_first">Node First Mode</string>
+    <string name="live_update_preset_minimal_ip">Minimal &amp; IP Mode</string>
+    <string name="live_update_preset_full_stats">Full Monitoring Mode</string>
     <string name="live_update_preset_custom">Custom</string>
     <string name="live_update_collapsed_format">Collapsed Title Format (Capsule)</string>
     <string name="live_update_collapsed_format_sum">Status bar island/capsule text when collapsed. Supported: {profile}, {group}, {ip}, etc.</string>
@@ -63,9 +64,10 @@
     <string name="live_update_content_format">Expanded Content Format</string>
     <string name="live_update_content_format_sum">Card primary body text. Supported: {down}, {up}, {ip}, etc.</string>
     <string name="live_update_subtext_format">Expanded Secondary Summary Format</string>
-    <string name="live_update_subtext_format_sum">Card secondary/trailing text. Supported: {profile}, {ip}, {traffic_total}, etc.</string>
+    <string name="live_update_subtext_format_sum">Card secondary/trailing text (optional). Supported: {profile}, {ip}, {traffic_total}, etc.</string>
     <string name="live_update_preview">Live Preview &amp; Variables</string>
     <string name="live_update_preview_summary_format">Capsule: %1$s\nCard: %2$s | %3$s | %4$s</string>
+    <string name="live_update_preview_summary_format_no_sub">Capsule: %1$s\nCard: %2$s | %3$s</string>
     <string name="live_update_preview_dialog_title">Live Update Preview &amp; Help</string>
     <string name="live_update_preview_dialog_message">Current Preview:\n\n[Collapsed Capsule]\n%1$s\n\n[Expanded Notification Card]\nTitle: %2$s\nContent: %3$s\nSubtext: %4$s\n\nSupported Variable Placeholders:\n• {profile} : Active node/profile name\n• {group} : Subscription/group name\n• {ip} : Active node IP address (egress IP or server host)\n• {server} : Node server address/host\n• {down} : Real-time download speed\n• {up} : Real-time upload speed\n• {traffic_down} : Total session downloaded traffic\n• {traffic_up} : Total session uploaded traffic\n• {traffic_total} : Total session traffic (down + up)\n• {duration} : Connection duration (hh:mm:ss)\n• {protocol} : Outbound protocol type\n• {latency} : Node latency\n• {direct_down} : Direct download speed\n• {direct_up} : Direct upload speed</string>
 
