@@ -9,6 +9,8 @@ import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.outbound.types.AutoSelector
+import io.nekohasekai.sagernet.ui.test.TestFormat
+import io.nekohasekai.sagernet.widget.ExitIp
 import java.util.Locale
 
 object LiveUpdateFormatter {
@@ -70,7 +72,54 @@ object LiveUpdateFormatter {
         val directUpSpeed: String,
         val ip: String,
         val server: String,
+        val country: String,
     )
+
+    fun cleanCountryName(name: String): String {
+        if (name.isEmpty()) return ""
+        var cleaned = name.trim()
+        if (cleaned.startsWith("中国") && cleaned.length > 2) {
+            cleaned = cleaned.removePrefix("中国")
+        }
+        cleaned = cleaned
+            .removeSuffix("特别行政区")
+            .removeSuffix("特别行政區")
+            .removeSuffix("联邦")
+            .removeSuffix("共和国")
+            .removeSuffix("共和國")
+            .trim()
+        return cleaned.ifEmpty { name.trim() }
+    }
+
+    fun inferCountryFromName(name: String): String {
+        if (name.isEmpty()) return ""
+        val n = name.lowercase(Locale.ROOT)
+        return when {
+            name.contains("🇯🇵") || name.contains("日本") || n.contains("japan") || n.contains("tokyo") || n.contains("osaka") -> "日本"
+            name.contains("🇭🇰") || name.contains("香港") || n.contains("hong kong") || n.contains("hongkong") -> "香港"
+            name.contains("🇹🇼") || name.contains("台湾") || name.contains("臺灣") || n.contains("taiwan") || n.contains("taipei") -> "台湾"
+            name.contains("🇸🇬") || name.contains("新加坡") || name.contains("狮城") || n.contains("singapore") -> "新加坡"
+            name.contains("🇺🇸") || name.contains("美国") || name.contains("美國") || n.contains("united states") || n.contains("usa") || n.contains("los angeles") || n.contains("silicon") -> "美国"
+            name.contains("🇬🇧") || name.contains("英国") || name.contains("英國") || n.contains("united kingdom") || n.contains("london") -> "英国"
+            name.contains("🇰🇷") || name.contains("韩国") || name.contains("韓國") || n.contains("korea") || n.contains("seoul") -> "韩国"
+            name.contains("🇩🇪") || name.contains("德国") || name.contains("德國") || n.contains("germany") || n.contains("frankfurt") -> "德国"
+            name.contains("🇫🇷") || name.contains("法国") || name.contains("法國") || n.contains("france") || n.contains("paris") -> "法国"
+            name.contains("🇨🇦") || name.contains("加拿大") || n.contains("canada") || n.contains("toronto") || n.contains("vancouver") -> "加拿大"
+            name.contains("🇦🇺") || name.contains("澳大利亚") || name.contains("澳洲") || n.contains("australia") || n.contains("sydney") -> "澳大利亚"
+            name.contains("🇷🇺") || name.contains("俄罗斯") || name.contains("俄羅斯") || n.contains("russia") || n.contains("moscow") -> "俄罗斯"
+            name.contains("🇲🇾") || name.contains("马来西亚") || name.contains("馬來西亞") || n.contains("malaysia") -> "马来西亚"
+            name.contains("🇹🇭") || name.contains("泰国") || name.contains("泰國") || n.contains("thailand") || n.contains("bangkok") -> "泰国"
+            name.contains("🇵🇭") || name.contains("菲律宾") || name.contains("菲律賓") || n.contains("philippines") -> "菲律宾"
+            name.contains("🇮🇳") || name.contains("印度") || n.contains("india") -> "印度"
+            name.contains("🇻🇳") || name.contains("越南") || n.contains("vietnam") -> "越南"
+            name.contains("🇹🇷") || name.contains("土耳其") || n.contains("turkey") || n.contains("istanbul") -> "土耳其"
+            name.contains("🇦🇷") || name.contains("阿根廷") || n.contains("argentina") -> "阿根廷"
+            name.contains("🇧🇷") || name.contains("巴西") || n.contains("brazil") -> "巴西"
+            name.contains("🇳🇱") || name.contains("荷兰") || name.contains("荷蘭") || n.contains("netherlands") || n.contains("amsterdam") -> "荷兰"
+            name.contains("🇨🇳") || name.contains("中国") || name.contains("中國") || n.contains("china") -> "中国"
+            else -> ""
+        }
+    }
 
     fun buildInfo(
         context: Context,
@@ -78,13 +127,28 @@ object LiveUpdateFormatter {
         stats: SpeedDisplayData,
         startTimeMs: Long,
         currentEgressIp: String? = null,
+        currentEgressCountry: String? = null,
     ): LiveUpdateInfo {
         var profileName = ""
         var groupName = ""
         var ip = currentEgressIp.orEmpty()
+        var country = currentEgressCountry.orEmpty()
+        var rawCountryCode = ""
         var server = ""
         var protocol = ""
         var latency = ""
+
+        if (country.isEmpty()) {
+            val exitInfo = ExitIp.info
+            if (exitInfo != null) {
+                if (ip.isEmpty() && exitInfo.ip.isNotEmpty()) ip = exitInfo.ip
+                if (exitInfo.country.isNotEmpty()) {
+                    country = cleanCountryName(exitInfo.country)
+                } else if (exitInfo.countryCode.isNotEmpty()) {
+                    rawCountryCode = exitInfo.countryCode
+                }
+            }
+        }
 
         val isAutoSelector = profile?.type == AutoSelectorProfiles.TYPE || profile?.outbound is AutoSelector
 
@@ -97,6 +161,9 @@ object LiveUpdateFormatter {
                 if (member != null) {
                     if (ip.isEmpty()) {
                         ip = member.ipOut?.ifEmpty { null } ?: member.outbound.server.ifEmpty { null } ?: member.displayAddress()
+                    }
+                    if (rawCountryCode.isEmpty() && !member.testCountry.isNullOrEmpty()) {
+                        rawCountryCode = member.testCountry!!
                     }
                     server = member.outbound.server.ifEmpty { member.displayAddress() }
                     protocol = member.type.uppercase(Locale.getDefault())
@@ -111,9 +178,23 @@ object LiveUpdateFormatter {
             if (ip.isEmpty()) {
                 ip = profile.ipOut?.ifEmpty { null } ?: profile.outbound.server.ifEmpty { null } ?: profile.displayAddress()
             }
+            if (rawCountryCode.isEmpty() && !profile.testCountry.isNullOrEmpty()) {
+                rawCountryCode = profile.testCountry!!
+            }
             server = profile.outbound.server.ifEmpty { profile.displayAddress() }
             protocol = profile.type.uppercase(Locale.getDefault())
             if (profile.latency > 0) latency = "${profile.latency}ms"
+        }
+
+        if (country.isEmpty() && rawCountryCode.isNotEmpty()) {
+            country = cleanCountryName(TestFormat.countryName(rawCountryCode))
+        }
+
+        if (country.isEmpty()) {
+            val inferred = inferCountryFromName(profileName).ifEmpty { inferCountryFromName(groupName) }
+            if (inferred.isNotEmpty()) {
+                country = inferred
+            }
         }
 
         val downSpeed = Formatter.formatFileSize(context, stats.rxRateProxy) + "/s"
@@ -150,10 +231,12 @@ object LiveUpdateFormatter {
             directUpSpeed = directUpSpeed,
             ip = ip,
             server = server,
+            country = country,
         )
     }
 
     fun getMockInfo(context: Context): LiveUpdateInfo {
+        val isZh = Locale.getDefault().language == "zh"
         return LiveUpdateInfo(
             profileName = "Hong Kong 01",
             groupName = "Premium",
@@ -169,6 +252,7 @@ object LiveUpdateFormatter {
             directUpSpeed = "0 B/s",
             ip = "104.28.19.24",
             server = "hk01.example.com",
+            country = if (isZh) "香港" else "Hong Kong",
         )
     }
 
@@ -177,6 +261,10 @@ object LiveUpdateFormatter {
         var res = template
             .replace("{profile}", info.profileName)
             .replace("{group}", info.groupName)
+            .replace("{country}", info.country)
+            .replace("{location}", info.country)
+            .replace("{ip_location}", info.country)
+            .replace("{country_name}", info.country)
             .replace("{ip}", info.ip)
             .replace("{server}", info.server)
             .replace("{down}", info.downSpeed)
@@ -194,6 +282,9 @@ object LiveUpdateFormatter {
             res = res.replace("[]", "").replace("【】", "")
         }
         if (info.ip.isEmpty()) {
+            res = res.replace("()", "").replace("（）", "")
+        }
+        if (info.country.isEmpty()) {
             res = res.replace("()", "").replace("（）", "")
         }
         res = res.replace(Regex("\\|\\s*\\|"), "|")

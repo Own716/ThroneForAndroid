@@ -28,10 +28,13 @@ import io.nekohasekai.sagernet.ktx.getColorAttr
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ktx.runOnMainDispatcher
 import io.nekohasekai.sagernet.ui.SwitchActivity
+import io.nekohasekai.sagernet.ui.test.TestFormat
+import io.nekohasekai.sagernet.widget.ExitIp
 import io.nekohasekai.sagernet.utils.Theme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.Locale
 
 /**
  * User can customize visibility of notification since Android 8.
@@ -83,6 +86,7 @@ class ServiceNotification(
     private val connectStartTime = System.currentTimeMillis()
     private var lastStats: SpeedDisplayData = SpeedDisplayData()
     private var currentEgressIp: String? = null
+    private var currentEgressCountry: String? = null
 
     private fun applyLiveUpdateProperties(
         builder: NotificationCompat.Builder,
@@ -140,7 +144,7 @@ class ServiceNotification(
             if (DataStore.liveUpdateEnabled) {
                 val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
                 val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
-                val info = LiveUpdateFormatter.buildInfo(service as Context, profile, stats, connectStartTime, currentEgressIp)
+                val info = LiveUpdateFormatter.buildInfo(service as Context, profile, stats, connectStartTime, currentEgressIp, currentEgressCountry)
                 val tpls = LiveUpdateFormatter.getTemplates()
 
                 val formattedCollapsed = LiveUpdateFormatter.format(tpls.collapsed, info).ifEmpty { title }
@@ -230,12 +234,14 @@ class ServiceNotification(
 
     /** A restart in place: the new profile's title and buttons, and no speed of the old one. */
     suspend fun refresh(newTitle: String) {
+        currentEgressIp = null
+        currentEgressCountry = null
         updateActions()
         useBuilder {
             if (DataStore.liveUpdateEnabled) {
                 val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
                 val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
-                val info = LiveUpdateFormatter.buildInfo(service as Context, profile, lastStats, connectStartTime, currentEgressIp)
+                val info = LiveUpdateFormatter.buildInfo(service as Context, profile, lastStats, connectStartTime, currentEgressIp, currentEgressCountry)
                 val tpls = LiveUpdateFormatter.getTemplates()
 
                 val formattedCollapsed = LiveUpdateFormatter.format(tpls.collapsed, info).ifEmpty { newTitle }
@@ -277,6 +283,9 @@ class ServiceNotification(
             }
         }
         update()
+        if (DataStore.liveUpdateEnabled) {
+            probeEgress()
+        }
     }
 
     suspend fun refreshLiveUpdate() {
@@ -297,19 +306,110 @@ class ServiceNotification(
         useBuilder { it.priority = NotificationCompat.PRIORITY_LOW }
         update()
         if (DataStore.liveUpdateEnabled) {
-            runOnDefaultDispatcher {
-                try {
-                    val conn = java.net.URL("https://api.ipify.org").openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 3000
-                    conn.readTimeout = 3000
-                    val ip = conn.inputStream.bufferedReader().use { it.readText().trim() }
-                    if (ip.isNotEmpty()) {
-                        currentEgressIp = ip
-                        postNotificationSpeedUpdate(lastStats)
-                    }
-                } catch (_: Throwable) {}
-            }
+            probeEgress()
         }
+    }
+
+    private fun probeEgress() {
+        if (!DataStore.liveUpdateEnabled) return
+        runOnDefaultDispatcher {
+            val exitInfo = ExitIp.info
+            if (exitInfo != null && exitInfo.ip.isNotEmpty()) {
+                currentEgressIp = exitInfo.ip
+                if (exitInfo.country.isNotEmpty()) {
+                    currentEgressCountry = LiveUpdateFormatter.cleanCountryName(exitInfo.country)
+                } else if (exitInfo.countryCode.isNotEmpty()) {
+                    currentEgressCountry = LiveUpdateFormatter.cleanCountryName(TestFormat.countryName(exitInfo.countryCode))
+                }
+                postNotificationSpeedUpdate(lastStats)
+            }
+
+            try {
+                val (ip, country) = queryEgress()
+                var changed = false
+                if (!ip.isNullOrEmpty() && ip != currentEgressIp) {
+                    currentEgressIp = ip
+                    changed = true
+                }
+                if (!country.isNullOrEmpty() && country != currentEgressCountry) {
+                    currentEgressCountry = country
+                    changed = true
+                }
+                if (changed) {
+                    postNotificationSpeedUpdate(lastStats)
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun queryEgress(): Pair<String?, String?> {
+        // 1. ip-api.com
+        try {
+            val lang = if (Locale.getDefault().language == "zh") "zh-CN" else "en"
+            val conn = java.net.URL("http://ip-api.com/json/?fields=status,country,countryCode,query&lang=$lang").openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val obj = JSONObject(body)
+            if (obj.optString("status") == "success") {
+                val ip = obj.optString("query")
+                val country = obj.optString("country")
+                val countryCode = obj.optString("countryCode")
+                val resCountry = LiveUpdateFormatter.cleanCountryName(
+                    if (country.isNotEmpty()) country else TestFormat.countryName(countryCode)
+                )
+                return Pair(ip.ifEmpty { null }, resCountry.ifEmpty { null })
+            }
+        } catch (_: Throwable) {}
+
+        // 2. ipwho.is
+        try {
+            val conn = java.net.URL("https://ipwho.is/").openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val obj = JSONObject(body)
+            if (obj.optBoolean("success", false)) {
+                val ip = obj.optString("ip")
+                val countryCode = obj.optString("country_code")
+                val country = obj.optString("country")
+                val resCountry = LiveUpdateFormatter.cleanCountryName(
+                    if (countryCode.isNotEmpty()) TestFormat.countryName(countryCode) else country
+                )
+                return Pair(ip.ifEmpty { null }, resCountry.ifEmpty { null })
+            }
+        } catch (_: Throwable) {}
+
+        // 3. cloudflare trace
+        try {
+            val conn = java.net.URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            val lines = conn.inputStream.bufferedReader().use { it.readLines() }
+            var ip: String? = null
+            var loc: String? = null
+            for (line in lines) {
+                if (line.startsWith("ip=")) ip = line.removePrefix("ip=").trim()
+                if (line.startsWith("loc=")) loc = line.removePrefix("loc=").trim()
+            }
+            val resCountry = if (!loc.isNullOrEmpty()) LiveUpdateFormatter.cleanCountryName(TestFormat.countryName(loc)) else null
+            if (!ip.isNullOrEmpty() || !resCountry.isNullOrEmpty()) {
+                return Pair(ip, resCountry)
+            }
+        } catch (_: Throwable) {}
+
+        // 4. ipify fallback
+        try {
+            val conn = java.net.URL("https://api.ipify.org").openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 3000
+            conn.readTimeout = 3000
+            val ip = conn.inputStream.bufferedReader().use { it.readText().trim() }
+            if (ip.isNotEmpty()) {
+                return Pair(ip, null)
+            }
+        } catch (_: Throwable) {}
+
+        return Pair(null, null)
     }
 
     private val showDirectSpeed = DataStore.showDirectSpeed
@@ -344,7 +444,7 @@ class ServiceNotification(
             builder.priority = NotificationCompat.PRIORITY_LOW
             val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
             val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
-            val info = LiveUpdateFormatter.buildInfo(service as Context, profile, SpeedDisplayData(), connectStartTime, currentEgressIp)
+            val info = LiveUpdateFormatter.buildInfo(service as Context, profile, SpeedDisplayData(), connectStartTime, currentEgressIp, currentEgressCountry)
             val tpls = LiveUpdateFormatter.getTemplates()
             val formattedCollapsed = LiveUpdateFormatter.format(tpls.collapsed, info).ifEmpty { title }
             val formattedTitle = LiveUpdateFormatter.format(tpls.title, info).ifEmpty { title }
