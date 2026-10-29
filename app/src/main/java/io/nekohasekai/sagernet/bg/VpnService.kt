@@ -205,9 +205,15 @@ class VpnService : BaseVpnService(),
     }
 
     fun updateUnderlyingNetwork(builder: Builder? = null) {
-        SagerNet.underlyingNetwork?.let {
-            builder?.setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
-                ?: setUnderlyingNetworks(arrayOf(SagerNet.underlyingNetwork))
+        val networks = SagerNet.underlyingNetwork?.let { arrayOf(it) }
+        try {
+            if (builder != null) {
+                builder.setUnderlyingNetworks(networks)
+            } else {
+                setUnderlyingNetworks(networks)
+            }
+        } catch (e: Exception) {
+            Logs.w("updateUnderlyingNetwork: $e")
         }
     }
 

@@ -41,7 +41,7 @@ object AutoSelectorRuntime {
     private const val POLL_MS = 2000L
     private const val POLL_SCREEN_OFF_MS = 10_000L
     private const val HEALTH_PERSIST_MS = 60_000L
-    private const val EXHAUSTED_GRACE_MS = 20_000L
+    private const val EXHAUSTED_GRACE_MS = 60_000L
     private const val REBUILD_BACKOFF_MIN_S = 60
     private const val REBUILD_BACKOFF_MAX_S = 600
 
@@ -379,6 +379,7 @@ object AutoSelectorRuntime {
     private fun onSample(run: Run, sample: AutoSelectorCore.Sample) {
         val now = System.currentTimeMillis()
         val idle = run.service.data.idlePaused(run.core.box)
+        val isScreenOff = run.service.data.notification?.screenOn?.value == false
         var exhausted = false
         var persist = false
         synchronized(lock) {
@@ -386,8 +387,9 @@ object AutoSelectorRuntime {
             run.sample = sample
             // "untested" counts as usable: it has not failed, only not been reached.
             val usable = sample.members.count { it.isUsable || it.state == AutoSelectorStatus.STATE_UNTESTED }
-            // A suspended core (dropped Wi-Fi) must never count as an exhausted pool, nor one paused for device idle.
-            val everythingDead = usable == 0 && sample.membersProbed > 0 && !sample.suspended && !idle &&
+            // A suspended core (dropped Wi-Fi) must never count as an exhausted pool, nor one paused for device idle,
+            // nor while the screen is off (prevent false-positive rebuilds and restarts during sleep).
+            val everythingDead = usable == 0 && sample.membersProbed > 0 && !sample.suspended && !idle && !isScreenOff &&
                 sample.phase != "starting"
             if (!everythingDead) {
                 run.exhaustedSinceMs = 0
@@ -408,7 +410,7 @@ object AutoSelectorRuntime {
         }
         // Nothing shows it while the screen is off, and a frozen UI process would only pile the callbacks up; the
         // screen coming on polls and publishes at once.
-        if (run.service.data.notification?.screenOn?.value != false) publish()
+        if (!isScreenOff) publish()
         if (persist) persistHealth(run)
         if (exhausted) onExhausted(run)
     }

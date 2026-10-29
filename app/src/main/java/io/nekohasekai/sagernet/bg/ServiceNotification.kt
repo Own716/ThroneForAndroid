@@ -24,6 +24,8 @@ import io.nekohasekai.sagernet.database.ProfileOrder
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.app
+import io.nekohasekai.sagernet.ktx.appHttpClient
+import io.nekohasekai.sagernet.ktx.appUserAgent
 import io.nekohasekai.sagernet.ktx.getColorAttr
 import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ktx.runOnMainDispatcher
@@ -34,6 +36,7 @@ import io.nekohasekai.sagernet.utils.Theme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.Request
 import java.util.Locale
 
 /**
@@ -310,22 +313,42 @@ class ServiceNotification(
         }
     }
 
+    private fun isAcceptableCountry(inferredNodeCountry: String, resultCountry: String): Boolean {
+        if (resultCountry.isEmpty()) return false
+        val clean = LiveUpdateFormatter.cleanCountryName(resultCountry)
+        // If the current proxy node is an overseas node (e.g. 日本, 香港, 台湾, etc.),
+        // reject "中国" / "China" returned from domestic direct connection leaks.
+        if (inferredNodeCountry.isNotEmpty() && inferredNodeCountry != "中国" &&
+            (clean == "中国" || resultCountry.contains("China", ignoreCase = true) || resultCountry.equals("CN", ignoreCase = true))
+        ) {
+            return false
+        }
+        return true
+    }
+
     private fun probeEgress() {
         if (!DataStore.liveUpdateEnabled) return
         runOnDefaultDispatcher {
+            val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
+            val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
+            val inferred = if (profile != null) LiveUpdateFormatter.inferCountryFromName(profile.displayName()) else ""
+
             val exitInfo = ExitIp.info
             if (exitInfo != null && exitInfo.ip.isNotEmpty()) {
                 currentEgressIp = exitInfo.ip
-                if (exitInfo.country.isNotEmpty()) {
-                    currentEgressCountry = LiveUpdateFormatter.cleanCountryName(exitInfo.country)
+                val candidateCountry = if (exitInfo.country.isNotEmpty()) {
+                    LiveUpdateFormatter.cleanCountryName(exitInfo.country)
                 } else if (exitInfo.countryCode.isNotEmpty()) {
-                    currentEgressCountry = LiveUpdateFormatter.cleanCountryName(TestFormat.countryName(exitInfo.countryCode))
+                    LiveUpdateFormatter.cleanCountryName(TestFormat.countryName(exitInfo.countryCode))
+                } else null
+                if (!candidateCountry.isNullOrEmpty() && isAcceptableCountry(inferred, candidateCountry)) {
+                    currentEgressCountry = candidateCountry
                 }
                 postNotificationSpeedUpdate(lastStats)
             }
 
             try {
-                val (ip, country) = queryEgress()
+                val (ip, country) = queryEgress(inferred)
                 var changed = false
                 if (!ip.isNullOrEmpty() && ip != currentEgressIp) {
                     currentEgressIp = ip
@@ -342,70 +365,106 @@ class ServiceNotification(
         }
     }
 
-    private fun queryEgress(): Pair<String?, String?> {
+    private fun queryEgress(inferredCountry: String = ""): Pair<String?, String?> {
+        val client = try {
+            appHttpClient(viaProxy = true, timeoutSeconds = 6)
+        } catch (_: Throwable) {
+            return Pair(null, null)
+        }
+        val userAgent = appUserAgent()
+
         // 1. ip-api.com
         try {
             val lang = if (Locale.getDefault().language == "zh") "zh-CN" else "en"
-            val conn = java.net.URL("http://ip-api.com/json/?fields=status,country,countryCode,query&lang=$lang").openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val obj = JSONObject(body)
-            if (obj.optString("status") == "success") {
-                val ip = obj.optString("query")
-                val country = obj.optString("country")
-                val countryCode = obj.optString("countryCode")
-                val resCountry = LiveUpdateFormatter.cleanCountryName(
-                    if (country.isNotEmpty()) country else TestFormat.countryName(countryCode)
-                )
-                return Pair(ip.ifEmpty { null }, resCountry.ifEmpty { null })
+            val req = Request.Builder()
+                .url("http://ip-api.com/json/?fields=status,country,countryCode,query&lang=$lang")
+                .header("User-Agent", userAgent)
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    val obj = JSONObject(body)
+                    if (obj.optString("status") == "success") {
+                        val ip = obj.optString("query")
+                        val country = obj.optString("country")
+                        val countryCode = obj.optString("countryCode")
+                        val resCountry = LiveUpdateFormatter.cleanCountryName(
+                            if (country.isNotEmpty()) country else TestFormat.countryName(countryCode)
+                        )
+                        if (isAcceptableCountry(inferredCountry, resCountry)) {
+                            return Pair(ip.ifEmpty { null }, resCountry.ifEmpty { null })
+                        } else if (ip.isNotEmpty()) {
+                            return Pair(ip, null)
+                        }
+                    }
+                }
             }
         } catch (_: Throwable) {}
 
         // 2. ipwho.is
         try {
-            val conn = java.net.URL("https://ipwho.is/").openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val obj = JSONObject(body)
-            if (obj.optBoolean("success", false)) {
-                val ip = obj.optString("ip")
-                val countryCode = obj.optString("country_code")
-                val country = obj.optString("country")
-                val resCountry = LiveUpdateFormatter.cleanCountryName(
-                    if (countryCode.isNotEmpty()) TestFormat.countryName(countryCode) else country
-                )
-                return Pair(ip.ifEmpty { null }, resCountry.ifEmpty { null })
+            val req = Request.Builder()
+                .url("https://ipwho.is/")
+                .header("User-Agent", userAgent)
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string().orEmpty()
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success", false)) {
+                        val ip = obj.optString("ip")
+                        val countryCode = obj.optString("country_code")
+                        val country = obj.optString("country")
+                        val resCountry = LiveUpdateFormatter.cleanCountryName(
+                            if (countryCode.isNotEmpty()) TestFormat.countryName(countryCode) else country
+                        )
+                        if (isAcceptableCountry(inferredCountry, resCountry)) {
+                            return Pair(ip.ifEmpty { null }, resCountry.ifEmpty { null })
+                        } else if (ip.isNotEmpty()) {
+                            return Pair(ip, null)
+                        }
+                    }
+                }
             }
         } catch (_: Throwable) {}
 
         // 3. cloudflare trace
         try {
-            val conn = java.net.URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
-            val lines = conn.inputStream.bufferedReader().use { it.readLines() }
-            var ip: String? = null
-            var loc: String? = null
-            for (line in lines) {
-                if (line.startsWith("ip=")) ip = line.removePrefix("ip=").trim()
-                if (line.startsWith("loc=")) loc = line.removePrefix("loc=").trim()
-            }
-            val resCountry = if (!loc.isNullOrEmpty()) LiveUpdateFormatter.cleanCountryName(TestFormat.countryName(loc)) else null
-            if (!ip.isNullOrEmpty() || !resCountry.isNullOrEmpty()) {
-                return Pair(ip, resCountry)
+            val req = Request.Builder()
+                .url("https://www.cloudflare.com/cdn-cgi/trace")
+                .header("User-Agent", userAgent)
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val lines = resp.body?.string().orEmpty().lines()
+                    var ip: String? = null
+                    var loc: String? = null
+                    for (line in lines) {
+                        if (line.startsWith("ip=")) ip = line.removePrefix("ip=").trim()
+                        if (line.startsWith("loc=")) loc = line.removePrefix("loc=").trim()
+                    }
+                    val resCountry = if (!loc.isNullOrEmpty()) LiveUpdateFormatter.cleanCountryName(TestFormat.countryName(loc)) else null
+                    val acceptable = resCountry != null && isAcceptableCountry(inferredCountry, resCountry)
+                    if (!ip.isNullOrEmpty() || acceptable) {
+                        return Pair(ip, if (acceptable) resCountry else null)
+                    }
+                }
             }
         } catch (_: Throwable) {}
 
         // 4. ipify fallback
         try {
-            val conn = java.net.URL("https://api.ipify.org").openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 3000
-            conn.readTimeout = 3000
-            val ip = conn.inputStream.bufferedReader().use { it.readText().trim() }
-            if (ip.isNotEmpty()) {
-                return Pair(ip, null)
+            val req = Request.Builder()
+                .url("https://api.ipify.org")
+                .header("User-Agent", userAgent)
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    val ip = resp.body?.string().orEmpty().trim()
+                    if (ip.isNotEmpty()) {
+                        return Pair(ip, null)
+                    }
+                }
             }
         } catch (_: Throwable) {}
 
@@ -475,6 +534,7 @@ class ServiceNotification(
         service.registerReceiver(this, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
         })
 
         runOnMainDispatcher {
@@ -538,9 +598,19 @@ class ServiceNotification(
         ).setShowsUserInterface(false).build()
 
     override fun onReceive(context: Context, intent: Intent) {
-        val on = intent.action == Intent.ACTION_SCREEN_ON
-        screenOn.value = on
-        listenPostSpeed = on
+        when (intent.action) {
+            Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                screenOn.value = true
+                listenPostSpeed = true
+                if (DataStore.liveUpdateEnabled && (currentEgressIp.isNullOrEmpty() || currentEgressCountry.isNullOrEmpty())) {
+                    probeEgress()
+                }
+            }
+            Intent.ACTION_SCREEN_OFF -> {
+                screenOn.value = false
+                listenPostSpeed = false
+            }
+        }
     }
 
 

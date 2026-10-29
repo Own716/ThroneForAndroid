@@ -116,7 +116,7 @@ object LiveUpdateFormatter {
             name.contains("🇦🇷") || name.contains("阿根廷") || n.contains("argentina") -> "阿根廷"
             name.contains("🇧🇷") || name.contains("巴西") || n.contains("brazil") -> "巴西"
             name.contains("🇳🇱") || name.contains("荷兰") || name.contains("荷蘭") || n.contains("netherlands") || n.contains("amsterdam") -> "荷兰"
-            name.contains("🇨🇳") || name.contains("中国") || name.contains("中國") || n.contains("china") -> "中国"
+            name.contains("🇨🇳") || name.contains("回国") || name.contains("国内") -> "中国"
             else -> ""
         }
     }

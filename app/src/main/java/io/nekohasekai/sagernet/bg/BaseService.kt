@@ -125,29 +125,61 @@ class BaseService {
         /** A plain stop asked for while a restart was stopping the old core: the restart ends stopped instead. */
         var stopRequested = false
 
+        private var wakeLock: PowerManager.WakeLock? = null
+
+        fun acquireWakeLock() {
+            try {
+                if (wakeLock == null) {
+                    val pm = (service as Context).getSystemService(Context.POWER_SERVICE) as PowerManager
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Throne:VpnKeepAlive").apply {
+                        setReferenceCounted(false)
+                    }
+                }
+                if (wakeLock?.isHeld == false) {
+                    wakeLock?.acquire()
+                    Logs.i("[KeepAlive] Partial WakeLock acquired")
+                }
+            } catch (e: Throwable) {
+                Logs.w("[KeepAlive] Failed to acquire WakeLock: ${e.message}")
+            }
+        }
+
+        fun releaseWakeLock() {
+            try {
+                if (wakeLock?.isHeld == true) {
+                    wakeLock?.release()
+                    Logs.i("[KeepAlive] Partial WakeLock released")
+                }
+            } catch (e: Throwable) {
+                Logs.w("[KeepAlive] Failed to release WakeLock: ${e.message}")
+            }
+        }
+
         fun changeState(s: State, msg: String? = null) {
             if (state == s && msg == null) return
             state = s
             DataStore.serviceState = s
+            if (s == State.Connected) {
+                acquireWakeLock()
+            } else if (s == State.Stopped || s == State.Idle) {
+                releaseWakeLock()
+            }
             binder.stateChanged(s, msg)
             Widgets.push(service as Context)
         }
 
         /** Reads the idle mode when the job runs, so the last of several quick events always wins. */
         private fun applyIdleMode() = runOnDefaultDispatcher {
+            // Keep proxy core running smoothly across idle/wake transitions.
+            // Do NOT pause the core in Doze mode or reset network connections on wake,
+            // which causes network drops and disconnects background apps upon unlocking.
             idleLock.withLock {
                 val box = proxy?.boxOrNull ?: return@withLock
-                if (SagerNet.power.isDeviceIdleMode) {
-                    if (pausedBox !== box) {
-                        box.pause()
-                        pausedBox = box
-                    }
-                } else if (pausedBox === box) {
+                if (pausedBox === box) {
                     pausedBox = null
-                    box.wake()
-                    if (DataStore.configurationStore.getBoolean(Key.WAKE_RESET_CONNECTIONS, true)) {
-                        box.resetNetwork()
-                    }
+                    try {
+                        box.wake()
+                    } catch (_: Throwable) {}
                 }
             }
         }
@@ -367,6 +399,8 @@ class BaseService {
                 recordCleanupFailure("network-listener-stop", error)
             }
 
+            data.releaseWakeLock()
+
             Logs.i(
                 "ServiceLifecycleTrace serviceId=$serviceId proxyId=$proxyId " +
                     "profileId=${proxy?.profile?.id ?: -1L} stage=kill done " +
@@ -545,7 +579,12 @@ class BaseService {
             // Tracks the underlying network for VpnService.setUnderlyingNetworks only; the
             // "reset on network change" switch is applied by NativeInterface's monitor callback.
             DefaultNetworkListener.start(this) { network ->
-                if (network == null) return@start
+                if (network == null) {
+                    SagerNet.underlyingNetwork = null
+                    upstreamInterfaceName = null
+                    DataStore.vpnService?.updateUnderlyingNetwork()
+                    return@start
+                }
                 SagerNet.connectivity.getLinkProperties(network)?.also { link ->
                     SagerNet.underlyingNetwork = network
                     DataStore.vpnService?.updateUnderlyingNetwork()

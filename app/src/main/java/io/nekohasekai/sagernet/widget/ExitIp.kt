@@ -156,11 +156,25 @@ object ExitIp {
         val selected = DataStore.exitLookupProvider
         val chain = PROVIDERS.find { it.id == selected }?.let { listOf(it) } ?: AUTO_CHAIN
         val deadline = SystemClock.elapsedRealtime() + CHAIN_BUDGET_MS
+        val currentProfile = ProfileManager.getProfile(DataStore.currentProfile)
+        val inferredCountry = currentProfile?.displayName()?.let {
+            io.nekohasekai.sagernet.bg.LiveUpdateFormatter.inferCountryFromName(it)
+        }.orEmpty()
         for (provider in chain) {
             val remaining = deadline - SystemClock.elapsedRealtime()
             if (remaining <= 0 || !active()) break
             try {
-                query(client, provider, remaining)?.let { return it }
+                val res = query(client, provider, remaining)
+                if (res != null) {
+                    val cleanCountry = io.nekohasekai.sagernet.bg.LiveUpdateFormatter.cleanCountryName(res.country)
+                    if (inferredCountry.isNotEmpty() && inferredCountry != "中国" &&
+                        (cleanCountry == "中国" || res.countryCode.equals("CN", ignoreCase = true) || res.country.contains("China", ignoreCase = true))
+                    ) {
+                        Logs.w("exit IP lookup: ${provider.id} reported domestic leak ($cleanCountry), skipping")
+                        continue
+                    }
+                    return res
+                }
                 Logs.w("exit IP lookup: ${provider.id} named no country")
             } catch (e: Exception) {
                 Logs.w("exit IP lookup: ${provider.id}: ${e.readableMessage}")
