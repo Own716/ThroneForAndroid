@@ -1,0 +1,142 @@
+name: preview.yml
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  libcore:
+    name: 原生构建 (LibCore)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: ThroneCore AAR and schema
+        uses: ./.github/actions/throne-core
+
+      - name: Verify ThroneCore AAR
+        run: |
+          test -s app/libs/ThroneCore.aar
+          unzip -p app/libs/ThroneCore.aar classes.jar > /tmp/throne-core-classes.jar
+          unzip -l /tmp/throne-core-classes.jar | grep -q 'io/throneproj/mobile/Mobile.class'
+          unzip -l /tmp/throne-core-classes.jar | grep -q 'go/Seq.class'
+
+      - name: Stage core files
+        run: |
+          mkdir -p /tmp/core-dist
+          cp app/libs/ThroneCore.aar /tmp/core-dist/
+          cp app/src/main/assets/schema/sing-box.json /tmp/core-dist/
+
+      - name: Upload ThroneCore Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: throne-core-aar
+          path: /tmp/core-dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: 构建OSS APK
+    runs-on: ubuntu-latest
+    needs:
+      - libcore
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download ThroneCore Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: throne-core-aar
+          path: /tmp/core-dist
+
+      - name: Place ThroneCore files
+        run: |
+          mkdir -p app/libs app/src/main/assets/schema
+          cp /tmp/core-dist/ThroneCore.aar app/libs/
+          cp /tmp/core-dist/sing-box.json app/src/main/assets/schema/
+
+      - name: Fetch routeprofiles snapshot
+        uses: ./.github/actions/routeprofiles
+
+      - name: Fetch sing-box dashboard
+        uses: ./.github/actions/sing-box-dashboard
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Gradle Build OSS Release
+        run: |
+          ./gradlew --stacktrace :app:assembleOssRelease
+
+      - name: Collect and verify release assets
+        run: |
+          python3 buildScript/release_assets.py app/build/outputs/apk/oss/release dist preview
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: APKs
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: 发布 预览 发布
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: APKs
+          path: dist
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION_NAME=$(sed -n 's/^VERSION_NAME=//p' nb4a.properties | tr -d '\r[:space:]')
+          TAG="v${VERSION_NAME}.${GITHUB_RUN_NUMBER}"
+          echo "Publishing release with clean version tag: $TAG"
+          
+          # Delete existing release with same tag if any
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          git push --delete origin "$TAG" 2>/dev/null || true
+          
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "Throne for Android $TAG"

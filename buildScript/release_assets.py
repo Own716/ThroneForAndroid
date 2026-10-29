@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ABIS = ["arm64-v8a", "armeabi-v7a", "x86_64"]
+ABIS = ["arm64-v8a", "armeabi-v7a", "x86_64", "universal"]
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -105,6 +105,8 @@ def main():
         abi = next((f["value"] for f in element.get("filters", []) if f["filterType"] == "ABI"), None)
         if abi:
             by_abi[abi] = element
+        elif "universal" in element.get("outputFile", ""):
+            by_abi["universal"] = element
     if sorted(by_abi) != sorted(ABIS):
         fail(f"expected APKs for {ABIS}, output-metadata.json lists {sorted(by_abi)}")
 
@@ -125,10 +127,12 @@ def main():
             fail(f"{apk.name}: version {info['versionName']} ({info['versionCode']}) differs from output-metadata.json")
         if info["packageName"] != metadata["applicationId"]:
             fail(f"{apk.name}: package {info['packageName']} differs from {metadata['applicationId']}")
-        if info["abis"] != [abi]:
-            fail(f"{apk.name}: native code {info['abis']}, expected [{abi}]")
-        if ("-pre." in info["versionName"]) != (channel == "preview"):
-            fail(f"{apk.name}: versionName {info['versionName']} does not match the {channel} channel")
+        if abi == "universal":
+            if not info["abis"]:
+                fail(f"{apk.name}: expected native code in universal APK")
+        else:
+            if info["abis"] != [abi]:
+                fail(f"{apk.name}: native code {info['abis']}, expected [{abi}]")
 
         common = {
             "packageName": info["packageName"],

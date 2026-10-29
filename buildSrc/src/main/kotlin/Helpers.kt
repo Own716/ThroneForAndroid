@@ -120,6 +120,19 @@ fun Project.setupAppCommon() {
 
     val keystoreB64 = System.getenv("SIGNING_KEYSTORE_B64")?.trim()
     if (keystoreB64.isNullOrEmpty()) {
+        val repoKeystore = rootProject.file("debug.keystore")
+        if (repoKeystore.exists()) {
+            android.apply {
+                val fixedRelease = signingConfigs.maybeCreate("fixedRelease").apply {
+                    storeFile = repoKeystore
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
+                buildTypes.getByName("release").signingConfig = fixedRelease
+            }
+            return
+        }
         android.apply {
             buildTypes.getByName("release").signingConfig = signingConfigs.getByName("debug")
         }
@@ -180,8 +193,8 @@ fun Project.setupApp() {
         // ThroneCore is built for android/arm64, android/arm and android/amd64 only.
         splits.abi {
             reset()
-            isEnable = false
-            isUniversalApk = false
+            isEnable = true
+            isUniversalApk = true
             include("armeabi-v7a")
             include("arm64-v8a")
             include("x86_64")
