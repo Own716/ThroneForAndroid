@@ -13,6 +13,7 @@ import androidx.preference.Preference
 import androidx.preference.SwitchPreference
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import io.nekohasekai.sagernet.bg.LiveUpdateFormatter
+import io.nekohasekai.sagernet.Action
 import io.nekohasekai.sagernet.BootReceiver
 import io.nekohasekai.sagernet.BuildConfig
 import io.nekohasekai.sagernet.Key
@@ -157,39 +158,60 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
         reloadOn(Key.SHOW_DIRECT_SPEED)
 
         val liveUpdateEnabled = pref<SwitchPreference>(Key.LIVE_UPDATE_ENABLED)
+        val liveUpdateShowCapsule = pref<SwitchPreference>(Key.LIVE_UPDATE_SHOW_CAPSULE)
         val liveUpdatePreset = pref<SimpleMenuPreference>(Key.LIVE_UPDATE_PRESET)
+        val liveUpdateCollapsed = pref<EditTextPreference>(Key.LIVE_UPDATE_COLLAPSED_FORMAT)
         val liveUpdateTitle = pref<EditTextPreference>(Key.LIVE_UPDATE_TITLE_FORMAT)
         val liveUpdateContent = pref<EditTextPreference>(Key.LIVE_UPDATE_CONTENT_FORMAT)
         val liveUpdateSubtext = pref<EditTextPreference>(Key.LIVE_UPDATE_SUBTEXT_FORMAT)
         val liveUpdatePreview = pref<Preference>("liveUpdatePreview")
 
+        fun notifyNotificationUpdate() {
+            if (DataStore.serviceState.started) {
+                val intent = Intent(Action.REFRESH_NOTIFICATION)
+                intent.setPackage(requireContext().packageName)
+                requireContext().sendBroadcast(intent)
+            }
+        }
+
         fun updateLiveUpdatePreview() {
             val mockInfo = LiveUpdateFormatter.getMockInfo(requireContext())
-            val (titleTpl, contentTpl, subTextTpl) = LiveUpdateFormatter.getTemplates()
-            val renderedTitle = LiveUpdateFormatter.format(titleTpl, mockInfo)
-            val renderedContent = LiveUpdateFormatter.format(contentTpl, mockInfo)
-            val renderedSub = LiveUpdateFormatter.format(subTextTpl, mockInfo)
-            liveUpdatePreview.summary = "$renderedTitle\n$renderedContent | $renderedSub"
+            val tpls = LiveUpdateFormatter.getTemplates()
+            val renderedCollapsed = LiveUpdateFormatter.format(tpls.collapsed, mockInfo)
+            val renderedTitle = LiveUpdateFormatter.format(tpls.title, mockInfo)
+            val renderedContent = LiveUpdateFormatter.format(tpls.content, mockInfo)
+            val renderedSub = LiveUpdateFormatter.format(tpls.subText, mockInfo)
+            liveUpdatePreview.summary = getString(
+                R.string.live_update_preview_summary_format,
+                renderedCollapsed,
+                renderedTitle,
+                renderedContent,
+                renderedSub
+            )
         }
 
         fun syncCustomFieldVisibility(preset: String) {
             val isCustom = preset == LiveUpdateFormatter.PRESET_CUSTOM
+            liveUpdateCollapsed.isEnabled = isCustom
             liveUpdateTitle.isEnabled = isCustom
             liveUpdateContent.isEnabled = isCustom
             liveUpdateSubtext.isEnabled = isCustom
 
             when (preset) {
                 LiveUpdateFormatter.PRESET_STANDARD -> {
+                    liveUpdateCollapsed.text = LiveUpdateFormatter.DEFAULT_STANDARD_COLLAPSED
                     liveUpdateTitle.text = LiveUpdateFormatter.DEFAULT_STANDARD_TITLE
                     liveUpdateContent.text = LiveUpdateFormatter.DEFAULT_STANDARD_CONTENT
                     liveUpdateSubtext.text = LiveUpdateFormatter.DEFAULT_STANDARD_SUBTEXT
                 }
                 LiveUpdateFormatter.PRESET_COMPACT -> {
+                    liveUpdateCollapsed.text = LiveUpdateFormatter.DEFAULT_COMPACT_COLLAPSED
                     liveUpdateTitle.text = LiveUpdateFormatter.DEFAULT_COMPACT_TITLE
                     liveUpdateContent.text = LiveUpdateFormatter.DEFAULT_COMPACT_CONTENT
                     liveUpdateSubtext.text = LiveUpdateFormatter.DEFAULT_COMPACT_SUBTEXT
                 }
                 LiveUpdateFormatter.PRESET_DETAILED -> {
+                    liveUpdateCollapsed.text = LiveUpdateFormatter.DEFAULT_DETAILED_COLLAPSED
                     liveUpdateTitle.text = LiveUpdateFormatter.DEFAULT_DETAILED_TITLE
                     liveUpdateContent.text = LiveUpdateFormatter.DEFAULT_DETAILED_CONTENT
                     liveUpdateSubtext.text = LiveUpdateFormatter.DEFAULT_DETAILED_SUBTEXT
@@ -198,7 +220,18 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
         }
 
         liveUpdateEnabled.setOnPreferenceChangeListener { _, _ ->
+            view?.post {
+                updateLiveUpdatePreview()
+                notifyNotificationUpdate()
+            }
             needReload()
+            true
+        }
+
+        liveUpdateShowCapsule.setOnPreferenceChangeListener { _, _ ->
+            view?.post {
+                notifyNotificationUpdate()
+            }
             true
         }
 
@@ -208,30 +241,46 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
         liveUpdatePreset.setOnPreferenceChangeListener { _, newValue ->
             val newPreset = newValue as String
             syncCustomFieldVisibility(newPreset)
-            view?.post { updateLiveUpdatePreview() }
+            view?.post {
+                updateLiveUpdatePreview()
+                notifyNotificationUpdate()
+            }
             needReload()
             true
         }
 
         val onFormatChangeListener = Preference.OnPreferenceChangeListener { _, _ ->
-            view?.post { updateLiveUpdatePreview() }
+            view?.post {
+                updateLiveUpdatePreview()
+                notifyNotificationUpdate()
+            }
             needReload()
             true
         }
+        liveUpdateCollapsed.onPreferenceChangeListener = onFormatChangeListener
         liveUpdateTitle.onPreferenceChangeListener = onFormatChangeListener
         liveUpdateContent.onPreferenceChangeListener = onFormatChangeListener
         liveUpdateSubtext.onPreferenceChangeListener = onFormatChangeListener
 
         liveUpdatePreview.setOnPreferenceClickListener {
             val mockInfo = LiveUpdateFormatter.getMockInfo(requireContext())
-            val (titleTpl, contentTpl, subTextTpl) = LiveUpdateFormatter.getTemplates()
-            val renderedTitle = LiveUpdateFormatter.format(titleTpl, mockInfo)
-            val renderedContent = LiveUpdateFormatter.format(contentTpl, mockInfo)
-            val renderedSub = LiveUpdateFormatter.format(subTextTpl, mockInfo)
+            val tpls = LiveUpdateFormatter.getTemplates()
+            val renderedCollapsed = LiveUpdateFormatter.format(tpls.collapsed, mockInfo)
+            val renderedTitle = LiveUpdateFormatter.format(tpls.title, mockInfo)
+            val renderedContent = LiveUpdateFormatter.format(tpls.content, mockInfo)
+            val renderedSub = LiveUpdateFormatter.format(tpls.subText, mockInfo)
 
             MaterialAlertDialogBuilder(requireContext())
                 .setTitle(R.string.live_update_preview_dialog_title)
-                .setMessage(getString(R.string.live_update_preview_dialog_message, renderedTitle, renderedContent, renderedSub))
+                .setMessage(
+                    getString(
+                        R.string.live_update_preview_dialog_message,
+                        renderedCollapsed,
+                        renderedTitle,
+                        renderedContent,
+                        renderedSub
+                    )
+                )
                 .setPositiveButton(android.R.string.ok, null)
                 .show()
             true

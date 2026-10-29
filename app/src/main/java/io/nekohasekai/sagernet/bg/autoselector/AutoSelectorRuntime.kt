@@ -97,6 +97,16 @@ object AutoSelectorRuntime {
     /** The status as the callbacks carry it, or with [withMembers] with the member table. */
     fun statusJson(withMembers: Boolean): String = synchronized(lock) { compose(withMembers) }.toJson()
 
+    /** Name and profile ID of the currently active member in the running selector; null when not running or unselected. */
+    fun activeMember(): Pair<String, Long>? = synchronized(lock) {
+        val r = run ?: return null
+        val sample = r.sample ?: return null
+        val tag = sample.selectedTag ?: return null
+        val id = r.build.members[tag] ?: return null
+        val name = r.names[id].orEmpty().ifEmpty { tag }
+        name to id
+    }
+
     // ------------------------------------------------------------------------------------------------ start path
 
     /** ProxyInstance.init, before the config is built: ranks the selector when its plan asks for measurements. */

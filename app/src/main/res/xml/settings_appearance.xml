@@ -56,6 +56,13 @@
             app:key="liveUpdateEnabled"
             app:summary="@string/live_update_sum"
             app:title="@string/live_update" />
+        <SwitchPreference
+            app:defaultValue="true"
+            app:dependency="liveUpdateEnabled"
+            app:icon="@drawable/ic_baseline_fiber_manual_record_24"
+            app:key="liveUpdateShowCapsule"
+            app:summary="@string/live_update_show_capsule_sum"
+            app:title="@string/live_update_show_capsule" />
         <moe.matsuri.nb4a.ui.SimpleMenuPreference
             app:defaultValue="standard"
             app:dependency="liveUpdateEnabled"
@@ -64,6 +71,13 @@
             app:icon="@drawable/ic_baseline_tune_24"
             app:key="liveUpdatePreset"
             app:title="@string/live_update_preset"
+            app:useSimpleSummaryProvider="true" />
+        <EditTextPreference
+            app:dependency="liveUpdateEnabled"
+            app:icon="@drawable/ic_baseline_center_focus_weak_24"
+            app:key="liveUpdateCollapsedFormat"
+            app:summary="@string/live_update_collapsed_format_sum"
+            app:title="@string/live_update_collapsed_format"
             app:useSimpleSummaryProvider="true" />
         <EditTextPreference
             app:dependency="liveUpdateEnabled"

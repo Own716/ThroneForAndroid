@@ -81,10 +81,12 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var showGroupInNotification by configurationStore.boolean(Key.SHOW_GROUP_IN_NOTIFICATION)
     var showDirectSpeed by configurationStore.boolean(Key.SHOW_DIRECT_SPEED) { true }
     var liveUpdateEnabled by configurationStore.boolean(Key.LIVE_UPDATE_ENABLED)
+    var liveUpdateShowCapsule by configurationStore.boolean(Key.LIVE_UPDATE_SHOW_CAPSULE) { true }
     var liveUpdatePreset by configurationStore.string(Key.LIVE_UPDATE_PRESET) { "standard" }
-    var liveUpdateTitleFormat by configurationStore.string(Key.LIVE_UPDATE_TITLE_FORMAT) { "{profile}" }
+    var liveUpdateCollapsedFormat by configurationStore.string(Key.LIVE_UPDATE_COLLAPSED_FORMAT) { "{profile}" }
+    var liveUpdateTitleFormat by configurationStore.string(Key.LIVE_UPDATE_TITLE_FORMAT) { "{group}" }
     var liveUpdateContentFormat by configurationStore.string(Key.LIVE_UPDATE_CONTENT_FORMAT) { "↓ {down}   ↑ {up}" }
-    var liveUpdateSubtextFormat by configurationStore.string(Key.LIVE_UPDATE_SUBTEXT_FORMAT) { "{traffic_total}" }
+    var liveUpdateSubtextFormat by configurationStore.string(Key.LIVE_UPDATE_SUBTEXT_FORMAT) { "{profile}" }
     var alwaysShowAddress by configurationStore.boolean(Key.ALWAYS_SHOW_ADDRESS)
 
     var logBufSize by configurationStore.int(Key.LOG_BUF_SIZE) { 0 }
