@@ -3,7 +3,13 @@ package io.nekohasekai.sagernet.ui.profile
 import android.content.Intent
 import android.os.Bundle
 import androidx.annotation.PluralsRes
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
+import com.google.android.material.snackbar.Snackbar
+import io.nekohasekai.sagernet.database.ProxyEntity
+import io.nekohasekai.sagernet.database.ProxyGroup
+import io.nekohasekai.sagernet.database.SagerDatabase
+import io.nekohasekai.sagernet.ui.ProfileSelectActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
 import androidx.preference.MultiSelectListPreference
@@ -47,6 +53,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
     private companion object {
         /** "Servers from": the checked group ids as a string set; [AutoSelector.gids] is not a binding. */
         const val KEY_GIDS = "gids"
+        const val KEY_PIDS = "pids"
         const val KEY_PINNED = "autoselPinned"
         const val KEY_PLAN = "autoselPlan"
         const val KEY_ADVANCED = "autoselAdvanced"
@@ -57,7 +64,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
 
         /** The fields refreshPlanSummary reads. */
         val PLAN_KEYS =
-            setOf(KEY_GIDS, "nameFilter", "countryFilter", "excludeUnavailable", "poolCap", "buildLimit", "resultValidityMins")
+            setOf(KEY_GIDS, KEY_PIDS, "nameFilter", "countryFilter", "excludeUnavailable", "poolCap", "buildLimit", "resultValidityMins")
     }
 
     /** A spin box of edit_autoselector.ui: its range, unit and the text of 0 when it has one. */
@@ -133,11 +140,13 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
     override fun AutoSelector.init() {
         pbm.writeToCacheAll(this)
         DataStore.profileCacheStore.putStringSet(KEY_GIDS, gids.mapTo(LinkedHashSet()) { it.toString() })
+        DataStore.profileCacheStore.putStringSet(KEY_PIDS, pids.mapTo(LinkedHashSet()) { it.toString() })
     }
 
     override fun AutoSelector.serialize() {
         pbm.fromCacheAll(this)
         gids = checkedGroups(gids)
+        pids = checkedPids()
         nameFilter = nameFilter.trim()
         countryFilter = countryFilter.trim()
         testURL = testURL.trim()
@@ -164,6 +173,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         copy.parseFromJson(ensureEditingOutbound().exportToJson())
         pbm.fromCacheAll(copy)
         copy.gids = checkedGroups(copy.gids)
+        copy.pids = checkedPids()
         copy.nameFilter = copy.nameFilter.trim()
         copy.countryFilter = copy.countryFilter.trim()
         copy.testURL = copy.testURL.trim()
@@ -175,7 +185,10 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
     override fun ValidationForm.bindValidation() {
         bind("name") { if (it.isEmpty()) getString(R.string.autosel_name_empty) else "" }
         // The form reads a row's text, which a multi-select does not have, so the rule reads the checked set itself.
-        bind(KEY_GIDS) { _ -> if (checkedIds().any { it in knownGroups }) "" else getString(R.string.autosel_select_group) }
+        bind(KEY_GIDS) { _ ->
+            if (checkedIds().any { it in knownGroups } || checkedPids().isNotEmpty()) ""
+            else getString(R.string.autosel_select_group_or_node)
+        }
         // Rows of the collapsed Advanced section are skipped by rules, so these always run and reveal the section.
         addIssueSource {
             fun value(key: String) = DataStore.profileCacheStore.getString(key)?.trim()?.toIntOrNull() ?: 0
@@ -215,6 +228,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
             AutoSelectorChecks.autoSelectorUrl(stored.connectivityURL).isNotEmpty()
         ) advancedExpanded = true
         setupGroups()
+        setupCustomNodes()
         setupTexts()
         for (field in intFields) setupInt(field)
         // The change listeners run before the new value is stored, so the state comes from their arguments.
@@ -297,6 +311,158 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         val out = order.filterTo(ArrayList()) { it in checked }
         for (id in previous + checked.sorted()) if (id in checked && id !in out) out.add(id)
         return out
+    }
+
+    private val selectProfileForAdd =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val id = result.data?.getLongExtra(ProfileSelectActivity.EXTRA_PROFILE_ID, 0L) ?: 0L
+                if (id > 0) {
+                    addCustomNode(id)
+                }
+            }
+        }
+
+    private fun checkedPids(): ArrayList<Long> = DataStore.profileCacheStore.getStringSet(KEY_PIDS).orEmpty()
+        .mapNotNullTo(ArrayList()) { text -> text.trim().toLongOrNull()?.takeIf { it >= 0 } }
+
+    private fun savePids(list: List<Long>) {
+        DataStore.profileCacheStore.putStringSet(KEY_PIDS, list.mapTo(LinkedHashSet()) { it.toString() })
+        val pref = fragment?.findPreference<Preference>(KEY_PIDS)
+        if (pref != null) updateCustomNodesSummary(pref)
+        runOnMainDispatcher { refreshPlan() }
+    }
+
+    private fun addCustomNode(id: Long) {
+        val current = checkedPids()
+        if (id in current) {
+            Snackbar.make(findViewById(android.R.id.content), R.string.autosel_custom_nodes_already_added, Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        current.add(id)
+        savePids(current)
+        val name = ProfileManager.getProfile(id)?.displayName() ?: id.toString()
+        Snackbar.make(findViewById(android.R.id.content), getString(R.string.autosel_custom_nodes_added, name), Snackbar.LENGTH_SHORT).show()
+    }
+
+    private fun PreferenceFragmentCompat.setupCustomNodes() {
+        val pref = findPreference<Preference>(KEY_PIDS) ?: return
+        updateCustomNodesSummary(pref)
+        pref.setOnPreferenceClickListener {
+            showCustomNodesDialog()
+            true
+        }
+    }
+
+    private fun updateCustomNodesSummary(pref: Preference) {
+        val pids = checkedPids()
+        if (pids.isEmpty()) {
+            pref.summary = getString(R.string.autosel_custom_nodes_summary_none)
+        } else {
+            lifecycleScope.launch {
+                val names = withContext(Dispatchers.IO) {
+                    pids.mapNotNull { ProfileManager.getProfile(it)?.displayName() }
+                }
+                val preview = names.take(3).joinToString(getString(R.string.autosel_list_separator))
+                val suffix = if (names.size > 3) "..." else ""
+                pref.summary = getString(R.string.autosel_custom_nodes_summary, pids.size, "$preview$suffix")
+            }
+        }
+    }
+
+    private fun showCustomNodesDialog() {
+        val pids = checkedPids()
+        val items = ArrayList<ProxyEntity>()
+        for (pid in pids) {
+            val entity = ProfileManager.getProfile(pid)
+            if (entity != null) items.add(entity)
+        }
+
+        val builder = MaterialAlertDialogBuilder(this)
+        builder.setTitle(R.string.autosel_custom_nodes)
+
+        val displayItems = ArrayList<CharSequence>()
+        for (item in items) {
+            val groupName = GroupRepo.get(item.groupId)?.displayName() ?: ""
+            displayItems.add("✕  ${item.displayName()}  (${item.displayType()} · $groupName)")
+        }
+
+        if (displayItems.isEmpty()) {
+            builder.setMessage(R.string.autosel_custom_nodes_empty)
+            builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
+                selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
+            }
+            builder.setNeutralButton(R.string.autosel_custom_nodes_batch_add) { _, _ ->
+                showBatchAddGroupDialog()
+            }
+            builder.setNegativeButton(android.R.string.cancel, null)
+            builder.show()
+            return
+        }
+
+        builder.setItems(displayItems.toTypedArray()) { _, which ->
+            val toRemove = items[which]
+            val updated = checkedPids().filter { it != toRemove.id }
+            savePids(updated)
+            Snackbar.make(findViewById(android.R.id.content), R.string.autosel_custom_nodes_removed, Snackbar.LENGTH_SHORT).show()
+        }
+
+        builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
+            selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
+        }
+        builder.setNeutralButton(R.string.autosel_custom_nodes_batch_add) { _, _ ->
+            showBatchAddGroupDialog()
+        }
+        builder.setNegativeButton(android.R.string.ok, null)
+        builder.show()
+    }
+
+    private fun showBatchAddGroupDialog() {
+        val groups = GroupRepo.all().filter { !it.archive || it.id in checkedIds() }
+        if (groups.isEmpty()) return
+
+        val names = groups.map { it.displayName() }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.autosel_select_group_for_nodes)
+            .setItems(names) { _, which ->
+                showBatchNodeSelectDialog(groups[which])
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showBatchNodeSelectDialog(group: ProxyGroup) {
+        val allProfiles = SagerDatabase.proxyDao.getByGroup(group.id).filter {
+            it.type != "autoselector" && it.type != "chain" && it.id != DataStore.editingId
+        }
+        if (allProfiles.isEmpty()) {
+            Snackbar.make(findViewById(android.R.id.content), "该分组下没有可用节点", Snackbar.LENGTH_SHORT).show()
+            return
+        }
+
+        val current = checkedPids().toHashSet()
+        val names = allProfiles.map { "${it.displayName()} (${it.displayType()})" }.toTypedArray()
+        val checked = BooleanArray(allProfiles.size) { allProfiles[it].id in current }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(group.displayName())
+            .setMultiChoiceItems(names, checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val updated = checkedPids()
+                for (i in allProfiles.indices) {
+                    val id = allProfiles[i].id
+                    if (checked[i] && id !in updated) {
+                        updated.add(id)
+                    } else if (!checked[i] && id in updated) {
+                        updated.remove(id)
+                    }
+                }
+                savePids(updated)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun PreferenceFragmentCompat.setupTexts() {
@@ -410,6 +576,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         val preview = AutoSelector()
         preview.parseFromJson(ensureEditingOutbound().exportToJson())
         preview.gids = checkedGroups(preview.gids)
+        preview.pids = checkedPids()
         preview.nameFilter = store.getString("nameFilter").orEmpty().trim()
         preview.countryFilter = store.getString("countryFilter").orEmpty().trim()
         preview.excludeUnavailable = store.getBoolean("excludeUnavailable", true)

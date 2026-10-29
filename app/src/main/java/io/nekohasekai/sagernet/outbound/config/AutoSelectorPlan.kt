@@ -54,12 +54,16 @@ class SelectorGroup(
 )
 
 /** The storage the auto-selector plan reads: a tracked group, or null when it does not exist. */
-fun interface SelectorStore {
+interface SelectorStore {
     fun group(gid: Long): SelectorGroup?
+    fun member(pid: Long): Pair<SelectorMember, SelectorGroup?>? = null
 
     companion object {
         @JvmField
-        val NONE = SelectorStore { null }
+        val NONE = object : SelectorStore {
+            override fun group(gid: Long): SelectorGroup? = null
+            override fun member(pid: Long): Pair<SelectorMember, SelectorGroup?>? = null
+        }
     }
 }
 
@@ -161,7 +165,11 @@ class AutoSelectorPlanner @JvmOverloads constructor(
      * The tracked groups that exist, in [AutoSelector.gids] order, and their members in that order: an id listed by
      * more than one group is taken once, with the first group listing it.
      */
-    private class Tracked(val groups: List<SelectorGroup>, val missing: Int) {
+    private class Tracked(
+        val groups: List<SelectorGroup>,
+        val missing: Int,
+        val extraMembers: List<Pair<SelectorMember, SelectorGroup>> = emptyList(),
+    ) {
         val members = ArrayList<SelectorMember>()
         val byId = HashMap<Long, SelectorMember>()
         val groupOf = HashMap<Long, SelectorGroup>()
@@ -175,6 +183,12 @@ class AutoSelectorPlanner @JvmOverloads constructor(
                     members.add(member)
                 }
             }
+            for ((member, group) in extraMembers) {
+                if (member.id in groupOf) continue
+                groupOf[member.id] = group
+                byId[member.id] = member
+                members.add(member)
+            }
         }
     }
 
@@ -187,7 +201,17 @@ class AutoSelectorPlanner @JvmOverloads constructor(
             val group = store.group(gid)
             if (group == null) missing++ else groups.add(group)
         }
-        return Tracked(groups, missing)
+        val extraMembers = ArrayList<Pair<SelectorMember, SelectorGroup>>()
+        for (pid in selector.pids) {
+            val pair = store.member(pid)
+            if (pair != null) {
+                val group = pair.second ?: SelectorGroup(0L, "", -1L, -1L, null, null, listOf(pair.first))
+                extraMembers.add(Pair(pair.first, group))
+            } else {
+                missing++
+            }
+        }
+        return Tracked(groups, missing, extraMembers)
     }
 
     /** PlanAutoSelector (cpp:245-284); [selectorId] is excluded from the members, missing groups are skipped. */
@@ -199,7 +223,7 @@ class AutoSelectorPlanner @JvmOverloads constructor(
         val now = clock()
         val tracked = track(selector)
         plan.missingGroups = tracked.missing
-        if (tracked.groups.isEmpty()) {
+        if (tracked.groups.isEmpty() && selector.pids.isEmpty()) {
             plan.error = if (selector.gids.isEmpty()) "Auto selector tracks no group"
             else "Auto selector points at a group that no longer exists"
             return plan
@@ -280,7 +304,7 @@ class AutoSelectorPlanner @JvmOverloads constructor(
     }
 
     // eligibilityOf (cpp:50-82); null = eligible.
-    private fun eligibilityOf(member: SelectorMember, selector: AutoSelector, filters: Filters, now: Long): AutoSelectorSkip? {
+    private fun eligibilityOf(member: SelectorMember, selector: AutoSelector, filters: Filters, now: Long, isCustomNode: Boolean = false): AutoSelectorSkip? {
         val outbound = member.outbound ?: return AutoSelectorSkip.Missing
         val type = outbound.type
         if (type == "chain" || type == "autoselector") return AutoSelectorSkip.MetaType
@@ -300,9 +324,11 @@ class AutoSelectorPlanner @JvmOverloads constructor(
             ) return AutoSelectorSkip.FullConfig
             if (custom.configObject().isEmpty()) return AutoSelectorSkip.Malformed
         }
-        if (filters.name != null && !filters.name.matcher(outbound.displayName()).find()) return AutoSelectorSkip.NameFilter
-        if (filters.countries.isNotEmpty() && member.testCountry.uppercase() !in filters.countries) {
-            return AutoSelectorSkip.CountryFilter
+        if (!isCustomNode) {
+            if (filters.name != null && !filters.name.matcher(outbound.displayName()).find()) return AutoSelectorSkip.NameFilter
+            if (filters.countries.isNotEmpty() && member.testCountry.uppercase() !in filters.countries) {
+                return AutoSelectorSkip.CountryFilter
+            }
         }
         // Only a fresh failure excludes a member; an old one would exile it permanently.
         if (selector.excludeUnavailable && member.latency < 0 && hasFreshResult(member, selector, now)) {
@@ -319,11 +345,13 @@ class AutoSelectorPlanner @JvmOverloads constructor(
         val skips = EnumMap<AutoSelectorSkip, Int>(AutoSelectorSkip::class.java)
         val members = ArrayList<Long>()
         val unavailable = ArrayList<Long>()
+        val customNodeSet = selector.pids.toHashSet()
         for (member in tracked.members) {
             if (member.id == selectorId) continue
             val group = tracked.groupOf[member.id] ?: continue
             if (plan != null) plan.membersInGroup++
-            val skip = eligibilityOf(member, selector, filters, now)
+            val isCustomNode = member.id in customNodeSet
+            val skip = eligibilityOf(member, selector, filters, now, isCustomNode)
             if (skip != null && skip != AutoSelectorSkip.Unavailable) {
                 skips.merge(skip, 1, Int::plus)
                 continue

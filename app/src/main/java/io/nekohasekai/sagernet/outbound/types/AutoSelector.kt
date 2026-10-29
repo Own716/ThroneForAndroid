@@ -25,6 +25,9 @@ class AutoSelector : Outbound("autoselector") {
     /** Tracked groups in the user's order; members are taken from each in turn. */
     @JvmField var gids: MutableList<Long> = ArrayList()
 
+    /** Hand-picked member ids from other servers/groups. */
+    @JvmField var pids: MutableList<Long> = ArrayList()
+
     /** Case-insensitive regex over the member display name, empty = all. */
     @JvmField var nameFilter: String = ""
 
@@ -83,10 +86,13 @@ class AutoSelector : Outbound("autoselector") {
 
     /** autoselector.cpp:9-15: the names of the tracked groups that exist ("" until the app installs [groupNames]). */
     override fun displayAddress(): String {
-        if (gids.none { it >= 0 }) return "no group"
+        if (gids.none { it >= 0 } && pids.none { it >= 0 }) return "no group"
         val lookup = groupNames ?: return ""
         val names = gids.mapNotNull { if (it >= 0) lookup.nameOf(it) else null }
-        return if (names.isEmpty()) "missing group" else names.joinToString(", ")
+        val parts = ArrayList<String>()
+        if (names.isNotEmpty()) parts.add(names.joinToString(", "))
+        if (pids.isNotEmpty()) parts.add("${pids.size} custom nodes")
+        return parts.joinToString(" + ")
     }
 
     /** autoselector.h: no security of its own; it inherits whatever its members use. */
@@ -117,6 +123,9 @@ class AutoSelector : Outbound("autoselector") {
         } else if (obj.contains("gid")) {
             val gid = longOr(obj["gid"], -1)
             gids = if (gid >= 0) arrayListOf(gid) else ArrayList()
+        }
+        if (obj.contains("pids")) {
+            pids = obj.array("pids").mapNotNullTo(ArrayList()) { longOr(it, -1).takeIf { id -> id >= 0 } }
         }
         if (obj.contains("name_filter")) nameFilter = obj.string("name_filter")
         if (obj.contains("country_filter")) countryFilter = obj.string("country_filter")
@@ -156,6 +165,7 @@ class AutoSelector : Outbound("autoselector") {
         obj["type"] = "autoselector"
         obj["gid"] = gids.firstOrNull() ?: -1L
         obj["gids"] = idArray(gids)
+        obj["pids"] = idArray(pids)
         obj["name_filter"] = nameFilter
         obj["country_filter"] = countryFilter
         obj["exclude_unavailable"] = excludeUnavailable
@@ -194,6 +204,8 @@ class AutoSelector : Outbound("autoselector") {
     fun normalize() {
         val seen = HashSet<Long>()
         gids = gids.filterTo(ArrayList()) { it >= 0 && seen.add(it) }
+        val seenPids = HashSet<Long>()
+        pids = pids.filterTo(ArrayList()) { it >= 0 && seenPids.add(it) }
         if (poolCap < 1) poolCap = 1
         if (poolCap > MAX_POOL_CAP) poolCap = MAX_POOL_CAP
         if (buildLimit < 1) buildLimit = 1

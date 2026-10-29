@@ -11,6 +11,11 @@
         app:key="gids"
         app:title="@string/autosel_group" />
 
+    <Preference
+        app:icon="@drawable/ic_action_dns"
+        app:key="pids"
+        app:title="@string/autosel_custom_nodes" />
+
     <EditTextPreference
         app:dialogMessage="@string/autosel_name_filter_tip"
         app:icon="@drawable/ic_baseline_filter_list_24"
