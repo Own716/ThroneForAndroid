@@ -462,7 +462,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         val profilesByGroup = allProfiles.groupBy { it.groupId }
         val availableGroups = groups.filter { (profilesByGroup[it.id]?.size ?: 0) > 0 }
 
-        val selected = checkedPids().toLinkedHashSet()
+        val selected = LinkedHashSet(checkedPids())
         var currentGid = -1L
         var filterText = ""
 
