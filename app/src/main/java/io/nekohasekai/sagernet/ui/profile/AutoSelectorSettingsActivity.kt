@@ -50,7 +50,7 @@ import kotlinx.coroutines.withContext
  */
 class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
 
-    private companion object {
+    companion object {
         /** "Servers from": the checked group ids as a string set; [AutoSelector.gids] is not a binding. */
         const val KEY_GIDS = "gids"
         const val KEY_PIDS = "pids"

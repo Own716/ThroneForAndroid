@@ -8,7 +8,6 @@ import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.app
-import io.nekohasekai.sagernet.ui.profile.AutoSelectorSettingsActivity
 
 /**
  * Android-only (#94): route rules, default outbounds, and auto-selector candidate pools name a server by profile id,
@@ -99,7 +98,7 @@ internal object SubscriptionRouteRebind {
                     AutoSelectorProfiles.save(sid, sel)
                     if (DataStore.editingId == sid) {
                         DataStore.profileCacheStore.putStringSet(
-                            AutoSelectorSettingsActivity.KEY_PIDS,
+                            "pids",
                             sel.pids.mapTo(LinkedHashSet()) { it.toString() }
                         )
                     }
