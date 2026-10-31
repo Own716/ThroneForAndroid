@@ -137,8 +137,10 @@ jobs:
           gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
           git push --delete origin "$TAG" 2>/dev/null || true
           
+          bash buildScript/release_notes.sh "$VERSION_NAME" > /tmp/release_notes.md || echo "Throne for Android $TAG" > /tmp/release_notes.md
+          
           gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes "Throne for Android $TAG"
+            --notes-file /tmp/release_notes.md
