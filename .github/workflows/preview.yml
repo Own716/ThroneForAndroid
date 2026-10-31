@@ -130,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION_NAME=$(sed -n 's/^VERSION_NAME=//p' nb4a.properties | tr -d '\r[:space:]')
-          TAG="v${VERSION_NAME}.${GITHUB_RUN_NUMBER}"
+          TAG="v${VERSION_NAME}"
           echo "Publishing release with clean version tag: $TAG"
           
           # Delete existing release with same tag if any

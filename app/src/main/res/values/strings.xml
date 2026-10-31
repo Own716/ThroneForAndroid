@@ -1397,6 +1397,10 @@
     <string name="autosel_custom_nodes_removed">Specific node removed</string>
     <string name="autosel_custom_nodes_clear">Clear all specific nodes</string>
     <string name="autosel_custom_nodes_clear_confirm">Are you sure you want to clear all specific nodes?</string>
+    <string name="autosel_custom_node_remove_title">Remove Node</string>
+    <string name="autosel_custom_node_remove_confirm">Remove "%s" from specific nodes?</string>
+    <string name="autosel_node_missing">Offline node (ID: %d)</string>
+    <string name="autosel_node_missing_summary">This node is currently unavailable or invalid in database</string>
     <string name="autosel_select_group_for_nodes">Select source group</string>
     <string name="autosel_select_group_or_node">Select at least one server source or specific node.</string>
     <string name="autosel_group_archived">%s (archived)</string>

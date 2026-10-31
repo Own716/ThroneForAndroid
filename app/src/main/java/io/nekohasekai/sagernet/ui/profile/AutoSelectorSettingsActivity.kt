@@ -361,7 +361,9 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         } else {
             lifecycleScope.launch {
                 val names = withContext(Dispatchers.IO) {
-                    pids.mapNotNull { ProfileManager.getProfile(it)?.displayName() }
+                    pids.map { id ->
+                        ProfileManager.getProfile(id)?.displayName() ?: getString(R.string.autosel_node_missing, id)
+                    }
                 }
                 val preview = names.take(3).joinToString(getString(R.string.autosel_list_separator))
                 val suffix = if (names.size > 3) "..." else ""
@@ -372,22 +374,21 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
 
     private fun showCustomNodesDialog() {
         val pids = checkedPids()
-        val items = ArrayList<ProxyEntity>()
+        val nodeItems = ArrayList<Pair<Long, String>>()
         for (pid in pids) {
             val entity = ProfileManager.getProfile(pid)
-            if (entity != null) items.add(entity)
+            if (entity != null) {
+                val groupName = GroupRepo.get(entity.groupId)?.displayName() ?: ""
+                nodeItems.add(Pair(pid, "${entity.displayName()}  (${entity.displayType()} · $groupName)"))
+            } else {
+                nodeItems.add(Pair(pid, getString(R.string.autosel_node_missing, pid)))
+            }
         }
 
         val builder = MaterialAlertDialogBuilder(this)
         builder.setTitle(R.string.autosel_custom_nodes)
 
-        val displayItems = ArrayList<CharSequence>()
-        for (item in items) {
-            val groupName = GroupRepo.get(item.groupId)?.displayName() ?: ""
-            displayItems.add("✕  ${item.displayName()}  (${item.displayType()} · $groupName)")
-        }
-
-        if (displayItems.isEmpty()) {
+        if (nodeItems.isEmpty()) {
             builder.setMessage(R.string.autosel_custom_nodes_empty)
             builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
                 selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
@@ -400,11 +401,19 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
             return
         }
 
-        builder.setItems(displayItems.toTypedArray()) { _, which ->
-            val toRemove = items[which]
-            val updated = checkedPids().filter { it != toRemove.id }
-            savePids(updated)
-            Snackbar.make(findViewById(android.R.id.content), R.string.autosel_custom_nodes_removed, Snackbar.LENGTH_SHORT).show()
+        val displayItems = nodeItems.map { "✕  ${it.second}" }.toTypedArray()
+        builder.setItems(displayItems) { _, which ->
+            val target = nodeItems[which]
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.autosel_custom_node_remove_title)
+                .setMessage(getString(R.string.autosel_custom_node_remove_confirm, target.second))
+                .setPositiveButton(R.string.delete) { _, _ ->
+                    val updated = checkedPids().filter { it != target.first }
+                    savePids(updated)
+                    Snackbar.make(findViewById(android.R.id.content), R.string.autosel_custom_nodes_removed, Snackbar.LENGTH_SHORT).show()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
         }
 
         builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
