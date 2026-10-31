@@ -51,15 +51,25 @@ object LocalResolverImpl : LocalDNSTransport {
                 done.countDown()
             }
         }
-        DnsResolver.getInstance().rawQuery(
-            SagerNet.underlyingNetwork,
-            message,
-            DnsResolver.FLAG_NO_RETRY,
-            Dispatchers.IO.asExecutor(),
-            signal,
-            callback
-        )
-        done.await()
+        try {
+            DnsResolver.getInstance().rawQuery(
+                SagerNet.underlyingNetwork,
+                message,
+                DnsResolver.FLAG_EMPTY,
+                Dispatchers.IO.asExecutor(),
+                signal,
+                callback
+            )
+        } catch (e: Throwable) {
+            Logs.w("DnsResolver rawQuery dispatch error: $e")
+            ctx.errnoCode(114514)
+            return
+        }
+        val answered = done.await(4, java.util.concurrent.TimeUnit.SECONDS)
+        if (!answered) {
+            signal.cancel()
+            ctx.errnoCode(110)
+        }
     }
 
     /** Only below API 29, where [raw] is false. */

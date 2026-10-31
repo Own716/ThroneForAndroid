@@ -561,6 +561,8 @@ class ConfigGenerator @JvmOverloads constructor(
         // and connections to it are hijacked into the DNS module; "disabled" would leave apps on the LAN resolver,
         // which the bypassed private ranges keep outside the tun (fork docs/configuration/inbound/tun.md, dns_mode).
         tun["dns_mode"] = "hijack"
+        tun["endpoint_independent_nat"] = true
+        tun["udp_timeout"] = "30s"
         if (settings.perAppEnabled) {
             val packages = JsonValues.stringArray(settings.perAppPackages.map { it.trim() })
             if (packages.isNotEmpty()) tun[if (settings.perAppBypass) "exclude_package" else "include_package"] = packages
@@ -951,7 +953,7 @@ class ConfigGenerator @JvmOverloads constructor(
         if (settings.dnsReverseMapping) dns["reverse_mapping"] = true
         if (independentCache) dns["independent_cache"] = true
         val queryTimeout = validDuration(settings.dnsQueryTimeout)
-        if (queryTimeout.isNotEmpty()) dns["timeout"] = queryTimeout
+        if (queryTimeout.isNotEmpty()) dns["timeout"] = queryTimeout else dns["timeout"] = "5s"
         // The core refuses the config outright when optimistic meets either cache switch.
         if (settings.dnsOptimistic && !settings.dnsDisableCache && !settings.dnsDisableExpire) {
             val optimisticTimeout = validDuration(settings.dnsOptimisticTimeout)

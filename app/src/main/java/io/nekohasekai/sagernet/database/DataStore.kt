@@ -68,7 +68,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var startWithoutRuleSets by configurationStore.long(Key.START_WITHOUT_RULE_SETS)
     var groupLayoutMode by configurationStore.stringToInt(Key.GROUP_LAYOUT_MODE) { 0 }
 
-    var networkChangeResetConnections by configurationStore.boolean(Key.NETWORK_CHANGE_RESET_CONNECTIONS) { true }
+    var networkChangeResetConnections by configurationStore.boolean(Key.NETWORK_CHANGE_RESET_CONNECTIONS) { false }
     var wakeResetConnections by configurationStore.boolean(Key.WAKE_RESET_CONNECTIONS) { true }
 
     var appTheme by configurationStore.int(Key.APP_THEME)

@@ -124,6 +124,7 @@ class BaseService {
 
         /** A plain stop asked for while a restart was stopping the old core: the restart ends stopped instead. */
         var stopRequested = false
+        var startRequestedWhileStopping = false
 
         private var wakeLock: PowerManager.WakeLock? = null
 
@@ -320,6 +321,10 @@ class BaseService {
             when {
                 s == State.Stopped -> startRunner()
                 s.canStop -> AutoSelectorRuntime.restart(this) { stopRunner(true) }
+                s == State.Stopping -> {
+                    Logs.i("reload invoked while Stopping, queuing pending start")
+                    data.startRequestedWhileStopping = true
+                }
                 else -> Logs.w("Illegal state $s when invoking use")
             }
         }
@@ -350,6 +355,11 @@ class BaseService {
 
         fun startRunner() {
             this as Context
+            if (data.state == State.Stopping) {
+                Logs.i("startRunner called while Stopping, queuing pending start")
+                data.startRequestedWhileStopping = true
+                return
+            }
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(Intent(this, javaClass))
             else startService(Intent(this, javaClass))
         }
@@ -538,15 +548,22 @@ class BaseService {
                 )
                 if (!finishRestart) DeferredRuleSets.serviceStopped()
 
+                val queuedStart = data.startRequestedWhileStopping
+                data.startRequestedWhileStopping = false
+
                 try {
                     when {
                         keepNotification -> startProxy()
                         finishRestart -> startRunner()
+                        queuedStart -> {
+                            Logs.i("Executing queued start command after stopping completed")
+                            startProxy()
+                        }
                         else -> stopSelf() // stop the service if nothing has bound to it
                     }
                 } catch (error: Throwable) {
                     recordCleanupFailure("service-finish", error)
-                    if (keepNotification) {
+                    if (keepNotification || queuedStart) {
                         failRunner("${getString(R.string.service_failed)} ${error.readableMessage}")
                     }
                 }
@@ -623,6 +640,11 @@ class BaseService {
         fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
             DataStore.baseService = this
 
+            if (data.state == State.Stopping) {
+                Logs.i("Service received start command while Stopping, queuing pending start")
+                data.startRequestedWhileStopping = true
+                return Service.START_NOT_STICKY
+            }
             if (data.state != State.Stopped) return Service.START_NOT_STICKY
             startProxy()
             return Service.START_NOT_STICKY
@@ -632,6 +654,7 @@ class BaseService {
         fun startProxy() {
             DataStore.baseService = this
             val data = data
+            data.startRequestedWhileStopping = false
             val profile = SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
             this as Context
             if (profile == null) { // gracefully shutdown: https://stackoverflow.com/q/47337857/2245107
