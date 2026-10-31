@@ -8,7 +8,7 @@
             app:title="@string/route_rule_name"
             app:useSimpleSummaryProvider="true" />
         <moe.matsuri.nb4a.ui.SimpleMenuPreference
-            app:entries="@array/route_rule_action_values"
+            app:entries="@array/route_rule_action_entries"
             app:entryValues="@array/route_rule_action_values"
             app:icon="@drawable/ic_baseline_legend_toggle_24"
             app:key="action"
@@ -17,7 +17,7 @@
         <moe.matsuri.nb4a.ui.SimpleMenuPreference
             app:entries="@array/route_rule_outbound_entries"
             app:entryValues="@array/route_rule_outbound_values"
-            app:icon="@drawable/ic_baseline_compare_arrows_24"
+            app:icon="@drawable/ic_hardware_router"
             app:key="outbound_id"
             app:title="@string/route_rule_outbound"
             app:useSimpleSummaryProvider="true" />

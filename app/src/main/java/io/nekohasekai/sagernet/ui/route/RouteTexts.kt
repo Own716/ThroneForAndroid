@@ -25,7 +25,10 @@ internal object RouteTexts {
 
     /** proxy, direct, block, warp-bypass, the server's name from [servers], or "missing server". */
     fun outboundName(context: Context, id: Long, servers: Map<Long, String>): String = when (id) {
-        OutboundIds.PROXY, OutboundIds.DIRECT, OutboundIds.BLOCK, OutboundIds.WARP_BYPASS -> OutboundIds.toName(id)
+        OutboundIds.PROXY -> context.getString(R.string.route_outbound_proxy)
+        OutboundIds.DIRECT -> context.getString(R.string.route_outbound_direct)
+        OutboundIds.BLOCK -> context.getString(R.string.route_outbound_block)
+        OutboundIds.WARP_BYPASS -> OutboundIds.toName(id)
         OutboundIds.HIJACK_DNS -> "hijack-dns"
         else -> servers[id] ?: context.getString(R.string.route_rule_missing_server, id)
     }

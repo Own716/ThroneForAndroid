@@ -590,6 +590,14 @@
     </string-array>
 
     <!-- route rule editor: sing-box tokens as values -->
+    <string-array name="route_rule_action_entries">
+        <item>@string/route_rule_action_route</item>
+        <item>@string/route_rule_action_reject</item>
+        <item>@string/route_rule_action_hijack_dns</item>
+        <item>@string/route_rule_action_sniff</item>
+        <item>@string/route_rule_action_resolve</item>
+        <item>@string/route_rule_action_route_options</item>
+    </string-array>
     <string-array name="route_rule_action_values" translatable="false">
         <item>route</item>
         <item>reject</item>
@@ -599,10 +607,10 @@
         <item>route-options</item>
     </string-array>
     <!-- the fixed outbounds; the editor appends the server profiles -->
-    <string-array name="route_rule_outbound_entries" translatable="false">
-        <item>proxy</item>
-        <item>direct</item>
-        <item>block</item>
+    <string-array name="route_rule_outbound_entries">
+        <item>@string/route_outbound_proxy</item>
+        <item>@string/route_outbound_direct</item>
+        <item>@string/route_outbound_block</item>
     </string-array>
     <string-array name="route_rule_outbound_values" translatable="false">
         <item>-1</item>

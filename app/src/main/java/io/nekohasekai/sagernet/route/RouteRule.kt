@@ -673,7 +673,7 @@ class RouteRule {
          */
         @JvmStatic
         fun outboundProblem(id: Long, profiles: ProfileProvider?): String {
-            if (id == OutboundIds.PROXY || id == OutboundIds.DIRECT || id == OutboundIds.WARP_BYPASS) return ""
+            if (id == OutboundIds.PROXY || id == OutboundIds.DIRECT || id == OutboundIds.BLOCK || id == OutboundIds.WARP_BYPASS) return ""
             if (id < 0) return vtr(R.string.validation_route_outbound_invalid)
             if (profiles == null) return ""
             val ent = profiles.get(id) ?: return vtr(R.string.validation_route_outbound_missing)
