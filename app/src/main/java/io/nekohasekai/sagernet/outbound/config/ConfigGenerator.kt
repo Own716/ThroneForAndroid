@@ -962,7 +962,8 @@ class ConfigGenerator @JvmOverloads constructor(
         for (rule in echRules) allRules.add(rule)
         for (rule in headRules) allRules.add(rule)
         for (rule in rules) allRules.add(rule)
-        val dns = jsonObjectOf("servers" to servers, "rules" to allRules, "cache_capacity" to settings.dnsCacheCapacity)
+        val dnsCapacity = if (settings.dnsCacheCapacity > 0) settings.dnsCacheCapacity else 4096
+        val dns = jsonObjectOf("servers" to servers, "rules" to allRules, "cache_capacity" to dnsCapacity)
         if (settings.dnsDisableCache) dns["disable_cache"] = true
         if (settings.dnsDisableExpire) dns["disable_expire"] = true
         if (settings.dnsReverseMapping) dns["reverse_mapping"] = true

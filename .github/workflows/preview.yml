@@ -92,6 +92,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Gradle Build OSS Release
+        env:
+          THRONE_BUILD: ${{ github.run_number }}
         run: |
           ./gradlew --stacktrace :app:assembleOssRelease
 
