@@ -1398,9 +1398,12 @@
     <string name="autosel_custom_nodes_clear">Clear all specific nodes</string>
     <string name="autosel_custom_nodes_clear_confirm">Are you sure you want to clear all specific nodes?</string>
     <string name="autosel_custom_nodes_cleared">All specific nodes cleared</string>
-    <string name="autosel_custom_nodes_add_choice_title">Add Specific Nodes</string>
-    <string name="autosel_custom_nodes_add_single">Pick single node</string>
-    <string name="autosel_custom_nodes_add_batch">Batch select from group</string>
+    <string name="autosel_picker_title">Select specific nodes</string>
+    <string name="autosel_picker_all_groups">All Nodes</string>
+    <string name="autosel_picker_search_hint">Search node name...</string>
+    <string name="autosel_picker_select_all">Select all in group</string>
+    <string name="autosel_picker_deselect_all">Deselect all in group</string>
+    <string name="autosel_no_nodes_available">No available nodes found</string>
     <string name="autosel_custom_node_remove_title">Remove Node</string>
     <string name="autosel_custom_node_remove_confirm">Remove "%s" from specific nodes?</string>
     <string name="autosel_node_missing">Offline node (ID: %d)</string>

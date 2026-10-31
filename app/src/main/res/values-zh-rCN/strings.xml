@@ -470,9 +470,12 @@
     <string name="autosel_custom_nodes_clear">清空全部指定节点</string>
     <string name="autosel_custom_nodes_clear_confirm">确定清空所有已选的指定节点吗？</string>
     <string name="autosel_custom_nodes_cleared">已清空全部指定节点</string>
-    <string name="autosel_custom_nodes_add_choice_title">添加指定节点</string>
-    <string name="autosel_custom_nodes_add_single">单个挑选添加</string>
-    <string name="autosel_custom_nodes_add_batch">按分组批量添加</string>
+    <string name="autosel_picker_title">选择指定节点</string>
+    <string name="autosel_picker_all_groups">全部节点</string>
+    <string name="autosel_picker_search_hint">搜索节点名称...</string>
+    <string name="autosel_picker_select_all">全选本组</string>
+    <string name="autosel_picker_deselect_all">全不选本组</string>
+    <string name="autosel_no_nodes_available">未找到可用节点</string>
     <string name="autosel_custom_node_remove_title">移除指定节点</string>
     <string name="autosel_custom_node_remove_confirm">确定要从指定节点列表中移除「%s」吗？</string>
     <string name="autosel_node_missing">已离线节点 (ID: %d)</string>

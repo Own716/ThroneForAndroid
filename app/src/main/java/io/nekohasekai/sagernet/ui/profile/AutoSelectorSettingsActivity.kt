@@ -1,7 +1,21 @@
 package io.nekohasekai.sagernet.ui.profile
 
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.core.widget.addTextChangedListener
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.checkbox.MaterialCheckBox
+import androidx.core.content.ContextCompat
+import io.nekohasekai.sagernet.ktx.dp2px
 import androidx.annotation.PluralsRes
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
@@ -373,24 +387,6 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         }
     }
 
-    private fun showAddNodesChoiceDialog() {
-        val choices = arrayOf(
-            getString(R.string.autosel_custom_nodes_add_single),
-            getString(R.string.autosel_custom_nodes_add_batch)
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.autosel_custom_nodes_add_choice_title)
-            .setItems(choices) { _, which ->
-                if (which == 0) {
-                    selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
-                } else {
-                    showBatchAddGroupDialog()
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
     private fun showCustomNodesDialog() {
         val pids = checkedPids()
         val nodeItems = ArrayList<Pair<Long, String>>()
@@ -410,7 +406,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         if (nodeItems.isEmpty()) {
             builder.setMessage(R.string.autosel_custom_nodes_empty)
             builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
-                showAddNodesChoiceDialog()
+                showUnifiedNodePicker()
             }
             builder.setNegativeButton(android.R.string.cancel, null)
             builder.show()
@@ -434,7 +430,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         }
 
         builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
-            showAddNodesChoiceDialog()
+            showUnifiedNodePicker()
         }
         builder.setNeutralButton(R.string.autosel_custom_nodes_clear) { _, _ ->
             MaterialAlertDialogBuilder(this)
@@ -452,49 +448,200 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         builder.show()
     }
 
-    private fun showBatchAddGroupDialog() {
-        val groups = GroupRepo.all().filter { !it.archive || it.id in checkedIds() }
-        if (groups.isEmpty()) return
-
-        val names = groups.map { it.displayName() }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.autosel_select_group_for_nodes)
-            .setItems(names) { _, which ->
-                showBatchNodeSelectDialog(groups[which])
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun showBatchNodeSelectDialog(group: ProxyGroup) {
-        val allProfiles = SagerDatabase.proxyDao.getByGroup(group.id).filter {
+    private fun showUnifiedNodePicker() {
+        val groups = GroupRepo.all().filter { !it.archive }
+        val allProfiles = SagerDatabase.proxyDao.getAll().filter {
             it.type != "autoselector" && it.type != "chain" && it.id != DataStore.editingId
         }
         if (allProfiles.isEmpty()) {
-            Snackbar.make(findViewById(android.R.id.content), "该分组下没有可用节点", Snackbar.LENGTH_SHORT).show()
+            Snackbar.make(findViewById(android.R.id.content), R.string.autosel_no_nodes_available, Snackbar.LENGTH_SHORT).show()
             return
         }
 
-        val current = checkedPids().toHashSet()
-        val names = allProfiles.map { "${it.displayName()} (${it.displayType()})" }.toTypedArray()
-        val checked = BooleanArray(allProfiles.size) { allProfiles[it].id in current }
+        val groupMap = groups.associateBy { it.id }
+        val profilesByGroup = allProfiles.groupBy { it.groupId }
+        val availableGroups = groups.filter { (profilesByGroup[it.id]?.size ?: 0) > 0 }
 
-        MaterialAlertDialogBuilder(this)
-            .setTitle(group.displayName())
-            .setMultiChoiceItems(names, checked) { _, which, isChecked ->
-                checked[which] = isChecked
+        val selected = checkedPids().toLinkedHashSet()
+        var currentGid = -1L
+        var filterText = ""
+
+        fun getFilteredList(): List<ProxyEntity> {
+            val base = if (currentGid == -1L) allProfiles else (profilesByGroup[currentGid] ?: emptyList())
+            if (filterText.isBlank()) return base
+            return base.filter { it.displayName().contains(filterText, ignoreCase = true) }
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp2px(16), dp2px(10), dp2px(16), 0)
+        }
+
+        val chipScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = android.view.View.OVER_SCROLL_NEVER
+        }
+        val chipLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        chipScroll.addView(chipLayout)
+        container.addView(chipScroll)
+
+        val searchEdit = EditText(this).apply {
+            hint = getString(R.string.autosel_picker_search_hint)
+            setSingleLine(true)
+            textSize = 14f
+            setPadding(dp2px(8), dp2px(10), dp2px(8), dp2px(10))
+        }
+        container.addView(searchEdit)
+
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp2px(4), 0, dp2px(6))
+        }
+        val selectAllBtn = TextView(this).apply {
+            text = getString(R.string.autosel_picker_select_all)
+            setTextColor(ContextCompat.getColor(this@AutoSelectorSettingsActivity, R.color.material_blue_500))
+            textSize = 13f
+            setPadding(0, dp2px(4), dp2px(16), dp2px(4))
+        }
+        val deselectAllBtn = TextView(this).apply {
+            text = getString(R.string.autosel_picker_deselect_all)
+            setTextColor(ContextCompat.getColor(this@AutoSelectorSettingsActivity, R.color.material_blue_500))
+            textSize = 13f
+            setPadding(dp2px(8), dp2px(4), dp2px(16), dp2px(4))
+        }
+        actionRow.addView(selectAllBtn)
+        actionRow.addView(deselectAllBtn)
+        container.addView(actionRow)
+
+        val recyclerView = RecyclerView(this).apply {
+            layoutManager = LinearLayoutManager(this@AutoSelectorSettingsActivity)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp2px(320)
+            )
+        }
+        container.addView(recyclerView)
+
+        var currentItems = getFilteredList()
+        val adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+                val itemView = layoutInflater.inflate(R.layout.layout_rule_set_item, parent, false)
+                return object : RecyclerView.ViewHolder(itemView) {}
             }
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val updated = checkedPids()
-                for (i in allProfiles.indices) {
-                    val id = allProfiles[i].id
-                    if (checked[i] && id !in updated) {
-                        updated.add(id)
-                    } else if (!checked[i] && id in updated) {
-                        updated.remove(id)
+
+            override fun getItemCount(): Int = currentItems.size
+
+            override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+                val item = currentItems[position]
+                val check = holder.itemView.findViewById<MaterialCheckBox>(R.id.check)
+                val name = holder.itemView.findViewById<TextView>(R.id.name)
+                val source = holder.itemView.findViewById<TextView>(R.id.source)
+
+                check.isChecked = item.id in selected
+                name.text = item.displayName()
+                val gName = groupMap[item.groupId]?.displayName() ?: ""
+                source.text = "${item.displayType()} · $gName"
+
+                val toggle = {
+                    if (item.id in selected) {
+                        selected.remove(item.id)
+                    } else {
+                        selected.add(item.id)
+                    }
+                    check.isChecked = item.id in selected
+                }
+                holder.itemView.setOnClickListener { toggle() }
+                check.setOnClickListener { toggle() }
+            }
+        }
+        recyclerView.adapter = adapter
+
+        val groupButtons = ArrayList<Pair<Long, TextView>>()
+        fun refreshChips() {
+            for ((gid, tv) in groupButtons) {
+                val isCurrent = gid == currentGid
+                val gd = GradientDrawable().apply {
+                    cornerRadius = dp2px(14).toFloat()
+                    if (isCurrent) {
+                        setColor(0xFF1976D2.toInt())
+                    } else {
+                        setColor(0x1F888888.toInt())
                     }
                 }
-                savePids(updated)
+                tv.background = gd
+                tv.setTextColor(if (isCurrent) Color.WHITE else 0xFF444444.toInt())
+            }
+        }
+
+        fun updateList() {
+            currentItems = getFilteredList()
+            adapter.notifyDataSetChanged()
+        }
+
+        val allBtn = TextView(this).apply {
+            text = "${getString(R.string.autosel_picker_all_groups)} (${allProfiles.size})"
+            textSize = 13f
+            setPadding(dp2px(12), dp2px(6), dp2px(12), dp2px(6))
+            setOnClickListener {
+                currentGid = -1L
+                refreshChips()
+                updateList()
+            }
+        }
+        groupButtons.add(Pair(-1L, allBtn))
+        chipLayout.addView(allBtn)
+
+        for (g in availableGroups) {
+            val count = profilesByGroup[g.id]?.size ?: 0
+            val gBtn = TextView(this).apply {
+                text = "${g.displayName()} ($count)"
+                textSize = 13f
+                setPadding(dp2px(12), dp2px(6), dp2px(12), dp2px(6))
+                val lp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = dp2px(6)
+                }
+                layoutParams = lp
+                setOnClickListener {
+                    currentGid = g.id
+                    refreshChips()
+                    updateList()
+                }
+            }
+            groupButtons.add(Pair(g.id, gBtn))
+            chipLayout.addView(gBtn)
+        }
+        refreshChips()
+
+        searchEdit.addTextChangedListener {
+            filterText = it?.toString().orEmpty().trim()
+            updateList()
+        }
+
+        selectAllBtn.setOnClickListener {
+            for (item in currentItems) selected.add(item.id)
+            adapter.notifyDataSetChanged()
+        }
+        deselectAllBtn.setOnClickListener {
+            for (item in currentItems) selected.remove(item.id)
+            adapter.notifyDataSetChanged()
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.autosel_picker_title)
+            .setView(container)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                savePids(selected.toList())
+                Snackbar.make(
+                    findViewById(android.R.id.content),
+                    getString(R.string.autosel_custom_nodes_summary, selected.size, ""),
+                    Snackbar.LENGTH_SHORT
+                ).show()
                 showCustomNodesDialog()
             }
             .setNegativeButton(android.R.string.cancel, null)
