@@ -189,7 +189,7 @@ class RouteRuleActivity : ThemedActivity(R.layout.layout_config_settings), OnPre
         issueCache = null
         DataStore.dirty = true
         if (key == "outbound_id") {
-            val act = store.getString("action")
+            val act = store.getString("action", "route")
             if (act != "route" && act != "bypass") {
                 store.putString("action", "route")
                 fragment?.findPreference<SimpleMenuPreference>("action")?.value = "route"
