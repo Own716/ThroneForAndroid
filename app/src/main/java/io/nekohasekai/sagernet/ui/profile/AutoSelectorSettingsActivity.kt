@@ -343,6 +343,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         savePids(current)
         val name = ProfileManager.getProfile(id)?.displayName() ?: id.toString()
         Snackbar.make(findViewById(android.R.id.content), getString(R.string.autosel_custom_nodes_added, name), Snackbar.LENGTH_SHORT).show()
+        showCustomNodesDialog()
     }
 
     private fun PreferenceFragmentCompat.setupCustomNodes() {
@@ -372,6 +373,24 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         }
     }
 
+    private fun showAddNodesChoiceDialog() {
+        val choices = arrayOf(
+            getString(R.string.autosel_custom_nodes_add_single),
+            getString(R.string.autosel_custom_nodes_add_batch)
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.autosel_custom_nodes_add_choice_title)
+            .setItems(choices) { _, which ->
+                if (which == 0) {
+                    selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
+                } else {
+                    showBatchAddGroupDialog()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     private fun showCustomNodesDialog() {
         val pids = checkedPids()
         val nodeItems = ArrayList<Pair<Long, String>>()
@@ -391,10 +410,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
         if (nodeItems.isEmpty()) {
             builder.setMessage(R.string.autosel_custom_nodes_empty)
             builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
-                selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
-            }
-            builder.setNeutralButton(R.string.autosel_custom_nodes_batch_add) { _, _ ->
-                showBatchAddGroupDialog()
+                showAddNodesChoiceDialog()
             }
             builder.setNegativeButton(android.R.string.cancel, null)
             builder.show()
@@ -411,16 +427,26 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
                     val updated = checkedPids().filter { it != target.first }
                     savePids(updated)
                     Snackbar.make(findViewById(android.R.id.content), R.string.autosel_custom_nodes_removed, Snackbar.LENGTH_SHORT).show()
+                    showCustomNodesDialog()
                 }
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
         }
 
         builder.setPositiveButton(R.string.autosel_custom_nodes_add) { _, _ ->
-            selectProfileForAdd.launch(Intent(this, ProfileSelectActivity::class.java))
+            showAddNodesChoiceDialog()
         }
-        builder.setNeutralButton(R.string.autosel_custom_nodes_batch_add) { _, _ ->
-            showBatchAddGroupDialog()
+        builder.setNeutralButton(R.string.autosel_custom_nodes_clear) { _, _ ->
+            MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.autosel_custom_nodes_clear)
+                .setMessage(R.string.autosel_custom_nodes_clear_confirm)
+                .setPositiveButton(R.string.delete) { _, _ ->
+                    savePids(emptyList())
+                    Snackbar.make(findViewById(android.R.id.content), R.string.autosel_custom_nodes_cleared, Snackbar.LENGTH_SHORT).show()
+                    showCustomNodesDialog()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
         }
         builder.setNegativeButton(android.R.string.ok, null)
         builder.show()
@@ -469,6 +495,7 @@ class AutoSelectorSettingsActivity : BindingSettingsActivity<AutoSelector>() {
                     }
                 }
                 savePids(updated)
+                showCustomNodesDialog()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
