@@ -103,7 +103,9 @@ class RouteProfile {
             if (rule.outbound_id != OutboundIds.DIRECT || rule.action != "route" || !unconditional(rule)) continue
             for (entry in rule.rule_set) {
                 val e = entry.trim()
-                if (e.startsWith("geoip-")) out.add("ruleset:$e")
+                if (e.isNotEmpty() && (e.startsWith("geoip-") || e.endsWith("-ip") || e.endsWith("_ip") || e.contains("geoip") || e.contains("cn-ip"))) {
+                    out.add("ruleset:$e")
+                }
             }
             addPrefixed(out, "ip:", rule.ip_cidr)
         }
@@ -136,7 +138,9 @@ class RouteProfile {
         val out = ArrayList<String>()
         for (entry in rule.rule_set) {
             val e = entry.trim()
-            if (e.startsWith("geosite-")) out.add("ruleset:$e")
+            if (e.isNotEmpty() && !e.startsWith("geoip-") && !e.endsWith("-ip") && !e.endsWith("_ip") && !e.contains("geoip")) {
+                out.add("ruleset:$e")
+            }
         }
         addPrefixed(out, "domain:", rule.domain)
         addPrefixed(out, "suffix:", rule.domain_suffix)

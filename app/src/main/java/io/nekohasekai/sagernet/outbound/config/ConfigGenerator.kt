@@ -851,7 +851,7 @@ class ConfigGenerator @JvmOverloads constructor(
                 remoteDnsObj = DnsServers.buildDnsObj(DnsServers.upgradeUdpDnsToDoH(remoteDnsObj.string("server")))
             }
             remoteDnsObj["tag"] = Tags.DNS_REMOTE
-            remoteDnsObj["domain_resolver"] = Tags.DNS_LOCAL
+            remoteDnsObj["domain_resolver"] = Tags.DNS_DIRECT
             remoteDnsObj["detour"] = Tags.PROXY
             servers.add(remoteDnsObj)
         }
@@ -862,6 +862,21 @@ class ConfigGenerator @JvmOverloads constructor(
         servers.add(directDnsObj)
 
         appFamilyGuard(state)?.let { headRules.add(it) }
+
+        if (!state.forTest) {
+            headRules.add(
+                jsonObjectOf(
+                    "domain" to JsonArray.of(
+                        "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net"
+                    ),
+                    "domain_suffix" to JsonArray.of(
+                        ".speedtest.net", ".fast.com", ".ooklaserver.net", ".speedtestcustom.com"
+                    ),
+                    "action" to "route",
+                    "server" to Tags.DNS_REMOTE,
+                )
+            )
+        }
 
         if (!state.forTest && settings.dnsPredefinedEnable) {
             val predefined = PredefinedDns.parse(settings.dnsPredefinedRules) ?: emptyList()
@@ -1061,12 +1076,41 @@ class ConfigGenerator @JvmOverloads constructor(
         for (i in state.xrayToSingBridges.indices) {
             rules.add(jsonObjectOf("inbound" to bridgeTagFor(state.singIngressTags[i]), "action" to "route", "outbound" to state.singIngressTags[i]))
         }
-        rules.add(jsonObjectOf("action" to "sniff"))
-        if (settings.resolveDomainStrategy.isNotEmpty()) {
-            rules.add(jsonObjectOf("inbound" to JsonArray.of(Tags.MIXED_IN, Tags.TUN_IN), "action" to "resolve", "strategy" to settings.resolveDomainStrategy))
-        }
+        // 1. 嗅探行为（精准嗅探，避免非 TLS 流量长超时挂起）
+        rules.add(jsonObjectOf("action" to "sniff", "timeout" to "100ms", "sniffer" to JsonArray.of("tls", "http", "quic")))
+        // 2. 目标反查（resolve）确保即使应用使用本地 DNS 缓存的 IP 也能正确识别域名命中规则
+        val resolveStrategy = if (settings.resolveDomainStrategy.isNotEmpty()) settings.resolveDomainStrategy else "prefer_ipv4"
+        rules.add(jsonObjectOf("inbound" to JsonArray.of(Tags.MIXED_IN, Tags.TUN_IN), "action" to "resolve", "strategy" to resolveStrategy))
+        // 3. DNS 劫持
         rules.add(jsonObjectOf("protocol" to "dns", "action" to "hijack-dns"))
         if (!state.forTest) rules.add(jsonObjectOf("inbound" to Tags.DNS_IN, "action" to "reject"))
+
+        // 4. 海外测速服务（Speedtest / Fast / 节点测速）专项代理锁定
+        val speedtestDomains = JsonArray.of(
+            "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net"
+        )
+        val speedtestSuffixes = JsonArray.of(
+            ".speedtest.net", ".fast.com", ".ooklaserver.net", ".speedtestcustom.com", ".netflix.com"
+        )
+        rules.add(jsonObjectOf(
+            "domain" to speedtestDomains,
+            "domain_suffix" to speedtestSuffixes,
+            "action" to "route",
+            "outbound" to Tags.PROXY,
+        ))
+
+        // 5. Telegram 官方 DC 核心网段走代理（防断流）
+        val telegramDcCidrs = JsonArray.of(
+            "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22", "91.108.20.0/22", "91.108.56.0/22",
+            "149.154.160.0/20", "149.154.164.0/22", "149.154.168.0/22", "149.154.172.0/22",
+            "2001:b88::/32", "2001:67c:4e8::/48"
+        )
+        rules.add(jsonObjectOf(
+            "ip_cidr" to telegramDcCidrs,
+            "action" to "route",
+            "outbound" to Tags.PROXY,
+        ))
+
         for (rule in profileRules) rules.add(rule)
         val defaultOutbound = route.default_outbound_id
         // A block default is a direct final that nothing reaches (:2064-2068, :2126-2128).
@@ -1081,6 +1125,7 @@ class ConfigGenerator @JvmOverloads constructor(
             else -> OutboundIds.toName(defaultOutbound)
         }
         if (settings.trafficStats) routeObj["find_process"] = true
+        routeObj["default_fallback_delay"] = "100ms"
         routeObj["default_domain_resolver"] = directDomainResolver(buildContext)
         if (settings.vpnMode) routeObj["auto_detect_interface"] = true
         state.coreConfig["route"] = routeObj

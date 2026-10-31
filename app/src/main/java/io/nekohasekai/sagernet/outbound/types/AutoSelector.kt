@@ -59,7 +59,7 @@ class AutoSelector : Outbound("autoselector") {
     /** Members kept confirmed working (the failover pool). */
     @JvmField var expected: Int = 3
     @JvmField var dialRetries: Int = 2
-    @JvmField var interruptOnSwitch: Boolean = true
+    @JvmField var interruptOnSwitch: Boolean = false
 
     @JvmField var balance: Boolean = false
 
