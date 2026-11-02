@@ -1,3 +1,8 @@
+#### 2.1.2
+
+* **修复 sing-box 核心启动崩溃**：
+  - 彻底根除 `start dns/udp[dns-direct]: detour to an empty direct outbound makes no sense` 启动失败报错。移除 `dns-direct` 上非法的 `detour: direct` 声明，遵循 sing-box 1.15+ 核心规范，直连 DNS 传输默认使用物理网络接口，避免空直连出站引发校验失败。
+
 #### 2.1.1
 
 * **全面移植 OwnBox / BettBox 修复 Google 商店下载机制**：

@@ -873,7 +873,6 @@ class ConfigGenerator @JvmOverloads constructor(
         val directDnsObj = DnsServers.buildDnsObj(effectiveDirectDns, state.forTest)
         directDnsObj["tag"] = Tags.DNS_DIRECT
         directDnsObj["domain_resolver"] = Tags.DNS_LOCAL
-        directDnsObj["detour"] = Tags.DIRECT
         servers.add(directDnsObj)
 
         appFamilyGuard(state)?.let { headRules.add(it) }
