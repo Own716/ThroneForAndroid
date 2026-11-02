@@ -169,7 +169,15 @@ class VpnService : BaseVpnService(),
 
         val includePackage = options.getIncludePackage()
         if (includePackage.hasNext()) {
-            includePackage.toList().forEach {
+            val packages = includePackage.toList().toMutableSet()
+            if (packages.contains("com.android.vending")) {
+                packages.add("com.android.providers.downloads")
+                packages.add("com.android.providers.downloads.ui")
+                packages.add("com.xiaomi.providers.downloads")
+                packages.add("com.google.android.gms")
+                packages.add("com.google.android.gsf")
+            }
+            packages.forEach {
                 try {
                     builder.addAllowedApplication(it)
                 } catch (_: PackageManager.NameNotFoundException) {

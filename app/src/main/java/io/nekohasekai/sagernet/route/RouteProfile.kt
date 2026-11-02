@@ -158,7 +158,7 @@ class RouteProfile {
      * network-dependent rules are left out; the route rule alone decides for them.
      */
     private fun unconditional(rule: RouteRule): Boolean =
-        !rule.invert && !rule.matchesByApp() && rule.networkConditions().isEmpty()
+        !rule.invert && rule.networkConditions().isEmpty()
 
     private fun addPrefixed(out: MutableList<String>, prefix: String, values: List<String>) {
         for (value in values) {

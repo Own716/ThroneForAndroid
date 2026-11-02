@@ -1,3 +1,14 @@
+#### 2.1.1
+
+* **全面移植 OwnBox / BettBox 修复 Google 商店下载机制**：
+  - 分应用代理（VpnService 底层与 TUN）智能联动：只要勾选 Google Play 商店（`com.android.vending`），自动放行 Android 系统下载管理器（`com.android.providers.downloads` / `.ui`）、小米系统下载组件与 GMS/GSF 核心进 VPN，杜绝大文件下载被甩出 VPN 导致 0% 卡死。
+  - 路由规则层解除应用限制：带有应用包名的规则中的域名正常提取同步至远程 DNS，避免 Google 域名被遗漏走国内 DNS 污染。
+  - 全量内置 OwnBox 18 个 Google Play 下载 CDN 矩阵（`gvt1.com` ~ `gvt9.com`、`gvt1-cn.com` 等），并对 Google 域名屏蔽 UDP 443 (QUIC)，强制使用稳定的 TCP 极速下载。
+* **彻底根除关闭 FakeDNS 后的全网断网故障**：
+  - 直连 DNS 智能优化：底层检测到 `localhost` / `local` 时自动安全回退到可靠的公共直连 DNS（`223.5.5.5`）并锁定 `detour: direct`，彻底杜绝 Real-IP 模式下国内解析黑洞。
+* **MTU 保持原则**：
+  - MTU 维持 9000 默认值不变，完全交由用户在设置中自定义。
+
 #### 2.1.0
 
 * **修复 FakeDNS 模式下国内全线超时**：调整 DNS 规则注入顺序，直连与国内规则优先由直连 DNS 解析真实 IP，避免国内域名被通配 Fake-IP 捕获导致直连黑洞。

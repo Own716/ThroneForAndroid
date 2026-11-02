@@ -564,7 +564,15 @@ class ConfigGenerator @JvmOverloads constructor(
         tun["endpoint_independent_nat"] = true
         tun["udp_timeout"] = "30s"
         if (settings.perAppEnabled) {
-            val packages = JsonValues.stringArray(settings.perAppPackages.map { it.trim() })
+            val list = settings.perAppPackages.map { it.trim() }.toMutableSet()
+            if (!settings.perAppBypass && list.contains("com.android.vending")) {
+                list.add("com.android.providers.downloads")
+                list.add("com.android.providers.downloads.ui")
+                list.add("com.xiaomi.providers.downloads")
+                list.add("com.google.android.gms")
+                list.add("com.google.android.gsf")
+            }
+            val packages = JsonValues.stringArray(list.toList())
             if (packages.isNotEmpty()) tun[if (settings.perAppBypass) "exclude_package" else "include_package"] = packages
         }
         // ProxyInfo carries no credentials: apps would only get 407 from a mixed inbound with users.
@@ -856,9 +864,16 @@ class ConfigGenerator @JvmOverloads constructor(
             servers.add(remoteDnsObj)
         }
 
-        val directDnsObj = DnsServers.buildDnsObj(settings.directDns, state.forTest)
+        val directDnsSetting = settings.directDns.trim()
+        val effectiveDirectDns = if (directDnsSetting.isEmpty() || directDnsSetting.equals("localhost", ignoreCase = true) || directDnsSetting.equals("local", ignoreCase = true)) {
+            "223.5.5.5"
+        } else {
+            directDnsSetting
+        }
+        val directDnsObj = DnsServers.buildDnsObj(effectiveDirectDns, state.forTest)
         directDnsObj["tag"] = Tags.DNS_DIRECT
         directDnsObj["domain_resolver"] = Tags.DNS_LOCAL
+        directDnsObj["detour"] = Tags.DIRECT
         servers.add(directDnsObj)
 
         appFamilyGuard(state)?.let { headRules.add(it) }
@@ -1120,10 +1135,12 @@ class ConfigGenerator @JvmOverloads constructor(
 
         // 6. Google Play 核心下载 CDN 矩阵锁定走代理，并阻断其 UDP 443 (QUIC) 避免下载转圈卡死
         val googlePlayDownloadDomains = JsonArray.of(
-            "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com"
+            "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com", "xn--ngstr-cn-8za9o.com",
+            "playstoregatewayadapter-pa.googleapis.com", "firebaselogging-pa.googleapis.com", "android.clients.google.com"
         )
         val googlePlayDownloadSuffixes = JsonArray.of(
-            ".gvt1.com", ".gvt2.com", ".gvt3.com", ".googleusercontent.com", ".ggpht.com"
+            ".gvt1.com", ".gvt2.com", ".gvt3.com", ".gvt5.com", ".gvt6.com", ".gvt7.com", ".gvt9.com",
+            ".gvt1-cn.com", ".gvt2-cn.com", ".googleusercontent.com", ".ggpht.com"
         )
         rules.add(jsonObjectOf(
             "domain" to googlePlayDownloadDomains,
