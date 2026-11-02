@@ -881,10 +881,14 @@ class ConfigGenerator @JvmOverloads constructor(
             headRules.add(
                 jsonObjectOf(
                     "domain" to JsonArray.of(
-                        "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net"
+                        "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net",
+                        "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com", "xn--ngstr-cn-8za9o.com",
+                        "playstoregatewayadapter-pa.googleapis.com", "firebaselogging-pa.googleapis.com", "android.clients.google.com", "play.googleapis.com"
                     ),
                     "domain_suffix" to JsonArray.of(
-                        ".speedtest.net", ".fast.com", ".ooklaserver.net", ".speedtestcustom.com"
+                        ".speedtest.net", ".fast.com", ".ooklaserver.net", ".speedtestcustom.com",
+                        ".gvt1.com", ".gvt2.com", ".gvt3.com", ".gvt5.com", ".gvt6.com", ".gvt7.com", ".gvt9.com",
+                        ".gvt1-cn.com", ".gvt2-cn.com", ".googleusercontent.com", ".ggpht.com"
                     ),
                     "action" to "route",
                     "server" to Tags.DNS_REMOTE,
@@ -1135,7 +1139,7 @@ class ConfigGenerator @JvmOverloads constructor(
         // 6. Google Play 核心下载 CDN 矩阵锁定走代理，并阻断其 UDP 443 (QUIC) 避免下载转圈卡死
         val googlePlayDownloadDomains = JsonArray.of(
             "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com", "xn--ngstr-cn-8za9o.com",
-            "playstoregatewayadapter-pa.googleapis.com", "firebaselogging-pa.googleapis.com", "android.clients.google.com"
+            "playstoregatewayadapter-pa.googleapis.com", "firebaselogging-pa.googleapis.com", "android.clients.google.com", "play.googleapis.com"
         )
         val googlePlayDownloadSuffixes = JsonArray.of(
             ".gvt1.com", ".gvt2.com", ".gvt3.com", ".gvt5.com", ".gvt6.com", ".gvt7.com", ".gvt9.com",
@@ -1168,7 +1172,7 @@ class ConfigGenerator @JvmOverloads constructor(
             OutboundIds.WARP_BYPASS -> if (settings.enableWarp) Tags.WARP_BYPASS else Tags.PROXY
             else -> OutboundIds.toName(defaultOutbound)
         }
-        if (settings.trafficStats) routeObj["find_process"] = true
+        routeObj["find_process"] = true
         routeObj["default_fallback_delay"] = "100ms"
         routeObj["default_domain_resolver"] = directDomainResolver(buildContext)
         if (settings.vpnMode) routeObj["auto_detect_interface"] = true

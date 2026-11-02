@@ -1,3 +1,10 @@
+#### 2.1.3
+
+* **全场景深度修复 Google Play 商店下载卡死（等待中 / 0%）**：
+  - **用户路由规则自动联动底层下载器**：在分流路由规则层，任何包含 `com.android.vending` 的自定义规则，底层自动静默联动补全 Android 系统下载管理器（`com.android.providers.downloads` / `.ui`）、小米下载组件与 GMS/GSF 核心，彻底解决分流规则未覆盖系统底层下载服务导致的下载流量滑落直连问题。
+  - **DNS 远程安全解析锁定**：将 Google Play 核心 CDN 矩阵（`*.gvt1.com` ~ `*.gvt9.com`、`services.googleapis.cn`、`xn--ngstr-lra8j.com`、`play.googleapis.com` 等）全面并入首要 DNS 规则，强制由 `dns-remote` 安全解析，杜绝被境内规则污染为死锁 IP。
+  - **常驻开启内核进程嗅探 (`find_process`)**：确保无论用户是否勾选流量统计，内核均能准确识别数据包归属 App 包名，保障分应用分流规则 100% 稳定生效。
+
 #### 2.1.2
 
 * **修复 sing-box 核心启动崩溃**：
