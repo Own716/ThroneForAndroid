@@ -917,11 +917,9 @@ class ConfigGenerator @JvmOverloads constructor(
             // Not fc00::/18: the Tun's fc00::/7 private-range bypass would route fake addresses outside it.
             if (!settings.fakeIpDisableIpv6) fakeServer["inet6_range"] = "2001:db8::/32"
             servers.add(fakeServer)
-            rules.add(jsonObjectOf("query_type" to JsonArray.of("A", "AAAA"), "action" to "route", "server" to Tags.DNS_FAKE))
             independentCache = true
         }
 
-        // Below the fakeip rule, which keeps answering A / AAAA for these sites as on the desktop (R6 §3.5).
         val pre = state.prerequisites
         // Ahead of the site lists, so on its network a rule's DNS server wins the way its route does.
         for ((server, conditions, selectors) in pre.conditionalDns) {
@@ -930,6 +928,11 @@ class ConfigGenerator @JvmOverloads constructor(
             appendDnsRoutingRules(rules, selectors, server, disableIPv6, conditions)
         }
         if (pre.needDirectDnsRules) appendDnsRoutingRules(rules, pre.directDns, Tags.DNS_DIRECT, buildContext.directDnsDisableIpv6)
+
+        // Foreign and non-direct domains use Fake-IP when enabled
+        if (settings.fakeDns) {
+            rules.add(jsonObjectOf("query_type" to JsonArray.of("A", "AAAA"), "action" to "route", "server" to Tags.DNS_FAKE))
+        }
 
         // A test box builds no dns-remote server at all, so its fall-through goes out direct.
         val useDirectFinalDns = state.forTest || settings.dnsFinalOut == Tags.DIRECT
@@ -1077,14 +1080,17 @@ class ConfigGenerator @JvmOverloads constructor(
         for (i in state.xrayToSingBridges.indices) {
             rules.add(jsonObjectOf("inbound" to bridgeTagFor(state.singIngressTags[i]), "action" to "route", "outbound" to state.singIngressTags[i]))
         }
-        // 1. 嗅探行为（精准嗅探，避免非 TLS 流量长超时挂起）
-        rules.add(jsonObjectOf("action" to "sniff", "timeout" to "100ms", "sniffer" to JsonArray.of("tls", "http", "quic")))
-        // 2. 目标反查（resolve）确保即使应用使用本地 DNS 缓存的 IP 也能正确识别域名命中规则
-        val resolveStrategy = if (settings.resolveDomainStrategy.isNotEmpty()) settings.resolveDomainStrategy else "prefer_ipv4"
-        rules.add(jsonObjectOf("inbound" to JsonArray.of(Tags.MIXED_IN, Tags.TUN_IN), "action" to "resolve", "strategy" to resolveStrategy))
-        // 3. DNS 劫持
+        // 1. DNS 劫持必须最优先处理，防止 DNS 查询数据包被后续规则误伤或死循环
         rules.add(jsonObjectOf("protocol" to "dns", "action" to "hijack-dns"))
         if (!state.forTest) rules.add(jsonObjectOf("inbound" to Tags.DNS_IN, "action" to "reject"))
+
+        // 2. 流量嗅探（放宽超时时间至 300ms，防止移动网络和高延迟连接首包嗅探失败）
+        rules.add(jsonObjectOf("action" to "sniff", "timeout" to "300ms", "sniffer" to JsonArray.of("tls", "http", "quic")))
+
+        // 3. 仅在用户显式指定了域名解析策略时才执行 resolve（彻底消除 FakeDNS 死循环与超时）
+        if (settings.resolveDomainStrategy.isNotEmpty()) {
+            rules.add(jsonObjectOf("inbound" to JsonArray.of(Tags.MIXED_IN, Tags.TUN_IN), "action" to "resolve", "strategy" to settings.resolveDomainStrategy))
+        }
 
         // 4. 海外测速服务（Speedtest / Fast / 节点测速）专项代理锁定
         val speedtestDomains = JsonArray.of(
@@ -1108,6 +1114,27 @@ class ConfigGenerator @JvmOverloads constructor(
         )
         rules.add(jsonObjectOf(
             "ip_cidr" to telegramDcCidrs,
+            "action" to "route",
+            "outbound" to Tags.PROXY,
+        ))
+
+        // 6. Google Play 核心下载 CDN 矩阵锁定走代理，并阻断其 UDP 443 (QUIC) 避免下载转圈卡死
+        val googlePlayDownloadDomains = JsonArray.of(
+            "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com"
+        )
+        val googlePlayDownloadSuffixes = JsonArray.of(
+            ".gvt1.com", ".gvt2.com", ".gvt3.com", ".googleusercontent.com", ".ggpht.com"
+        )
+        rules.add(jsonObjectOf(
+            "domain" to googlePlayDownloadDomains,
+            "domain_suffix" to googlePlayDownloadSuffixes,
+            "network" to "udp",
+            "port" to JsonArray.of(443),
+            "action" to "reject",
+        ))
+        rules.add(jsonObjectOf(
+            "domain" to googlePlayDownloadDomains,
+            "domain_suffix" to googlePlayDownloadSuffixes,
             "action" to "route",
             "outbound" to Tags.PROXY,
         ))
