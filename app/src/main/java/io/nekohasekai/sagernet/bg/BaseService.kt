@@ -546,7 +546,10 @@ class BaseService {
                     "ServiceStopTrace serviceId=$serviceId proxyId=$proxyId " +
                         "stage=stopped restart=$restart hasCleanupError=${cleanupError != null}"
                 )
-                if (!finishRestart) DeferredRuleSets.serviceStopped()
+                if (!finishRestart) {
+                    DeferredRuleSets.serviceStopped()
+                    AutoSelectorRuntime.serviceStopped()
+                }
 
                 val queuedStart = data.startRequestedWhileStopping
                 data.startRequestedWhileStopping = false
@@ -723,6 +726,7 @@ class BaseService {
                     withContext(coreDispatcher) { proxy.init() }
                     DataStore.currentProfile = profile.id
                     DataStore.runningProfiles = proxy.config.involvedProfileIds.map { it.toString() }
+                    DataStore.runningRouteId = proxy.routeId
 
                     withContext(coreDispatcher) { startProcesses() }
                     data.changeState(State.Connected)

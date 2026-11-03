@@ -1,3 +1,20 @@
+#### 2.1.4
+
+* **融合官方原版 v2.0.5 全部最新特性**：
+  - 同步官方最新核心库（`THRONE_CORE_REF=36b6bc4...`），提升核心协议兼容性与运行效率。
+  - 新增外观选项：紧凑节点列表行模式与紧凑分组卡片模式（设置 › 外观）。
+  - 二维码扫码优化：全屏相机取景框智能自动对焦与多角度全景识别。
+  - 自动选择器升级：支持排除指定国家（国家过滤填 `!国家代码` 如 `!RU`）；支持达到足够有效节点后抢跑启动（Early Start）。
+  - 增强网络连接性：掉线后自动清理失效网卡并重连系统默认网络；支持允许应用绕过 VPN（Allow apps to bypass VPN）。
+  - 分组专属路由支持：支持分组独立配置路由规则并从订阅（Happ 格式）自动同步，支持 Warp AmneziaWG 模式。
+  - 安全脱敏与修复：日志导出自动脱敏敏感凭据密钥；修复深色模式跟随省电策略。
+* **完整保留 Fork 全部自研增强特性**：
+  - 状态栏实况通知胶囊与锁屏动态岛系统（Live Update Capsule）。
+  - 代理出口 IP 纯净探测，避免国内网络探测泄露。
+  - 跨订阅跨分组节点挑选自动选择器。
+  - Google Play 商店全场景高速下载修复（规则自动联动下载器 + 18 CDN 矩阵代理 + QUIC 阻断 + DNS 远程防污染）。
+  - DNS Real-IP / FakeDNS 模式稳定直连与防断网体系。
+
 #### 2.1.3
 
 * **全场景深度修复 Google Play 商店下载卡死（等待中 / 0%）**：
@@ -66,6 +83,25 @@
 
 **4**:
 采用“用户配置即最终执行”核心原则，MTU 默认保持 9000 不变并完全交由用户自定义，多路复用 Mux 与协议预设 100% 忠实生效。
+
+#### 2.0.5 (Upstream)
+
+* Add per-group routing profiles
+* Add routing profile import from subscriptions
+* Add AmneziaWG mode to WARP
+* Add compact profile rows and compact group cards
+* Add Allow apps to bypass VPN
+* Allow excluding countries in the Auto Selector
+* Start the Auto Selector as soon as enough profiles work
+* Reconnect to the replacement when a subscription update removes the running profile
+* Add Clear test results and Clear traffic statistics to the profile menu
+* Show Xray logs in the app log
+* Fix Xray profiles stalling for about a minute after a network change
+* Fix Xray XHTTP connection leak
+* Fix connections not recovering after a network loss
+* Fix AmneziaWG on devices with UDP GSO, again
+* Fix the per-app proxy switch not turning off
+* Fixes and Improvements
 
 #### 2.0.4
 

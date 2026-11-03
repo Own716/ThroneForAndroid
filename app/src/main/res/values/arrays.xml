@@ -153,7 +153,7 @@
         <item>@string/follow_system</item>
         <item>@string/enable</item>
         <item>@string/disable</item>
-        <item>@string/auto</item>
+        <item>@string/follow_battery_saver</item>
     </string-array>
 
     <string-array name="group_types">
@@ -720,10 +720,12 @@
     <string-array name="warp_mode_entries" translatable="false">
         <item>@string/warp_mode_wireguard</item>
         <item>@string/warp_mode_masque</item>
+        <item>@string/warp_mode_amnezia</item>
     </string-array>
     <string-array name="warp_mode_values" translatable="false">
         <item>wireguard</item>
         <item>masque</item>
+        <item>amnezia</item>
     </string-array>
     <string-array name="warp_masque_http_mode_entries">
         <item>@string/warp_http3_fallback</item>

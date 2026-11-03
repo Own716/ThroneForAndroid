@@ -81,7 +81,11 @@
     <string name="clear_traffic_statistics">Slett trafikkstatistikk</string>
     <string name="always_show_address_sum">Vis alltid serveradressen på konfigurasjonskortet</string>
     <string name="always_show_address">Vis alltid adresse</string>
-    <string name="auto">Automatisk</string>
+    <string name="compact_profile_rows">Kompakte profilrader</string>
+    <string name="compact_profile_rows_sum">Vis hver profil på én kort linje med bare navn og forsinkelse</string>
+    <string name="compact_group_cards">Kompakte gruppekort</string>
+    <string name="compact_group_cards_sum">Vis en forbruksstolpe og gjenværende tid i stedet for abonnementslenken og detaljene</string>
+    <string name="follow_battery_saver">Følg batterisparing</string>
     <string name="disable">Deaktiver</string>
     <string name="enable">Muliggjøre</string>
     <string name="lines">%d linjer</string>
@@ -127,6 +131,8 @@
     <string name="enable_mux">Aktiver Multiplexer</string>
     <string name="menu_route">Rute</string>
     <string name="metered_summary">Tips system for å behandle VPN som målt</string>
+    <string name="allow_bypass">La apper omgå VPN</string>
+    <string name="allow_bypass_summary">Apper som ber om det kan koble til utenfor VPN, for eksempel Google-pushvarsler (FCM)</string>
     <string name="metered">Målt hint</string>
     <string name="early_data_header_name">Tidlig navn på dataoverskrift</string>
     <string name="certificates">Sertifikater</string>
@@ -222,7 +228,6 @@
     <string name="menu_dashboard">sing-box-oversikt</string>
     <string name="action_copy">Kopier</string>
     <string name="update_all_subscription">Oppdater alle abonnementer</string>
-    <string name="layout">Oppsett</string>
     <string name="layout_single_column">Én kolonne</string>
     <string name="layout_double_column">To kolonner</string>
     <string name="mux_max_connections">Maks tilkoblinger</string>
@@ -677,6 +682,7 @@
     <string name="route_options">Flere alternativer</string>
     <string name="route_active">Gjeldende ruteprofil</string>
     <string name="route_switched">Ruteprofil: %s</string>
+    <string name="route_group_keeps_own">Gruppen \"%1$s\" bruker sin egen ruteprofil, så den kjørende profilen beholder den.</string>
     <string name="route_item_default_outbound">Standard: %s</string>
     <plurals name="route_item_rules">
         <item quantity="one">%d regel</item>
@@ -686,6 +692,9 @@
     <string name="route_item_remote_never">Ekstern · ikke oppdatert ennå</string>
     <string name="route_item_auto_update_on">automatisk oppdatering på</string>
     <string name="route_item_auto_update_off">automatisk oppdatering av</string>
+    <string name="route_item_from_subscription">Oppdateres av abonnementet \"%1$s\"</string>
+    <string name="route_from_subscription_info">Hver oppdatering av abonnementet \"%1$s\" overskriver reglene i denne profilen. Sletting stopper importen.</string>
+    <string name="route_subscription_profile_name">Ruting for %1$s</string>
     <string name="route_delete_last">Ruteprofiler kan ikke være tomme, prøv å legge til en annen profil eller rediger denne</string>
     <string name="route_link_copied">Kopiert!</string>
     <string name="route_export_warnings_title">Eksportert med advarsler</string>
@@ -879,9 +888,15 @@
     <string name="grp_landing_proxy">Landingsmellomtjener</string>
     <string name="grp_none">Ingen</string>
     <string name="grp_missing_profile">Profil #%1$d (mangler)</string>
+    <string name="grp_route_profile">Ruteprofil</string>
+    <string name="grp_route_profile_default">Standard (%1$s)</string>
+    <string name="grp_route_profile_from_subscription">%1$s (fra dette abonnementet)</string>
+    <string name="grp_route_profile_tip">Ruteprofilen som brukes når profilene i denne gruppen kobler til. \"Standard\" følger ruteprofilen som er valgt i menyen \"Rute\".</string>
     <string name="grp_auto_clear_unavailable">Fjern utilgjengelige profiler automatisk</string>
     <string name="grp_url">URL</string>
     <string name="grp_skip_auto_update">Hopp over automatisk oppdatering</string>
+    <string name="grp_import_sub_route">Bruk abonnementets ruteprofil</string>
+    <string name="grp_import_sub_route_tip">Ved hver oppdatering lagres ruteprofilen abonnementet leverer (Happ-format) som denne gruppens egen ruteprofil. DNS-innstillinger fra abonnementet brukes aldri.</string>
     <string name="grp_no_auto_selector">En automatisk velger flytter server på egen hånd, så den kan ikke holde en fast front-/landingsplass.</string>
     <string name="grp_advanced">Avansert</string>
     <string name="grp_advanced_count">Avansert (%d satt)</string>
@@ -966,6 +981,8 @@
     <string name="subs_removed_unavailable">Fjernet %1$d utilgjengelige profiler:</string>
     <string name="subs_invalid_core_unreachable">Hoppet over fjerning av ugyldige profiler: kjernen er utilgjengelig.</string>
     <string name="subs_running_kept">Den kjørende profilen ble beholdt.</string>
+    <string name="subs_running_replaced">%1$s ble erstattet av oppdateringen; kobler til profilen med samme navn.</string>
+    <string name="subs_running_removed">%1$s ble fjernet av oppdateringen og forblir stoppet: ingen enkelt profil med samme navn erstatter den.</string>
     <string name="subs_sort_skipped">Hoppet over sortering av %1$s: en annen sortering pågår.</string>
     <string name="subs_after_url_test">Etter URL-testen av %1$s:</string>
     <string name="subs_imported">Importerte %1$d profil(er)</string>
@@ -1012,7 +1029,6 @@
     <string name="profiles_show">Vis</string>
     <string name="profiles_show_out_ip">Utgående IP</string>
     <string name="profiles_show_speed">Hastighet</string>
-    <string name="profiles_appearance">Utseende</string>
     <string name="confirm_clear">Tøm</string>
     <string name="confirm_restore">Gjenopprett</string>
     <string name="confirm_replace">Erstatt</string>
@@ -1179,7 +1195,7 @@
     <string name="autosel_group_archived">%s (arkivert)</string>
     <string name="autosel_group_missing">Manglende gruppe (#%d)</string>
     <string name="autosel_name_filter">Bare matchende navn</string>
-    <string name="autosel_name_filter_tip">Valgfritt regulært uttrykk. Bare profiler hvis navn matcher vurderes — nyttig for å plukke ut ett land eller én leverandør.</string>
+    <string name="autosel_name_filter_tip">Valgfritt regulært uttrykk som matches hvor som helst i profilnavnet, uten å skille mellom store og små bokstaver. Bare profiler hvis navn matcher, brukes.\nVelg flere: germany|nl\nUtelat noen: ^(?!.*(germany|🇩🇪)).*$ bruker alle navn som ikke inneholder noen av dem.</string>
     <string name="autosel_name_filter_empty">Enhver profil i gruppen</string>
     <string name="autosel_balance">Del trafikk mellom de beste profilene</string>
     <string name="autosel_balance_tip">Av som standard: én profil bærer alt og resten står i beredskap. Slå på for å spre trafikken over profilene som er bekreftet å fungere.</string>
@@ -1197,7 +1213,7 @@
     <string name="autosel_plan_kept_unavailable">Siste test for hver profil mislyktes, noe som vanligvis betyr at nettverket var nede heller enn tjenerne, så alle %d beholdes og vil bli sjekket på nytt.</string>
     <string name="autosel_plan_truncated">Flere enn %d profiler matcher, så bare de best rangerte beholdes.</string>
     <string name="autosel_plan_reused">%d har et nylig testresultat som vil bli gjenbrukt.</string>
-    <string name="autosel_plan_needs_ranking">Resten vil bli målt før velgeren starter.</string>
+    <string name="autosel_plan_needs_ranking">Resten måles når velgeren starter: den kjører så snart nok profiler fungerer, og bytter til full rangering når alle er målt.</string>
     <string name="autosel_error_no_group">Automatisk velger peker på en gruppe som ikke lenger finnes</string>
     <string name="autosel_error_no_members">Automatisk velger har ingen brukbare medlemmer</string>
     <string name="autosel_skip_missing">manglende profil</string>
@@ -1369,7 +1385,9 @@
     <string name="warp_enable">Aktiver WARP</string>
     <string name="warp_enable_sum">Aktiverer konfigurasjonen nedenfor for bruk som utgang, nyttig for å omgå tjenester som begrenser ikke-WARP VPN-er</string>
     <string name="warp_mode">Modus</string>
-    <string name="warp_mode_sum">%s\nWireGuard kjører over UDP. MASQUE tunneler over HTTP/3 eller HTTP/2 og passerer nettverk som blokkerer WireGuard.</string>
+    <string name="warp_mode_sum">%s\nWireGuard kjører over UDP. AmneziaWG legger til WARP-kompatible søppel- og kamuflasjepakker. MASQUE tunneler over HTTP/3 eller HTTP/2.</string>
+    <string name="warp_amnezia_generating">Genererer QUIC-signatur for AmneziaWG …</string>
+    <string name="warp_amnezia_missing">AmneziaWG har ingen QUIC-signatur ennå: trykk på \"Generer WARP-konfigurasjon\".</string>
     <string name="warp_wireguard_note">WARP kjører på din mellomtjener: WireGuard trenger en mellomtjener som videresender UDP.</string>
     <string name="warp_masque_note">WARP kjører på din mellomtjener: MASQUE over HTTP/3 trenger en mellomtjener som videresender UDP, over HTTP/2 trenger den bare TCP.</string>
     <string name="warp_endpoint">Endepunkt</string>
@@ -1399,6 +1417,8 @@
     <string name="warp_tos_message"><![CDATA[Generering av en WARP-identitet registrerer en ny enhet hos Cloudflare.<br><br>Godtar du <a href="%1$s">Cloudflare WARPs tjenestevilkår</a>?]]></string>
     <string name="warp_proxy_not_started">Forespørsel med mellomtjener, men ingen profil startet.</string>
     <string name="warp_core_unreachable">Kunne ikke nå kjernen.</string>
+    <string name="warp_quic_signature_invalid">Kjernen returnerte en ugyldig QUIC-signatur.</string>
+    <string name="warp_quic_signature_failed">Kunne ikke generere WARP-QUIC-signatur: %1$s</string>
     <string name="warp_disable">Deaktiver WARP</string>
     <string name="warp_enabled">WARP aktivert</string>
     <string name="warp_disabled">WARP deaktivert</string>
@@ -1726,8 +1746,8 @@
     <string name="subinfo_provider">Leverandør: %s</string>
     <string name="subinfo_expired">Utløpt</string>
     <string name="subinfo_minutes_left">%d min igjen</string>
-    <string name="subinfo_hours_left">%d t igjen</string>
-    <string name="subinfo_days_left">%d d igjen</string>
+    <string name="subinfo_hours_minutes_left">%1$d t %2$d min igjen</string>
+    <string name="subinfo_days_hours_left">%1$d d %2$d t igjen</string>
     <string name="subinfo_expires">Utløper: %s</string>
     <string name="subinfo_quota">%1$s / %2$s (%3$d %%)</string>
     <string name="subinfo_quota_unlimited">%1$s / ∞</string>
@@ -2107,7 +2127,7 @@
     <string name="validation_hysteria_hop_maximum_zero">Trenger også et intervall for porthopping over 0, for eksempel 30s med et maksimum på 60s.</string>
     <string name="validation_hysteria_hop_maximum_shorter">Kan ikke være kortere enn intervallet for porthopping.</string>
     <string name="validation_hysteria_hop_maximum_ignored">Ignoreres uten et intervall for porthopping; sett ett også, for eksempel 30s med et maksimum på 60s.</string>
-    <string name="validation_hysteria_v1_speed">Hysteria v1 trenger både opplastings- og nedlastingshastighet i Mbps, for eksempel 100.</string>
+    <string name="validation_hysteria_v1_speed">Hysteria v1 trenger både opplastings- og nedlastingshastighet i Mbps; for en manglende verdi brukes %1$d opp og %2$d ned. Angi den faktiske linjehastigheten din for best resultat.</string>
     <string name="validation_hysteria_gecko_range">Pakkestørrelser må være fra 0 til 2048; 0 bruker standarden.</string>
     <string name="validation_hysteria_gecko_order">Minste pakkestørrelse kan ikke overstige største; 0 betyr standarden, 512 for minimum og 1200 for maksimum.</string>
     <string name="validation_hysteria_auth_base64">Ikke gyldig base64. Velg STRING som autentiseringstype for en nyttelast i ren tekst.</string>
