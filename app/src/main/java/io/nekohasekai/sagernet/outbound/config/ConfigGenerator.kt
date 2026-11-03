@@ -863,7 +863,7 @@ class ConfigGenerator @JvmOverloads constructor(
 
         appFamilyGuard(state)?.let { headRules.add(it) }
 
-        if (!state.forTest && pre.needProxyDnsRules) {
+        if (!state.forTest) {
             headRules.add(
                 jsonObjectOf(
                     "domain" to JsonArray.of(
