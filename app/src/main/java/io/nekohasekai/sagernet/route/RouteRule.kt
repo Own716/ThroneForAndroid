@@ -234,17 +234,7 @@ class RouteRule {
         val flat = toRuleJson(false, outboundTag)
         val apps = (flat["package_name"] as? JsonArray)?.strings().orEmpty()
         val regexes = (flat["package_name_regex"] as? JsonArray)?.strings().orEmpty()
-        var packages = apps.filter { it != UNKNOWN_PACKAGE }
-        if (packages.contains("com.android.vending")) {
-            val enriched = packages.toMutableSet()
-            enriched.add("com.android.providers.downloads")
-            enriched.add("com.android.providers.downloads.ui")
-            enriched.add("com.xiaomi.providers.downloads")
-            enriched.add("com.google.android.gms")
-            enriched.add("com.google.android.gsf")
-            packages = enriched.toList()
-            flat["package_name"] = JsonValues.stringArray(packages)
-        }
+        val packages = apps.filter { it != UNKNOWN_PACKAGE }
         val unknown = UNKNOWN_PACKAGE in apps
         if (!unknown && (packages.isEmpty() || regexes.isEmpty())) return flat
         flat.remove("package_name")

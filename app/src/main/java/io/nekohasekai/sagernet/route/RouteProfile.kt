@@ -130,14 +130,12 @@ class RouteProfile {
     fun conditionalSites(): List<ConditionalSites> {
         val out = ArrayList<ConditionalSites>()
         for (rule in rules) {
-            val isProxyOutbound = rule.outbound_id == OutboundIds.PROXY || rule.outbound_id > 0
-            if (rule.outbound_id != OutboundIds.DIRECT && !isProxyOutbound) continue
+            if (rule.outbound_id != OutboundIds.DIRECT && rule.outbound_id != OutboundIds.PROXY) continue
             if (rule.action != "route" || rule.invert || rule.matchesByApp()) continue
             val conditions = rule.networkConditions()
             if (conditions.isEmpty()) continue
             val sites = ruleSites(rule)
-            val effectiveOutbound = if (rule.outbound_id == OutboundIds.DIRECT) OutboundIds.DIRECT else OutboundIds.PROXY
-            if (sites.isNotEmpty()) out.add(ConditionalSites(effectiveOutbound, conditions, sites))
+            if (sites.isNotEmpty()) out.add(ConditionalSites(rule.outbound_id, conditions, sites))
         }
         return out
     }
@@ -174,8 +172,7 @@ class RouteProfile {
     private fun sites(outbound: Long): List<String> {
         val out = ArrayList<String>()
         for (rule in rules) {
-            val isProxyOutbound = (outbound == OutboundIds.PROXY && (rule.outbound_id == OutboundIds.PROXY || rule.outbound_id > 0))
-            if ((rule.outbound_id != outbound && !isProxyOutbound) || rule.action != "route" || !unconditional(rule)) continue
+            if (rule.outbound_id != outbound || rule.action != "route" || !unconditional(rule)) continue
             out.addAll(ruleSites(rule))
         }
         return out
@@ -202,7 +199,7 @@ class RouteProfile {
      * network-dependent rules are left out; the route rule alone decides for them.
      */
     private fun unconditional(rule: RouteRule): Boolean =
-        !rule.invert && rule.networkConditions().isEmpty()
+        !rule.invert && !rule.matchesByApp() && rule.networkConditions().isEmpty()
 
     private fun addPrefixed(out: MutableList<String>, prefix: String, values: List<String>) {
         for (value in values) {

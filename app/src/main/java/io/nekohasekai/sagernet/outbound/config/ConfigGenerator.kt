@@ -564,15 +564,7 @@ class ConfigGenerator @JvmOverloads constructor(
         tun["endpoint_independent_nat"] = true
         tun["udp_timeout"] = "30s"
         if (settings.perAppEnabled) {
-            val list = settings.perAppPackages.map { it.trim() }.toMutableSet()
-            if (!settings.perAppBypass && list.contains("com.android.vending")) {
-                list.add("com.android.providers.downloads")
-                list.add("com.android.providers.downloads.ui")
-                list.add("com.xiaomi.providers.downloads")
-                list.add("com.google.android.gms")
-                list.add("com.google.android.gsf")
-            }
-            val packages = JsonValues.stringArray(list.toList())
+            val packages = JsonValues.stringArray(settings.perAppPackages.map { it.trim() })
             if (packages.isNotEmpty()) tun[if (settings.perAppBypass) "exclude_package" else "include_package"] = packages
         }
         // ProxyInfo carries no credentials: apps would only get 407 from a mixed inbound with users.
@@ -864,31 +856,21 @@ class ConfigGenerator @JvmOverloads constructor(
             servers.add(remoteDnsObj)
         }
 
-        val directDnsSetting = settings.directDns.trim()
-        val effectiveDirectDns = if (directDnsSetting.isEmpty() || directDnsSetting.equals("localhost", ignoreCase = true) || directDnsSetting.equals("local", ignoreCase = true)) {
-            "223.5.5.5"
-        } else {
-            directDnsSetting
-        }
-        val directDnsObj = DnsServers.buildDnsObj(effectiveDirectDns, state.forTest)
+        val directDnsObj = DnsServers.buildDnsObj(settings.directDns, state.forTest)
         directDnsObj["tag"] = Tags.DNS_DIRECT
         directDnsObj["domain_resolver"] = Tags.DNS_LOCAL
         servers.add(directDnsObj)
 
         appFamilyGuard(state)?.let { headRules.add(it) }
 
-        if (!state.forTest) {
+        if (!state.forTest && pre.needProxyDnsRules) {
             headRules.add(
                 jsonObjectOf(
                     "domain" to JsonArray.of(
-                        "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net",
-                        "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com", "xn--ngstr-cn-8za9o.com",
-                        "playstoregatewayadapter-pa.googleapis.com", "firebaselogging-pa.googleapis.com", "android.clients.google.com", "play.googleapis.com"
+                        "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net"
                     ),
                     "domain_suffix" to JsonArray.of(
-                        ".speedtest.net", ".fast.com", ".ooklaserver.net", ".speedtestcustom.com",
-                        ".gvt1.com", ".gvt2.com", ".gvt3.com", ".gvt5.com", ".gvt6.com", ".gvt7.com", ".gvt9.com",
-                        ".gvt1-cn.com", ".gvt2-cn.com", ".googleusercontent.com", ".ggpht.com"
+                        ".speedtest.net", ".fast.com", ".ooklaserver.net", ".speedtestcustom.com"
                     ),
                     "action" to "route",
                     "server" to Tags.DNS_REMOTE,
@@ -935,6 +917,7 @@ class ConfigGenerator @JvmOverloads constructor(
             // Not fc00::/18: the Tun's fc00::/7 private-range bypass would route fake addresses outside it.
             if (!settings.fakeIpDisableIpv6) fakeServer["inet6_range"] = "2001:db8::/32"
             servers.add(fakeServer)
+            rules.add(jsonObjectOf("query_type" to JsonArray.of("A", "AAAA"), "action" to "route", "server" to Tags.DNS_FAKE))
             independentCache = true
         }
 
@@ -946,11 +929,6 @@ class ConfigGenerator @JvmOverloads constructor(
             appendDnsRoutingRules(rules, selectors, server, disableIPv6, conditions)
         }
         if (pre.needDirectDnsRules) appendDnsRoutingRules(rules, pre.directDns, Tags.DNS_DIRECT, buildContext.directDnsDisableIpv6)
-
-        // Foreign and non-direct domains use Fake-IP when enabled
-        if (settings.fakeDns) {
-            rules.add(jsonObjectOf("query_type" to JsonArray.of("A", "AAAA"), "action" to "route", "server" to Tags.DNS_FAKE))
-        }
 
         // A test box builds no dns-remote server at all, so its fall-through goes out direct.
         val useDirectFinalDns = state.forTest || settings.dnsFinalOut == Tags.DIRECT
@@ -1098,19 +1076,14 @@ class ConfigGenerator @JvmOverloads constructor(
         for (i in state.xrayToSingBridges.indices) {
             rules.add(jsonObjectOf("inbound" to bridgeTagFor(state.singIngressTags[i]), "action" to "route", "outbound" to state.singIngressTags[i]))
         }
-        // 1. DNS 劫持必须最优先处理，防止 DNS 查询数据包被后续规则误伤或死循环
-        rules.add(jsonObjectOf("protocol" to "dns", "action" to "hijack-dns"))
-        if (!state.forTest) rules.add(jsonObjectOf("inbound" to Tags.DNS_IN, "action" to "reject"))
-
-        // 2. 流量嗅探（放宽超时时间至 300ms，防止移动网络和高延迟连接首包嗅探失败）
-        rules.add(jsonObjectOf("action" to "sniff", "timeout" to "300ms", "sniffer" to JsonArray.of("tls", "http", "quic")))
-
-        // 3. 仅在用户显式指定了域名解析策略时才执行 resolve（彻底消除 FakeDNS 死循环与超时）
+        rules.add(jsonObjectOf("action" to "sniff"))
         if (settings.resolveDomainStrategy.isNotEmpty()) {
             rules.add(jsonObjectOf("inbound" to JsonArray.of(Tags.MIXED_IN, Tags.TUN_IN), "action" to "resolve", "strategy" to settings.resolveDomainStrategy))
         }
+        rules.add(jsonObjectOf("protocol" to "dns", "action" to "hijack-dns"))
+        if (!state.forTest) rules.add(jsonObjectOf("inbound" to Tags.DNS_IN, "action" to "reject"))
 
-        // 4. 海外测速服务（Speedtest / Fast / 节点测速）专项代理锁定
+        // 海外测速服务（Speedtest / Fast / 节点测速）专项代理锁定
         val speedtestDomains = JsonArray.of(
             "speedtest.net", "fast.com", "ooklaserver.net", "speedtestcustom.com", "ipinfo.io", "ipleak.net", "browserleaks.com", "whoer.net"
         )
@@ -1124,7 +1097,7 @@ class ConfigGenerator @JvmOverloads constructor(
             "outbound" to Tags.PROXY,
         ))
 
-        // 5. Telegram 官方 DC 核心网段走代理（防断流）
+        // Telegram 官方 DC 核心网段走代理（防断流）
         val telegramDcCidrs = JsonArray.of(
             "91.108.4.0/22", "91.108.8.0/22", "91.108.12.0/22", "91.108.16.0/22", "91.108.20.0/22", "91.108.56.0/22",
             "149.154.160.0/20", "149.154.164.0/22", "149.154.168.0/22", "149.154.172.0/22",
@@ -1132,29 +1105,6 @@ class ConfigGenerator @JvmOverloads constructor(
         )
         rules.add(jsonObjectOf(
             "ip_cidr" to telegramDcCidrs,
-            "action" to "route",
-            "outbound" to Tags.PROXY,
-        ))
-
-        // 6. Google Play 核心下载 CDN 矩阵锁定走代理，并阻断其 UDP 443 (QUIC) 避免下载转圈卡死
-        val googlePlayDownloadDomains = JsonArray.of(
-            "dl.google.com", "services.googleapis.cn", "xn--ngstr-lra8j.com", "xn--ngstr-cn-8za9o.com",
-            "playstoregatewayadapter-pa.googleapis.com", "firebaselogging-pa.googleapis.com", "android.clients.google.com", "play.googleapis.com"
-        )
-        val googlePlayDownloadSuffixes = JsonArray.of(
-            ".gvt1.com", ".gvt2.com", ".gvt3.com", ".gvt5.com", ".gvt6.com", ".gvt7.com", ".gvt9.com",
-            ".gvt1-cn.com", ".gvt2-cn.com", ".googleusercontent.com", ".ggpht.com"
-        )
-        rules.add(jsonObjectOf(
-            "domain" to googlePlayDownloadDomains,
-            "domain_suffix" to googlePlayDownloadSuffixes,
-            "network" to "udp",
-            "port" to JsonArray.of(443),
-            "action" to "reject",
-        ))
-        rules.add(jsonObjectOf(
-            "domain" to googlePlayDownloadDomains,
-            "domain_suffix" to googlePlayDownloadSuffixes,
             "action" to "route",
             "outbound" to Tags.PROXY,
         ))
@@ -1172,7 +1122,7 @@ class ConfigGenerator @JvmOverloads constructor(
             OutboundIds.WARP_BYPASS -> if (settings.enableWarp) Tags.WARP_BYPASS else Tags.PROXY
             else -> OutboundIds.toName(defaultOutbound)
         }
-        routeObj["find_process"] = true
+        if (settings.trafficStats) routeObj["find_process"] = true
         routeObj["default_fallback_delay"] = "100ms"
         routeObj["default_domain_resolver"] = directDomainResolver(buildContext)
         if (settings.vpnMode) routeObj["auto_detect_interface"] = true

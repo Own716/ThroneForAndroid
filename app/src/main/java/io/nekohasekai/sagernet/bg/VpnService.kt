@@ -169,15 +169,7 @@ class VpnService : BaseVpnService(),
 
         val includePackage = options.getIncludePackage()
         if (includePackage.hasNext()) {
-            val packages = includePackage.toList().toMutableSet()
-            if (packages.contains("com.android.vending")) {
-                packages.add("com.android.providers.downloads")
-                packages.add("com.android.providers.downloads.ui")
-                packages.add("com.xiaomi.providers.downloads")
-                packages.add("com.google.android.gms")
-                packages.add("com.google.android.gsf")
-            }
-            val added = packages.count {
+            val added = includePackage.toList().count {
                 try {
                     builder.addAllowedApplication(it)
                     true
