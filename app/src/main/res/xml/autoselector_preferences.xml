@@ -140,6 +140,7 @@
             app:title="@string/autosel_dial_retries" />
 
         <SwitchPreference
+            app:defaultValue="true"
             app:key="interruptOnSwitch"
             app:summary="@string/autosel_interrupt_tip"
             app:title="@string/autosel_interrupt" />

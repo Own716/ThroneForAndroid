@@ -562,7 +562,7 @@ class ConfigGenerator @JvmOverloads constructor(
         // which the bypassed private ranges keep outside the tun (fork docs/configuration/inbound/tun.md, dns_mode).
         tun["dns_mode"] = "hijack"
         tun["endpoint_independent_nat"] = true
-        tun["udp_timeout"] = "30s"
+        tun["udp_timeout"] = "180s"
         if (settings.perAppEnabled) {
             val packages = JsonValues.stringArray(settings.perAppPackages.map { it.trim() })
             if (packages.isNotEmpty()) tun[if (settings.perAppBypass) "exclude_package" else "include_package"] = packages
