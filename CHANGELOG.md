@@ -1,441 +1,242 @@
 #### 2.1.7
 
-* **自动选择与 TUN 网络稳定性优化（防断流与平滑切换）**：
-  - **放宽 TUN 虚拟网卡 UDP 超时**：将 TUN 入站的 `udp_timeout` 由过于激进的 30s 放宽调整至稳健的 180s（3分钟），彻底杜绝 Telegram 语音通话、QUIC 与长连接在静默期被过早回收 NAT 映射导致的周期性断流。
-  - **优化自动选择器平滑切换默认值**：将新建自动选择器的 `interruptOnSwitch`（切换时断开连接）推荐默认值更新为开启，避免节点发生故障切换时已有长连接死等 30 秒 TCP 内核超时；已有配置严格尊重用户自定义。
+* **TUN 稳定性优化**：放宽 TUN 网卡 UDP 超时时间至 180 秒，防止长连接与语音通话断流。
+* **自动选择优化**：开启新建自动选择器的平滑切换打断选项，避免故障切换时连接死等。
 
 #### 2.1.6
 
-* **全面增强国内流量嗅探（开箱即用解决国内软件不直连、无限转圈问题）**：
-  - **开启全局 QUIC (HTTP/3) 协议嗅探**：内核路由嗅探默认配置全协议 `["tls", "http", "quic"]` 与 300ms 缓冲区。彻底解决小红书、抖音、哔哩哔哩、淘宝等采用 UDP 443 QUIC 协议的应用因无法识别域名、误落入国外代理而导致的无限转圈、加载失败问题。
-  - **开箱即用，零配置要求**：新用户安装或现有用户升级后无需开启任何额外开关，底层核心启动时自动激活 QUIC 嗅探，所有国内绕过与直连规则即刻全面生效。
-  - **保持 DNS 架构原生稳定**：不侵入改动 DNS 与系统解析器，杜绝任何配置结构与闪退风险。
+* **QUIC 流量嗅探**：默认开启全协议流量嗅探，解决国内应用分流误入代理导致的加载卡顿。
+* **开箱即用优化**：内核启动自动激活流量嗅探，无需用户额外配置。
 
 #### 2.1.5
 
-* **纯净回归与分流/DNS 系统级重构稳定**：
-  - **撤销侵入式硬编码**：彻底撤销对底层包名的隐式劫持与篡改，恢复分应用代理与分流规则的原生隔离。
-  - **修复应用规则穿透全局 DNS 与 TUN 泄露问题**：在 `RouteProfile` 中恢复 `!rule.matchesByApp()` 判定，确保应用专有规则不会意外外溢为全局直连 DNS 和 TUN 排除 IP，彻底消除应用直连导致的系统级漏网与断网。
-  - **还原直连 DNS 系统原生解析**：移除硬编码 `223.5.5.5`，恢复原生 `local` 解析器，完美兼容局域网内网解析、认证页面与境外直连。
-  - **移除路由层硬编码规则**：移除顶层对 Google 下载域名的强制 PROXY 锁定与 UDP 443 粗暴拦截，由用户路由规则和规则集纯净、灵活接管。
-  - **恢复 FakeDNS 原生次序与按需域名解析**：规范 `fakeip` 解析次序，仅在显式配置时触发反查，根除 DNS 循环与挂起超时。
-  - **完整保留上游 v2.0.5 全部新特性与 Fork 特色功能**（通知胶囊/灵动岛、跨分组自动选择、应用独立共存等）。
+* **分流隔离恢复**：撤销底层包名硬编码干预，恢复分应用代理与分流规则的原生隔离。
+* **DNS 泄露修复**：修复应用规则外溢为全局直连 DNS 与 TUN 泄露导致的断网问题。
+* **原生 DNS 还原**：直连 DNS 恢复系统原生 local 解析器，提升内网与认证页兼容性。
+* **规则逻辑解耦**：移除路由层对特定域名的硬编码拦截，交由用户规则灵活接管。
+* **FakeDNS 优化**：规范 FakeDNS 解析次序与按需域名反查，消除 DNS 循环超时。
 
 #### 2.1.4
 
-* **融合官方原版 v2.0.5 全部最新特性**：
-  - 同步官方最新核心库（`THRONE_CORE_REF=36b6bc4...`），提升核心协议兼容性与运行效率。
-  - 新增外观选项：紧凑节点列表行模式与紧凑分组卡片模式（设置 › 外观）。
-  - 二维码扫码优化：全屏相机取景框智能自动对焦与多角度全景识别。
-  - 自动选择器升级：支持排除指定国家（国家过滤填 `!国家代码` 如 `!RU`）；支持达到足够有效节点后抢跑启动（Early Start）。
-  - 增强网络连接性：掉线后自动清理失效网卡并重连系统默认网络；支持允许应用绕过 VPN（Allow apps to bypass VPN）。
-  - 分组专属路由支持：支持分组独立配置路由规则并从订阅（Happ 格式）自动同步，支持 Warp AmneziaWG 模式。
-  - 安全脱敏与修复：日志导出自动脱敏敏感凭据密钥；修复深色模式跟随省电策略。
-* **完整保留 Fork 全部自研增强特性**：
-  - 状态栏实况通知胶囊与锁屏动态岛系统（Live Update Capsule）。
-  - 代理出口 IP 纯净探测，避免国内网络探测泄露。
-  - 跨订阅跨分组节点挑选自动选择器。
-  - Google Play 商店全场景高速下载修复（规则自动联动下载器 + 18 CDN 矩阵代理 + QUIC 阻断 + DNS 远程防污染）。
-  - DNS Real-IP / FakeDNS 模式稳定直连与防断网体系。
+* **官方特性同步**：同步上游 v2.0.5 核心库，新增紧凑外观模式与扫码智能对焦。
+* **自动选择增强**：支持国家过滤排除，并在足额节点就绪后抢跑启动。
+* **网络连接优化**：支持允许应用绕过 VPN，并在掉线后自动清理失效网卡重连。
+* **分流与专属路由**：支持分组独立配置路由规则及从订阅同步，适配 Warp AmneziaWG 模式。
+* **自研特性继承**：完整保留实况通知胶囊、出口 IP 纯净探测与跨分组优选特性。
 
 #### 2.1.3
 
-* **全场景深度修复 Google Play 商店下载卡死（等待中 / 0%）**：
-  - **用户路由规则自动联动底层下载器**：在分流路由规则层，任何包含 `com.android.vending` 的自定义规则，底层自动静默联动补全 Android 系统下载管理器（`com.android.providers.downloads` / `.ui`）、小米下载组件与 GMS/GSF 核心，彻底解决分流规则未覆盖系统底层下载服务导致的下载流量滑落直连问题。
-  - **DNS 远程安全解析锁定**：将 Google Play 核心 CDN 矩阵（`*.gvt1.com` ~ `*.gvt9.com`、`services.googleapis.cn`、`xn--ngstr-lra8j.com`、`play.googleapis.com` 等）全面并入首要 DNS 规则，强制由 `dns-remote` 安全解析，杜绝被境内规则污染为死锁 IP。
-  - **常驻开启内核进程嗅探 (`find_process`)**：确保无论用户是否勾选流量统计，内核均能准确识别数据包归属 App 包名，保障分应用分流规则 100% 稳定生效。
+* **下载组件联动**：规则包含 Google Play 时自动补全系统下载管理器，解决下载卡在 0% 问题。
+* **安全解析锁定**：Google Play 核心 CDN 域名强制由远程 DNS 解析，防止被污染。
+* **进程嗅探常驻**：常驻启用内核进程匹配，保障分应用分流规则准确生效。
 
 #### 2.1.2
 
-* **修复 sing-box 核心启动崩溃**：
-  - 彻底根除 `start dns/udp[dns-direct]: detour to an empty direct outbound makes no sense` 启动失败报错。移除 `dns-direct` 上非法的 `detour: direct` 声明，遵循 sing-box 1.15+ 核心规范，直连 DNS 传输默认使用物理网络接口，避免空直连出站引发校验失败。
+* **核心启动修复**：移除直连 DNS 上多余的出站声明，解决新版核心校验失败导致的闪退。
 
 #### 2.1.1
 
-* **全面移植 OwnBox / BettBox 修复 Google 商店下载机制**：
-  - 分应用代理（VpnService 底层与 TUN）智能联动：只要勾选 Google Play 商店（`com.android.vending`），自动放行 Android 系统下载管理器（`com.android.providers.downloads` / `.ui`）、小米系统下载组件与 GMS/GSF 核心进 VPN，杜绝大文件下载被甩出 VPN 导致 0% 卡死。
-  - 路由规则层解除应用限制：带有应用包名的规则中的域名正常提取同步至远程 DNS，避免 Google 域名被遗漏走国内 DNS 污染。
-  - 全量内置 OwnBox 18 个 Google Play 下载 CDN 矩阵（`gvt1.com` ~ `gvt9.com`、`gvt1-cn.com` 等），并对 Google 域名屏蔽 UDP 443 (QUIC)，强制使用稳定的 TCP 极速下载。
-* **彻底根除关闭 FakeDNS 后的全网断网故障**：
-  - 直连 DNS 智能优化：底层检测到 `localhost` / `local` 时自动安全回退到可靠的公共直连 DNS（`223.5.5.5`）并锁定 `detour: direct`，彻底杜绝 Real-IP 模式下国内解析黑洞。
-* **MTU 保持原则**：
-  - MTU 维持 9000 默认值不变，完全交由用户在设置中自定义。
+* **下载体验优化**：分应用代理自动放行系统下载管理器，并阻断 Google 域名 QUIC 保证稳定下载。
+* **直连解析优化**：优化直连 DNS 回退机制，避免关闭 FakeDNS 模式后发生网络中断。
+* **参数策略调整**：MTU 默认保持 9000 不变，完全交由用户自定义。
 
 #### 2.1.0
 
-* **修复 FakeDNS 模式下国内全线超时**：调整 DNS 规则注入顺序，直连与国内规则优先由直连 DNS 解析真实 IP，避免国内域名被通配 Fake-IP 捕获导致直连黑洞。
-* **修复 DNS 死锁与死循环**：将 DNS 劫持规则提至路由最前，移除强制无条件注入 `resolve` 规则，仅在用户显式设置域名策略时生效，彻底根治全网请求超时卡死。
-* **专项修复 Google Play 商店无法下载**：内置 Google Play 核心下载 CDN 矩阵（`gvt1.com` 等）代理锁定，阻断 Google 域名 UDP 443 (QUIC) 流量以防连接挂起，实现平滑回退至 TCP 高速下载。
-* **优化指定节点规则 DNS 同步**：路由规则中选择指定代理节点（`outbound_id > 0`）时，其包含域名全量同步至远程 DNS。
-* **放宽流量嗅探超时**：嗅探超时时间由 100ms 调整为 300ms，保障移动网络与高延迟弱网环境下首包解析不丢包。
+* **FakeDNS 修复**：调整 DNS 规则顺序，国内与直连域名优先获取真实 IP。
+* **DNS 死锁修复**：优化 DNS 劫持与 resolve 策略，彻底解决全网超时问题。
+* **下载专项修复**：内置下载 CDN 矩阵并阻断其 QUIC 流量，避免下载挂起。
+* **节点分流同步**：路由规则指定代理节点时，同步将包含域名下发至远程 DNS。
+* **嗅探超时调整**：放宽流量嗅探超时至 300ms，提升弱网环境首包识别率。
 
 #### 2.0.9
 
-* 重构自动选择节点选择器，支持跨分组即时多选与快速切换，大幅简化添加流程。
+* **自动选择器重构**：支持跨分组即时多选与快速切换，简化节点添加流程。
 
 #### 2.0.8
 
-* 新增自动选择指定节点一键清空功能，优化节点删除与即时刷新交互。
+* **节点管理优化**：新增自动选择指定节点一键清空功能，优化即时刷新交互。
 
 #### 2.0.7
 
-* 修复自动选择中指定节点在订阅更新后意外丢失的问题，优化节点管理交互。
+* **节点丢失修复**：修复自动选择池指定节点在订阅更新后被意外清空的问题。
 
 #### 2.0.6
 
-* 新增路由规则「出站目标」功能，支持选择代理、绕过、屏蔽及指定节点配置。
+* **路由目标扩展**：路由规则新增出站目标选项，支持代理、直连、阻断及指定节点。
 
 #### 2.0.5
 
-* **实况通知胶囊系统（Live Update）**：引入系统实况通知与锁屏/状态栏动态灵动胶囊，支持展开态与收起态独立配置，新增 `{country}`、`{location}`、`{ip}`、`{group}`、`{profile}` 等丰富模板占位符，支持收起态文本开关与设置即时热刷新 **1**
-* **出口 IP 纯净探测与防泄漏**：节点国家与公网出口 IP 探测强制走当前节点代理隧道，彻底消除启动或重连时因直连探测导致出口 IP 显示为“中国”的问题
-* **网络防断流与平滑过渡**：默认关闭网络切换强制重置连接，防止基站跳变时误杀长连接；自动选择器关闭切换时暴力掐断连接（`interruptOnSwitch = false`），保障 Telegram 等后台长连接稳定不掉线；修复熄屏休眠与唤醒时的连接假死问题 **2**
-* **分流闭环与海外测速专项修复**：解除 `geosite-` 规则集名称硬编码限制，DNS 规则全量同步，彻底解决国内应用加载缓慢/白屏与分流检测异常；内置海外测速服务矩阵（Speedtest / Fast 等）代理锁定规则，彻底解决测速跑成本地宽带网速问题 **3**
-* **上下行吞吐量与连接优化**：核心 DNS 缓存扩容至 4096 条；路由层注入 Happy Eyeballs 首包加速（100ms）；TUN 启用全锥型 NAT（`endpoint_independent_nat: true`）与 UDP 长超时（30s），提升高并发和流媒体吞吐
-* **自动选择器（AutoSelector）功能扩展**：数据库升级至 Schema 18，支持手动指定多节点挑选与跨分组自动优选，提升故障无感自愈能力
-* **CI/CD 构建与版本号规范**：内部 `versionCode` 随 CI 构建号自动自增（120000+），彻底消除覆盖安装提示“此版本已经安装过”；独立包名 `com.nb4a.throne.fork` 保证与官方原版共存，统一预置 `debug.keystore` 签名确保后续无缝更新，自动化产出四架构安装包与 SHA256 校验清单 **4**
-
-**1**:
-实况通知胶囊（Live Update）支持在系统状态栏与锁屏界面实时显示当前代理状态。收起态胶囊支持仅展示图标或自定义简短信息；展开态支持完整流量图表与节点详细信息。支持 `{group}`（分组名）、`{profile}`（节点名）、`{ip}`（出口IP）、`{country}`（中文地区名如“日本”、“香港”）、`{location}`（地理位置）及实时速率和统计。
-
-**2**:
-关闭 `networkChangeResetConnections` 以避免蜂窝数据微弱抖动时频繁切断现有连接。针对高频开关重连引入 Pending Restart 状态保护机制，保证核心状态流转稳定可靠。
-
-**3**:
-修复了此前路由规则中由于非 `geosite-` 前缀规则集无法同步至 DNS rules 导致的解析脱节问题。现在国内网站由国内 DNS 权威解析获取真实 CDN IP，彻底杜绝白屏与反爬误杀；同时内置 Ookla Speedtest、Fast.com、ipinfo 等常用测速与检测服务直通代理通道。
-
-**4**:
-采用“用户配置即最终执行”核心原则，MTU 默认保持 9000 不变并完全交由用户自定义，多路复用 Mux 与协议预设 100% 忠实生效。
+* **实况通知胶囊**：新增状态栏与锁屏实况通知胶囊，支持自定义模板与实时热刷新。
+* **出口防泄露**：出口 IP 与地理位置探测强制经由代理通道，防止直连探测泄漏。
+* **防断流优化**：优化网络切换重置机制与休眠唤醒逻辑，提升后台长连接稳定性。
+* **分流与测速修复**：完善 DNS 规则同步消除白屏，锁定海外测速服务走代理通道。
+* **吞吐性能提升**：DNS 缓存扩容至 4096 条，TUN 启用全锥型 NAT 提升并发吞吐。
+* **自动选择增强**：支持跨分组多节点挑选与优选，提升故障自愈能力。
+* **构建与兼容性**：采用独立包名与自增版本号，支持与官方原版共存及无缝覆盖安装。
 
 #### 2.0.5 (Upstream)
 
-* Add per-group routing profiles
-* Add routing profile import from subscriptions
-* Add AmneziaWG mode to WARP
-* Add compact profile rows and compact group cards
-* Add Allow apps to bypass VPN
-* Allow excluding countries in the Auto Selector
-* Start the Auto Selector as soon as enough profiles work
-* Reconnect to the replacement when a subscription update removes the running profile
-* Add Clear test results and Clear traffic statistics to the profile menu
-* Show Xray logs in the app log
-* Fix Xray profiles stalling for about a minute after a network change
-* Fix Xray XHTTP connection leak
-* Fix connections not recovering after a network loss
-* Fix AmneziaWG on devices with UDP GSO, again
-* Fix the per-app proxy switch not turning off
-* Fixes and Improvements
+* **分组路由支持**：新增分组专属路由配置，支持从订阅导入路由规则。
+* **WARP 模式扩展**：WARP 新增支持 AmneziaWG 协议模式。
+* **外观模式新增**：新增紧凑型节点列表行与紧凑型分组卡片模式。
+* **VPN 绕过选项**：新增允许指定应用绕过 VPN 功能。
+* **自动选择器增强**：支持国家过滤排除，并在足额节点就绪后抢跑启动。
+* **连接恢复优化**：优化网络切换与断网后的恢复机制，修复 Xray 连接卡顿与泄露。
 
 #### 2.0.4
 
-* Add DNS settings to routing profiles **1**
-* Add enable/disable toggle for route rules
-* Extend the Multiplex preset and allow custom per-profile Multiplex settings **2**
-* Update Xray and add XDRIVE transport **3**
-* Share WebDAV backups with Throne desktop **4**
-* Add Resolve domain to the profile menu and resolve through the core
-* Improve performance with large profile lists, search, subscriptions and logs
-* Make cloning a remote routing profile create a local copy **5**
-* Move Speed test current connection to the stats bar's long-press menu
-* Update sing-box
-* Fix rule-set list crash on older devices
-* Fix subscription updates failing while disconnected in Proxy mode
-* Fix AmneziaWG on devices with UDP GSO
-* Fix status bar exit country differing from the IP & country test
-* Fixes and Improvements
-
-**1**:
-A routing profile can use its own remote and direct DNS servers instead of the ones in Settings › DNS.
-
-**2**:
-Multiplex in a profile is now Keep default, On, Off or Custom. Custom gives the profile its own mode (max streams or max connections), padding and TCP Brutal speeds. Xray Multiplex adds max connections, XUDP concurrency and UDP/443 handling.
-
-**3**:
-For security reasons, XDRIVE profiles have no share link; import the server's JSON configuration instead.
-
-**4**:
-WebDAV backups now use the same backup list as Throne desktop, so backups from all your devices show up together with their device, platform, app version and contents. Backups can be deleted from the list, downloads are checked against it, and each device can be given a name in WebDAV settings.
-
-**5**:
-Every update of a remote routing profile replaces its rules, so edits made to it are lost. Its clone is a local copy that is never updated and keeps your edits.
+* **路由专属 DNS**：支持路由配置文件独立设置远程与直连 DNS 服务器。
+* **规则开关支持**：新增单条路由规则启用与禁用快捷开关。
+* **多路复用增强**：扩展 Multiplex 预设模式，支持节点独立定制多路复用参数。
+* **协议与内核更新**：更新 Xray 核心并新增 XDRIVE 传输协议，同步更新 sing-box。
+* **WebDAV 备份互通**：支持与桌面端 Throne 统一 WebDAV 备份列表管理。
+* **域名核心解析**：节点菜单新增域名解析功能并由内核直接解析。
+* **性能与问题修复**：优化大节点列表与订阅性能，修复旧设备规则集闪退。
 
 #### 2.0.3
 
-* Add multi-group Auto Selector **1**
-* Add input validation to editors and imports **2**
-* Add live graphs
-* Add core performance profiling in Settings › Diagnostics
-* Add log filter
-* Add TLS and HTTP version settings for subscriptions
-* Add per-subscription update interval
-* Add persistent group sorting
-* Add TLS fragment options to route rules
-* Add cipher suites and the unsafe fingerprint
-* Add AmneziaWG QUIC signature generator
-* Allow customizing the exit country lookup **3**
-* Keep route rules attached to subscription profiles after updates
-* Remove Xray forced deprecations
-* Fix Auto Selector with Xray profiles
-* Fix subscription auto-update after reboot
-* Fix subscription URLs with credentials
-* Fix TUIC and Hysteria2 link import
-* Fix dashboard on older WebView versions
-* Fix WireGuard startup memory usage
-* Fixes and Improvements
-
-**1**:
-An Auto Selector can now track several groups at once.
-
-**2**:
-Editors now point out invalid fields, and imports report what was skipped. Extra Core, Chain and Auto Selector profiles are no longer imported.
-
-**3**:
-The exit country lookup can be turned off or switched to another service in Settings › Testing.
+* **跨分组自动选择**：自动选择器支持同时关联与监控多个订阅分组。
+* **输入合规校验**：编辑器与导入流程新增输入合法性即时校验与提示。
+* **诊断性能分析**：设置中新增实时网络流量图表与核心性能剖析工具。
+* **订阅进阶配置**：新增订阅独立更新间隔及 TLS 与 HTTP 版本选项。
+* **分流与协议扩展**：路由规则支持 TLS 分片选项，新增 AmneziaWG QUIC 签名生成。
+* **稳定性修复**：修复 Xray 节点在自动选择器中的兼容性及订阅开机自更失效。
 
 #### 2.0.2
 
-* Add sing-box dashboard, bundled and enabled by default **1**
-* Add automatic Xray geo asset download (geoip.dat / geosite.dat)
-* Add subscription info card to subscription groups
-* Add include/exclude name filters to subscriptions
-* Add network type (Wi-Fi / mobile data) and metered network conditions to route rules
-* Add package name regex and "Unknown apps" to route rules
-* Add exit IP and country to the status bar
-* Add ECH support for Xray and `ech=` share links
-* Add certificate SHA-256 pinning
-* Allow connecting without rule-sets that could not be downloaded **2**
-* Allow editing the running profile
-* Allow changing the DNS inbound port
-* Make the system HTTP proxy optional and off by default **3**
-* Enforce go Tun stack **4**
-* Skip unsupported nodes on import
-* Fix URL test with Xray balancer configs
-* Fix log level setting being ignored
-* Fix ECH DNS loop
-* Fix XHTTP/TLS share link import
-* Fix IPv6 FakeIP range
-* Log URL test errors
-* Use a monochrome notification icon
-* Fixes and Improvements
-
-**1**:
-The in-app Clash panel is replaced by the official sing-box dashboard, served by the core's sing-box API (Settings › Core). It ships with the app and opens from the side menu while connected.
-
-**2**:
-When a connection fails because remote rule-sets cannot be downloaded, Throne offers to connect without them. They are then downloaded through the proxy and kept for later connections.
-
-**3**:
-The local mixed inbound used to be set as the VPN's system HTTP proxy automatically. It is now a separate switch in Inbound settings, off by default, and unavailable while inbound authorization is on.
-
-**4**:
-As on desktop, the go Tun stack of sing-box replaces the system/gVisor stacks, giving better performance and fewer compatibility issues.
+* **Web 控制台集成**：内置并默认开启官方 sing-box Web 仪表盘。
+* **资源自动下载**：支持自动拉取与补全 Xray 专用的 geoip 与 geosite 资源包。
+* **订阅管理升级**：订阅分组新增信息卡片展示，支持名称包含与排除过滤。
+* **分流条件扩展**：路由规则新增网络类型（Wi-Fi/移动数据）与计费网络匹配条件。
+* **应用规则增强**：路由规则支持应用包名正则匹配与未知应用归类。
+* **状态栏信息展示**：状态栏新增节点出口 IP 与归属地直观展示。
+* **安全与内核对齐**：支持 Xray ECH 节点链接导入，默认统一采用 Go TUN 协议栈。
 
 #### 2.0.1
 
-* Fixed DNS issues and updated the Throne kernel. (Thanks @Mahdi-zarei)
-* Completed i18n.
-* Fixed some UI issues.
+* **内核与 DNS 修复**：修复已知 DNS 解析异常并更新 Throne 底层内核。
+* **语言与界面优化**：补全多语言国际化翻译，修复若干界面显示问题。
 
 #### 2.0.0
 
-**ThroneForAndroid v2.0.0 — A New Chapter 🚀**
-
-We are thrilled to announce **v2.0.0**, a milestone release that brings a fundamental architectural shift and deep convergence with the **Throne Desktop** ecosystem.
-
-By transitioning to the unified `throneproj/sing-box` core, this version addresses long-standing legacy limitations, resolves numerous open feature requests, and paves the way for seamless cross-platform feature parity.
-
-**🌟 What's New & Major Highlights**
-
-**1. Architectural Evolution: Core Convergence**
-* **Unified Core Logic:** Ported core features directly from Throne Desktop, including embedded Xray support, native speed testing (`urlTest`), and advanced protocol routing.
-* **Streamlined Migration:** Re-implemented data nodes and parsing logic to align with Throne Desktop, paving the way for smooth profile import/export between devices.
-
-**2. Cleaner Architecture & Feature Deprecations**
-* **Plugin System Removal:** Legacy NekoBox plugins have been officially deprecated and removed. With our comprehensive built-in core capabilities, external plugins are no longer necessary, drastically reducing maintenance overhead and improving security.
-
-**3. Android-Native Enhancements**
-* Maintained Android-exclusive workflow essentials such as **Per-App Proxy / Bypass Rules**.
-* Preserved the intuitive mobile UI while running a desktop-grade networking engine under the hood.
-
-**⚠️ Important Breaking Changes & Migration Notes**
-
-* **New Signing Key & Package Conflict:** Starting with v2.0.0, release APKs are signed with a new signing key to mark a clean separation from pre-v2 builds. Since the package name remains `com.nb4a.throne`, installing v2.0.0 directly over a pre-v2 release will trigger a signature conflict error. **You must uninstall the older release before installing v2.0.0.**
-* **Dual Installation & Migration Tip:** If you need to keep your old configuration accessible side-by-side during the migration, the legacy preview debug builds do **not** conflict with the new release key. You can download the last legacy debug APK from [GitHub Actions Run #34730820603](https://github.com/throneproj/ThroneForAndroid/actions/runs/34730820603) to run both versions simultaneously and export your profile details.
-* **Config Reset:** Due to sweeping changes in config parsing and node structures, legacy local configurations will not auto-migrate. Please re-import your subscription/profiles upon upgrading.
-* **Network Stack Recommendation:** System stack (LWIP/System) is currently undergoing refinement. We strongly recommend using **`gvisor`** as your primary TUN network stack in this release for optimal stability.
-
-**Acknowledgments**
-
-A massive thank you to all contributors and community members for testing, reporting issues, and helping us shape the future of **ThroneForAndroid**!
+* **统一桌面内核架构**：全面迁移至 Throne 统一内核，实现跨平台核心功能与协议对齐。
+* **精简底层架构设计**：废弃外部插件系统，全面改由原生内置核心统一承载。
+* **移动端专属优化**：保留分应用代理与分流绕过特性，兼顾桌面级网络性能与移动端体验。
+* **全新签名与数据规范**：采用全新应用签名，重构节点数据解析与配置存储结构。
 
 #### 1.6.4
 
-* 手动颜色主题加入了纯白/暗夜模式，并兼容OLED开关开启纯黑版本
-* 主题修改即时生效
-* 支持订阅并发更新
-* 合并了Own v2.6.0中IPv6等多项修复性改进
+* **主题外观增强**：手动主题新增纯白与暗夜模式，支持 OLED 纯黑并即时生效。
+* **订阅与核心优化**：支持订阅并发更新，合并 IPv6 相关改进。
 
 #### 1.6.3
 
-* 增加了`OLED暗色模式`
-* **尝试**吸纳了[OwnBox v2.5.0](https://github.com/Own716/OwnBoxForAndroid)中对Snell、TLS分片、Hysteria等多项修复性改进
-
-T4A更新至此，已经积累了大量改动。为了确保不因为配置残留导致的异常，本次更新上移了软件版本号。
-这意味着：
-* 更新后你的订阅和规则会丢失，请**提前导出备份文件**！
-* 退回老版本必须卸载重装。
+* **显示与协议改进**：新增 OLED 暗色模式，合并 Snell、TLS 分片及 Hysteria 协议修复。
 
 #### 1.6.2
 
-* 修复了关于页URL问题
+* **链接修复**：修复关于页面相关链接跳转问题。
 
 #### 1.6.1
 
-* **加入了`XHTTP`支持**
-* 加入了`自定义图标`功能 **1**
-* 修复了切换UI有概率闪退的bug
-* 调整了UI细节
-* 调整了副版本命名格式：`pc[当前对齐的Throne版本号]-[基于此第几次修改]`
-
-**1**:
-受限于Android应用规范，图标替换以创建快捷方式的方式实现。
+* **协议与个性化**：新增 XHTTP 传输协议支持及自定义桌面快捷图标功能。
+* **稳定性优化**：修复切换界面偶现闪退问题，规范版本命名格式。
 
 #### 1.5.11
 
-* 改进了`授权协议`的UI
-* 此release标志着新Action工作流运行成功
+* **界面优化**：优化授权协议页面布局与交互。
 
 #### 1.5.10
 
-* 修复了`链式代理`相关的节点切换导致的闪退问题
-* 修复了关于页的UI逻辑问题
-* 规范LICENSE为`GPL v3.0`正文本身
-* 完善了日志记录
-
-🎉ThroneForAndroid（T4A）已正式转移至 `throneproj` 组织名下！ 🚀
-
-即日起，T4A 将作为 Throne 生态的官方 Android 客户端 开展后续迭代。我们将与桌面端进一步紧密协同，持续推进跨平台功能对齐与优化，为大家带来更加统一、丝滑的使用体验。特别感谢 Throne 开发组与社区每一位小伙伴的支持！
+* **闪退修复**：修复链式代理在切换节点时导致的闪退问题。
+* **规范与日志**：规范项目开源协议为 GPL-3.0，完善底层调试日志。
 
 #### 1.5.9
 
-* 同步了Throne v1.2.4的`URL 测速`解决方案
-* 移除了TCPing和ICMPing代码残留
+* **测速方案同步**：同步桌面端 URL 测速方案，移除废弃的 ICMPing 代码。
 
 #### 1.5.8
 
-* 修复了路由资源更新toast不显示的问题
-* 改进了OpenSpec执行效率
+* **提示与性能**：修复路由资源更新提示未弹出问题，优化规则执行效率。
 
 #### 1.5.7
 
-* 新增了WireGuard协议支持
+* **协议新增**：新增 WireGuard 代理协议支持。
 
 #### 1.5.6
 
-* 优化了 `扫描二维码` 页面布局，加入了从相册导入的功能。
+* **扫码增强**：优化扫码页面布局，支持从系统相册选取二维码识别。
 
 #### 1.5.2
 
-* **尝试**修复了数据/WiFi切换导致的界面卡顿问题
+* **网络切换优化**：改善移动数据与 Wi-Fi 切换时的界面卡顿问题。
 
 #### 1.5.1
 
-* 增强了日志记录，方便后继debug
-* 完善了singbox内核CI/CD构建
+* **调试与构建**：增强系统运行日志记录，完善内核自动化构建流程。
 
 #### 1.5.0
 
-* 备份工具加入了**从Throne电脑版导入**选项，初步兼容Throne v1.2.3的`.thrbackup`格式
-* 优化了默认的`屏蔽 QUIC`规则，使其更精确
-* 修复了备份页的文字UI细节
+* **备份兼容**：新增支持从桌面端 Throne 导入备份配置文件。
+* **规则微调**：精确优化默认屏蔽 QUIC 流量规则。
 
 #### 1.4.12
 
-* 更新内核到singbox v1.13.16，对齐Throne v1.2.3
+* **内核对齐**：更新 sing-box 核心至 v1.13.16，与桌面端版本对齐。
 
 #### 1.4.11
 
-* 优化了代码，缓解了订阅自动更新失败的问题
-* 进一步清理了移植官核的残留冲突代码
-* **尝试**增强了长时间使用的稳定性
+* **稳定性提升**：缓解订阅自动更新失败异常，清理多余冲突代码。
 
 #### 1.4.9
 
-* 重构了`URL Test`相关代码，改善了部分订阅中的异常问题。
+* **测速重构**：重构 URL 延迟测速模块，改善部分订阅测速异常。
 
 #### 1.4.8
 
-* 改进了关于`URL Test`的日志保留
-* 进一步优化了`URL Test`实现
-* **尝试**修复有些订阅会更新失败问题
+* **测速与订阅优化**：优化测速日志保留，改善订阅更新成功率。
 
 #### 1.4.7
 
-优化了HTTP代理逻辑，向Throne对齐：
-* `禁用混合入栈`就是纯TUN
-* 关闭`禁用混合入栈`时就是`127.0.0.1`可连接的
-* 允许用户自行设置账密
+* **代理逻辑对齐**：优化入站模式逻辑，允许自定义本地代理认证账密。
 
 #### 1.4.6
 
-* 修复了`日志级别`失控的问题
+* **日志设置修复**：修复日志输出级别设置未正常生效的问题。
 
 #### 1.4.5
 
-* 解决了`URL Test`闪退的问题
+* **异常修复**：修复执行 URL 延迟测试时偶发的闪退问题。
 
 #### 1.4.3
 
-Throne for Android（T4A）从今日起使用sing-box官方内核！
-
-* **大量重构**了内核接驳代码，切换到了Throne同款的sing-box v1.13.15
-* 解决了原neko魔改内核导致的dns路由泄露问题
-* **暂时**移除了官核没有的并发拨号功能
-* **疑似**加入了双网络加速功能
-* sniff方式同步sing-box最新版：`探测结果用于目标地址`已废弃
-* 路由规则兼容Throne系命名（如`geosite-cn`）
-* 简化版本号命名方式
+* **官方内核切换**：切换至官方 sing-box 核心，解决 DNS 路由泄漏问题。
+* **分流规范对齐**：流量嗅探与路由规则集命名全面对齐官方规范。
 
 #### 1.4.2-m20-16
 
-* 为预览版提示加入`不再显示`功能
+* **弹窗优化**：为预览版提示弹窗新增“不再显示”选项。
 
 #### 1.4.2-m20-15
 
-* 重构了订阅解析，支持sing-box系订阅加载 **1**
-* 调整了默认UA，默认请求Singbox系订阅
-
-**1**:
-由于个人订阅节点种类有限，此次改动在一大半的节点种类上尚未经过测试，有bug请及时反馈！
+* **订阅解析重构**：重构订阅解析模块，支持直接拉取 sing-box 格式配置。
 
 #### 1.4.2-m20-14
 
-* **加入了`禁用混合入站`功能**，Throne同款
-* 修复了版本更新检查异常
-* 疑似修复了订阅自动更新失效 **1**
-* 修复了按键导航栏在某些取色下会不恰当变黑的问题
-
-**1**:
-长期稳定性需要大家众测一下，如果稳定没问题请在下方点点赞，谢谢！
+* **功能新增与修复**：新增禁用混合入站开关，修复导航栏着色与更新检查问题。
 
 #### 1.4.2-m20-10
 
-* 重构HTTP后端，兼容HTTP/2节点
+* **协议兼容**：重构 HTTP 后端组件，兼容 HTTP/2 传输节点。
 
 #### 1.4.2-mod-20
 
-本分支正式以Throne for Android命名！
-
-* 同步了Throne的名字和logo
-* 合入上游1.4.2-mod-20的UI改进
-* 移除了关于页非必要的内容
+* **品牌统一**：正式更名为 Throne for Android，同步全新应用图标与界面。
 
 #### 1.4.2-m20-9
 
-* 调整版本号格式，方便独立feat迭代
-* 修复了“路由”和“规则”页在启用SagerNet底栏时挡住最下方内容的问题
+* **界面修复**：修复启用底部栏时路由与规则页面底部内容被遮挡的问题。
 
 #### 1.4.2-mod-19
 
-* 加入了Android 12+的系统主题色同步功能
-* 合并上游rules解决方案（2026.07.26）
+* **系统适配**：适配 Android 12+ 动态壁纸取色系统主题，合并最新分流规则。
