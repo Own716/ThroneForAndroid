@@ -1076,7 +1076,7 @@ class ConfigGenerator @JvmOverloads constructor(
         for (i in state.xrayToSingBridges.indices) {
             rules.add(jsonObjectOf("inbound" to bridgeTagFor(state.singIngressTags[i]), "action" to "route", "outbound" to state.singIngressTags[i]))
         }
-        rules.add(jsonObjectOf("action" to "sniff"))
+        rules.add(jsonObjectOf("action" to "sniff", "timeout" to "300ms", "sniffer" to JsonArray.of("tls", "http", "quic")))
         if (settings.resolveDomainStrategy.isNotEmpty()) {
             rules.add(jsonObjectOf("inbound" to JsonArray.of(Tags.MIXED_IN, Tags.TUN_IN), "action" to "resolve", "strategy" to settings.resolveDomainStrategy))
         }

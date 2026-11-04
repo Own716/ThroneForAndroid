@@ -218,7 +218,10 @@ class RouteRule {
                 }
             }
         }
-        if (act == "sniff" && sniff_override_dest) obj["override_destination"] = true
+        if (act == "sniff") {
+            if (sniff_override_dest) obj["override_destination"] = true
+            if (sniffers.isNotEmpty()) obj["sniffer"] = JsonValues.stringArray(sniffers)
+        }
         if (act == "resolve" && strategy.isNotBlank()) obj["strategy"] = strategy.trim()
         return obj
     }
