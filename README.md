@@ -1,82 +1,44 @@
-<div align="center">
+# Throne for Android (Fork 增强版)
 
-<img src=".github/images/logo.png" width="128" alt="Throne logo">
+> 📢 **Telegram 交流频道**：[https://t.me/OwnBoxs](https://t.me/OwnBoxs)  
+> 基于 sing-box 与 Throne 深度二次开发，重构交互体验，优化网络稳定性。
 
-# Throne for Android
+---
 
-**Android proxy client, powered by [sing-box](https://github.com/SagerNet/sing-box)**
+### ✨ 核心二改与特色功能
 
-[![Release](https://img.shields.io/github/v/release/throneproj/ThroneForAndroid?style=flat-square&label=release&color=2F80ED)](https://github.com/throneproj/ThroneForAndroid/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/throneproj/ThroneForAndroid/total?style=flat-square&logo=github&label=downloads)](https://github.com/throneproj/ThroneForAndroid/releases)
-[![Stars](https://img.shields.io/github/stars/throneproj/ThroneForAndroid?style=flat-square&logo=github&label=stars)](https://github.com/throneproj/ThroneForAndroid/stargazers)
-[![License](https://img.shields.io/github/license/throneproj/ThroneForAndroid?style=flat-square&color=6E7781)](LICENSE)
+* ⚡ **自动选择器深度重构（核心亮点）**
+  * **支持手动选择指定节点**：打破原版只能绑定整组的局限，可在多个订阅间自由勾选任意节点组成专属优选池。
+  * **跨分组即时多选**：顶部横向即时切换订阅分组，支持按名称实时搜索过滤与一键全选/反选。
+  * **防丢失智能重绑**：独创重绑机制，订阅更新时自动按节点名无感迁移，自选节点绝不丢失变少。
+  * **便捷管理与抢跑**：支持一键清空已选列表，支持国家代码过滤排除，健康节点达标后立即抢跑连接。
 
-</div>
+* 📱 **实况通知灵动胶囊**：锁屏与状态栏动态显示出口 IP、地理位置、节点名及延迟，支持模板自定义与即时热刷新。
 
-Throne for Android manages proxy profiles and subscriptions, routes traffic with rule-based routing profiles, and works either as a VPN or as a proxy-only service. It shares [Throne](https://github.com/throneproj/Throne) desktop's core and data model, so profiles, share links, route profiles and `.thrbackup` backups move freely between the two. See the [documentation](https://throneproj.github.io) for guides.
+* 🎯 **路由扩展出站目标**：规则设置直接展示出站目标，支持直选代理、直连、拦截或指定特定节点，底层全链路生效。
 
-<p align="center">
-  <img width="300" alt="Throne for Android main screen" src=".github/images/screenshot.png" />
-</p>
+* 🚀 **国内流量 QUIC 嗅探**：默认常驻开启全协议嗅探，调优识别超时，彻底解决国内应用误入代理导致的转圈卡死。
 
-## Installation
+* 🛠️ **Google Play 下载修复**：规则自动放行底层系统下载器，锁定核心 CDN 走远程代理并阻断 QUIC，根治 0% 卡顿。
 
-APKs for arm64-v8a, armeabi-v7a and x86_64 are on [GitHub Releases](https://github.com/throneproj/ThroneForAndroid/releases), with a `SHA256SUMS` file to verify them. Throne runs on Android 7.0 (API 24) or newer, including Android TV.
+* 🌐 **DNS 架构治理防死锁**：根除 FakeDNS 循环超时死锁，直连恢复原生 Local 解析，杜绝 DNS 与 TUN 泄露。
 
-### Upgrading from 1.x
-Releases from v2.0.0 on are signed with a new key, so Android refuses to install them over a 1.x release (signature conflict). Uninstall the old release first, then import your subscriptions and profiles again: old local configurations are not migrated.
+* 📶 **TUN 180s 长连接抗断流**：UDP 超时放宽至 180 秒，结合平滑切换打断与全锥型 NAT，彻底解决通话与息屏断流。
 
-## Supported protocols
+* 🔄 **官方 v2.0.6 特性同步**：新增支持 DNSTT、MasterDNS、XDNS 隧道，Xray mKCP，S3 存储及最新核心组件。
 
-- SOCKS
-- HTTP(S)
-- Shadowsocks
-- Trojan
-- VMess
-- VLESS
-- TUIC
-- Hysteria
-- Hysteria2
-- AnyTLS
-- Mieru
-- Snell
-- NaïveProxy
-- Juicity
-- TrustTunnel
-- ShadowTLS
-- Wireguard
-- AmneziaWG
-- MASQUE
-- SSH
-- DNSTT / VayDNS
-- MasterDNS
-- Xray VLESS (XHTTP/XDrive)
-- OpenVPN/OpenConnect
-- Custom Outbound (Both Sing-box and Xray)
-- Custom Config (Both Sing-box and Xray)
-- Chaining outbounds
+* 📦 **独立包名无感升级**：采用独立包名 `com.nb4a.throne.fork`，与官方原版并存，版本规范递增，覆盖安装不报错。
 
-## Subscription Formats
+---
 
-Various formats are supported, including share links, various JSON representation of Sing-box configs, and v2rayN link format as well as limited support for Shadowsocks and Clash formats.
+### 📥 快速下载
 
-Deeplinks are also supported, read the [documentation](https://throneproj.github.io/advanced/deeplinks/) for more information.
+* **最新版本 APK**：[前往 GitHub Releases 获取最新安装包](https://github.com/Own716/ThroneForAndroid/releases/latest)  
+  *(主流安卓手机请下载 `arm64-v8a`，全架构通用请下载 `universal`)*
 
-## Credits
+---
 
-- [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
-- [XTLS/Xray-core](https://github.com/xtls/xray-core)
-- [SagerNet/sing-box-dashboard](https://github.com/SagerNet/sing-box-dashboard)
-- [MatsuriDayo/NekoBoxForAndroid](https://github.com/MatsuriDayo/NekoBoxForAndroid)
-- [SagerNet/SagerNet](https://github.com/SagerNet/SagerNet)
-- [shadowsocks/shadowsocks-android](https://github.com/shadowsocks/shadowsocks-android)
+### 📜 开源致谢
 
-## Supporting Throne
-
-If Throne is useful to you, you can support its development through [GitHub Sponsors](https://github.com/sponsors/Mahdi-zarei) or with a crypto donation to one of these addresses:
-
-| Coin | Network | Address |
-|:--|:--|:--|
-| **USDT** · **TRX** | TRON (TRC20) | `THR2gbWMaTZh8ACk3VYAAyNRVffvdTRikj` |
-| **USDT** · **USDC** | BNB Smart Chain (BEP20) · Ethereum (ERC20) | `0x7c2dF1867f5AaEE807a835fB3c55E4de4507888A` |
-| **XMR** | Monero | `4AYwwN8qMQCSUb3XfwzfrLNPMHfDme6U7CmNtQY4idCF8GtHHLG68VA3iZK867ypuKFr8J7CjXiJ96eFUA2T6aLVRUbgY3A` |
+基于 GPL-3.0 协议开源，致谢上游项目：  
+[ThroneForAndroid](https://github.com/throneproj/ThroneForAndroid) · [sing-box](https://github.com/SagerNet/sing-box) · [Xray-core](https://github.com/XTLS/Xray-core)
