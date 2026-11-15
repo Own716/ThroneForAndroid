@@ -79,6 +79,9 @@ class TestPanelController(
     /** Selects a profile like a tap in the list; by default the panel selects it and reloads a running service. */
     var onSelectProfile: ((profileId: Long) -> Unit)? = null
 
+    /** Called with the group and its fastest profile once a sort from the panel has been written. */
+    var onSorted: ((groupId: Long, profileId: Long) -> Unit)? = null
+
     /** Called when the panel starts to appear, and when it has gone (after sliding out). */
     var onVisibilityChanged: ((visible: Boolean) -> Unit)? = null
 
@@ -439,6 +442,7 @@ class TestPanelController(
                 when (s.kind) {
                     TestSpec.KIND_IP -> R.drawable.ic_test_ip_24
                     TestSpec.KIND_SPEED -> R.drawable.ic_test_speed_24
+                    TestSpec.KIND_SERVICE -> R.drawable.ic_baseline_check_circle_24
                     else -> R.drawable.ic_test_latency_24
                 }
             )
@@ -522,7 +526,9 @@ class TestPanelController(
                 )
             )
         }
-        sortAction.isVisible = canAct && s.groupId > 0 && s.ok > 0 && s.kind != TestSpec.KIND_IP
+        // IP and service results neither sort the group nor make a profile unavailable
+        val latencyKind = s.kind == TestSpec.KIND_URL || s.kind == TestSpec.KIND_SPEED
+        sortAction.isVisible = canAct && s.groupId > 0 && s.ok > 0 && latencyKind
         if (sortAction.isVisible) {
             sortAction.setTextIfChanged(
                 context.getString(
@@ -531,7 +537,7 @@ class TestPanelController(
                 )
             )
         }
-        val removable = if (canAct && s.kind != TestSpec.KIND_IP) removableIds(s).size else 0
+        val removable = if (canAct && latencyKind) removableIds(s).size else 0
         removeAction.isVisible = removable > 0
         if (removable > 0) removeAction.setTextIfChanged(context.getString(R.string.test_panel_action_remove, removable))
         stopOtherAction.isVisible = s.finished && s.failure == TestFailure.BUSY
@@ -749,6 +755,10 @@ class TestPanelController(
                 context.getString(R.string.test_panel_summary_none_resolved)
             }
 
+            s.kind == TestSpec.KIND_SERVICE -> context.getString(
+                if (s.ok > 0) R.string.service_check_summary_results else R.string.service_check_summary_none
+            )
+
             s.ok == 0 -> context.getString(R.string.test_panel_summary_none_working)
             s.countryMode -> context.getString(R.string.test_panel_summary_working_countries, s.ok, s.countries.size)
             else -> s.ranking.firstOrNull()?.let {
@@ -844,6 +854,7 @@ class TestPanelController(
         if (groupId <= 0) return
         val bySpeed = s.kind == TestSpec.KIND_SPEED && !s.countryMode
         val upload = s.speedMode == TestUiState.SPEED_MODE_UPLOAD
+        val fastest = s.ranking.firstOrNull()?.profileId
         runOnDefaultDispatcher {
             val sorted = if (bySpeed) {
                 // Kept like the latency sort, so the next stored result re-sorts instead of undoing the order.
@@ -855,6 +866,7 @@ class TestPanelController(
             onMainDispatcher {
                 if (fragment.isAdded) {
                     fragment.snackbar(if (sorted) R.string.test_panel_sorted else R.string.test_panel_sort_busy).show()
+                    if (sorted && fastest != null) onSorted?.invoke(groupId, fastest)
                 }
             }
         }

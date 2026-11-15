@@ -12,8 +12,10 @@ import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.ktx.confirmAction
 import io.nekohasekai.sagernet.ktx.nameList
+import io.nekohasekai.sagernet.ktx.showAllowingStateLoss
 import io.nekohasekai.sagernet.ktx.snackbar
 import io.nekohasekai.sagernet.ui.ConfigurationFragment
+import io.nekohasekai.sagernet.widget.QRCodeDialog
 
 /**
  * Multi-selection in the current tab (the desktop's selected rows): long press starts it, taps toggle, the toolbar
@@ -45,6 +47,7 @@ class SelectionMode(private val host: ConfigurationFragment) {
         checked.add(profile.id)
         dragStartedId = 0L
         host.onSelectionModeChanged(true)
+        refreshPinTitle()
     }
 
     /** A long press that turned into a drag: selecting unless the row really moves. */
@@ -68,6 +71,7 @@ class SelectionMode(private val host: ConfigurationFragment) {
             finish()
         } else {
             host.onSelectionChanged(listOf(id))
+            refreshPinTitle()
         }
     }
 
@@ -101,6 +105,7 @@ class SelectionMode(private val host: ConfigurationFragment) {
         checked.addAll(restored)
         dragStartedId = 0L
         host.onSelectionModeChanged(true)
+        refreshPinTitle()
     }
 
     val count: Int get() = checked.size
@@ -115,6 +120,26 @@ class SelectionMode(private val host: ConfigurationFragment) {
         val shown = host.listFor(groupId)?.adapter?.displayedIds ?: return
         checked.addAll(shown)
         host.onSelectionChanged(null)
+        refreshPinTitle()
+    }
+
+    /** Every checked profile is pinned, so the action unpins (refresh_pin_action). */
+    private fun allPinned(): Boolean {
+        val adapter = host.listFor(groupId)?.adapter ?: return false
+        return checked.isNotEmpty() && checked.all(adapter::isPinned)
+    }
+
+    private fun refreshPinTitle() {
+        host.toolbar?.menu?.findItem(R.id.action_selection_pin)
+            ?.setTitle(if (allPinned()) R.string.profiles_unpin else R.string.profiles_pin)
+    }
+
+    /** on_menu_pin_triggered. */
+    private fun pin(ids: List<Long>) {
+        val gid = groupId
+        val unpin = allPinned()
+        finish()
+        ProfileItemMenu.setPinned(host, gid, ids, pin = !unpin)
     }
 
     fun onMenuItemClick(item: MenuItem): Boolean {
@@ -124,12 +149,20 @@ class SelectionMode(private val host: ConfigurationFragment) {
             R.id.action_selection_test_url -> test(TestSpec.KIND_URL, ids)
             R.id.action_selection_test_ip -> test(TestSpec.KIND_IP, ids)
             R.id.action_selection_test_speed -> test(TestSpec.KIND_SPEED, ids)
+            R.id.action_selection_test_service -> {
+                ProfileTests.startServiceProfiles(host, ids, groupId)
+                finish()
+            }
+
             R.id.action_selection_all -> selectAll()
             R.id.action_selection_delete -> delete(ids)
+            R.id.action_selection_pin -> pin(ids)
             R.id.action_selection_clear_results -> clearResults(ids)
             R.id.action_selection_move -> moveToGroup(ids)
             R.id.action_selection_copy_links -> copyLinks(ids, throne = false)
             R.id.action_selection_copy_throne -> copyLinks(ids, throne = true)
+            R.id.action_selection_qr_links -> showQr(ids, throne = false)
+            R.id.action_selection_qr_throne -> showQr(ids, throne = true)
             else -> return false
         }
         return true
@@ -209,19 +242,46 @@ class SelectionMode(private val host: ConfigurationFragment) {
     private fun copyLinks(ids: List<Long>, throne: Boolean) {
         finish()
         host.launchIo {
-            val position = ids.withIndex().associate { it.value to it.index }
-            val links = ProfileManager.getProfiles(ids).sortedBy { position[it.id] }.mapNotNull { profile ->
-                val link = if (throne) profile.exportJsonLink() else profile.exportLink().ifEmpty { profile.exportJsonLink() }
-                link.takeIf { it.isNotEmpty() }
-            }
+            val links = links(ids, throne).map { it.first }
             if (links.isEmpty()) return@launchIo
+            host.onUi { copy(links) }
+        }
+    }
+
+    /** Android extra (#140): the links copyLinks would copy, in one code; when they do not fit, the copy is offered. */
+    private fun showQr(ids: List<Long>, throne: Boolean) {
+        finish()
+        host.launchIo {
+            val named = links(ids, throne)
+            if (named.isEmpty()) return@launchIo
+            val links = named.map { it.first }
+            val text = links.joinToString("\n")
+            val fits = QRCodeDialog.fits(text)
             host.onUi {
-                val copied = SagerNet.trySetPrimaryClip(links.joinToString("\n"))
-                snackbar(
-                    if (copied) resources.getQuantityString(R.plurals.profiles_copied, links.size, links.size)
-                    else getString(R.string.action_export_err)
-                ).show()
+                if (fits) {
+                    QRCodeDialog(text, requireContext().nameList(named.map { it.second }, limit = 3))
+                        .showAllowingStateLoss(parentFragmentManager)
+                } else {
+                    snackbar(R.string.qr_too_large).setAction(R.string.profiles_copy_links) { copy(links) }.show()
+                }
             }
         }
+    }
+
+    /** The links of [ids] in list order with their profile names, profiles without one left out. */
+    private fun links(ids: List<Long>, throne: Boolean): List<Pair<String, String>> {
+        val position = ids.withIndex().associate { it.value to it.index }
+        return ProfileManager.getProfiles(ids).sortedBy { position[it.id] }.mapNotNull { profile ->
+            val link = if (throne) profile.exportJsonLink() else profile.exportLink().ifEmpty { profile.exportJsonLink() }
+            if (link.isEmpty()) null else link to profile.displayName()
+        }
+    }
+
+    private fun ConfigurationFragment.copy(links: List<String>) {
+        val copied = SagerNet.trySetPrimaryClip(links.joinToString("\n"))
+        snackbar(
+            if (copied) resources.getQuantityString(R.plurals.profiles_copied, links.size, links.size)
+            else getString(R.string.action_export_err)
+        ).show()
     }
 }

@@ -51,7 +51,7 @@ import java.util.Locale
  */
 class ServiceNotification(
     private val service: BaseService.Interface,
-    private val title: String,
+    title: String,
     channel: String,
     visible: Boolean = false,
 ) : BroadcastReceiver() {
@@ -61,6 +61,7 @@ class ServiceNotification(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 
         // notificationActions entries; the template shows at most three buttons, in this order.
+        const val MAX_ACTIONS = 3
         const val ACTION_STOP = "stop"
         const val ACTION_PREVIOUS = "previous"
         const val ACTION_NEXT = "next"
@@ -71,7 +72,7 @@ class ServiceNotification(
 
         fun notificationActions(): List<String> {
             val stored = DataStore.configurationStore.getStringList(Key.NOTIFICATION_ACTIONS) ?: return DEFAULT_ACTIONS
-            return ACTION_ORDER.filter { it in stored }.take(3)
+            return ACTION_ORDER.filter { it in stored }.take(MAX_ACTIONS)
         }
 
         fun genTitle(ent: ProxyEntity): String {
@@ -228,6 +229,7 @@ class ServiceNotification(
 
     suspend fun postNotificationTitle(newTitle: String) {
         useBuilder {
+            title = newTitle
             if (!DataStore.liveUpdateEnabled) {
                 it.setContentTitle(newTitle)
             }
@@ -241,6 +243,7 @@ class ServiceNotification(
         currentEgressCountry = null
         updateActions()
         useBuilder {
+            title = newTitle
             if (DataStore.liveUpdateEnabled) {
                 val profileId = service.data.proxy?.profile?.id ?: DataStore.selectedProxy
                 val profile = service.data.proxy?.profile ?: SagerDatabase.proxyDao.getById(profileId)
@@ -471,7 +474,48 @@ class ServiceNotification(
         return Pair(null, null)
     }
 
-    private val showDirectSpeed = DataStore.showDirectSpeed
+    /**
+     * The notification settings changed: buttons and speed style are read again, and [newTitle] (the profile title
+     * under the new group setting) replaces [oldTitle] only while that one is shown, not a switching or measuring one.
+     */
+    suspend fun reloadSettings(oldTitle: String?, newTitle: String?) {
+        showDirectSpeed = DataStore.showDirectSpeed
+        updateActions()
+        var clearedLiveUpdate = false
+        useBuilder {
+            if (newTitle != null && title == oldTitle) {
+                title = newTitle
+                if (!DataStore.liveUpdateEnabled) it.setContentTitle(newTitle)
+            }
+            if (!DataStore.liveUpdateEnabled &&
+                (it.extras.containsKey("android.requestPromotedOngoing") || it.extras.containsKey("miui.focus.param"))
+            ) {
+                clearedLiveUpdate = true
+                it.setContentTitle(title)
+                try {
+                    val method = it.javaClass.getMethod("setRequestPromotedOngoing", Boolean::class.javaPrimitiveType)
+                    method.invoke(it, false)
+                } catch (_: Throwable) {}
+                it.extras.remove("android.requestPromotedOngoing")
+                it.extras.remove("miui.focus.param")
+                it.setCategory(NotificationCompat.CATEGORY_SERVICE)
+                it.priority = NotificationCompat.PRIORITY_LOW
+            }
+        }
+        if (DataStore.liveUpdateEnabled || clearedLiveUpdate) {
+            postNotificationSpeedUpdate(lastStats)
+        } else {
+            update()
+        }
+    }
+
+    @Volatile
+    private var showDirectSpeed = DataStore.showDirectSpeed
+
+    private var title: String = title
+
+    @Volatile
+    private var closed = false
 
     private val builder = NotificationCompat.Builder(service as Context, channel)
         .setWhen(0)
@@ -635,11 +679,13 @@ class ServiceNotification(
             }
         }
 
+    // A late update after destroy() would post the notification again with no service behind it.
     private suspend fun update() = useBuilder {
-        NotificationManagerCompat.from(service as Service).notify(notificationId, it.build())
+        if (!closed) NotificationManagerCompat.from(service as Service).notify(notificationId, it.build())
     }
 
     fun destroy() {
+        closed = true
         listenPostSpeed = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             (service as Service).stopForeground(Service.STOP_FOREGROUND_REMOVE)

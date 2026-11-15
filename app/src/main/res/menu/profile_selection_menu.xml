@@ -19,6 +19,9 @@
                 <item
                     android:id="@+id/action_selection_test_speed"
                     android:title="@string/profiles_test_speed" />
+                <item
+                    android:id="@+id/action_selection_test_service"
+                    android:title="@string/service_check" />
             </menu>
         </item>
         <item
@@ -29,6 +32,10 @@
         <item
             android:id="@+id/action_selection_all"
             android:title="@string/profiles_select_all"
+            app:showAsAction="never" />
+        <item
+            android:id="@+id/action_selection_pin"
+            android:title="@string/profiles_pin"
             app:showAsAction="never" />
         <item
             android:id="@+id/action_selection_clear_results"
@@ -48,6 +55,19 @@
                     android:title="@string/profiles_copy_share_links" />
                 <item
                     android:id="@+id/action_selection_copy_throne"
+                    android:title="@string/profiles_copy_throne_links" />
+            </menu>
+        </item>
+        <item
+            android:id="@+id/action_selection_qr"
+            android:title="@string/share_qr_nfc"
+            app:showAsAction="never">
+            <menu>
+                <item
+                    android:id="@+id/action_selection_qr_links"
+                    android:title="@string/profiles_copy_share_links" />
+                <item
+                    android:id="@+id/action_selection_qr_throne"
                     android:title="@string/profiles_copy_throne_links" />
             </menu>
         </item>

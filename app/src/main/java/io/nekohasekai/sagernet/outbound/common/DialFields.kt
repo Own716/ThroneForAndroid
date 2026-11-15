@@ -15,12 +15,8 @@ import io.nekohasekai.sagernet.validation.acceptOptional
 import io.nekohasekai.sagernet.validation.addIssue
 import io.nekohasekai.sagernet.validation.vtr
 
-/** sing-box DialerOptions keys (option/outbound.go) that Throne has no field for. */
-private val UNMODELLED_DIAL_KEYS = listOf(
-    "detour", "bind_address_no_port", "protect_path", "routing_mark", "netns", "disable_tcp_keep_alive", "tcp_keep_alive",
-    "tcp_keep_alive_interval", "domain_resolver", "network_strategy", "network_type", "fallback_network_type",
-    "fallback_delay", "tls_fragment", "domain_strategy",
-)
+/** The DialerOptions keys Throne has no field for that change how the server is reached; it sets the local knobs itself. */
+private val UNMODELLED_DIAL_KEYS = listOf("detour", "tls_fragment")
 
 /** dialFieldsRule (DialFields.cpp). */
 private fun dialFieldsRule(key: String, value: String): String = when {
@@ -35,7 +31,6 @@ private fun dialFieldsReportUnmodelled(obj: JsonObject) {
     if (dropped.isEmpty()) return
     var message = vtr(R.string.validation_dial_unmodelled, dropped.joinToString(", "))
     if ("detour" in dropped) message += " " + vtr(R.string.validation_dial_detour)
-    if ("domain_resolver" in dropped) message += " " + vtr(R.string.validation_dial_domain_resolver)
     ParseDiag.warn("", message)
 }
 
@@ -58,6 +53,7 @@ class DialFields {
     @JvmField var tcp_fast_open: Boolean = false
     @JvmField var tcp_multi_path: Boolean = false
     @JvmField var udp_fragment: Boolean = false
+    @JvmField var quic_opener: Boolean = false
     @JvmField var bind_interface: String = ""
     @JvmField var inet4_bind_address: String = ""
     @JvmField var inet6_bind_address: String = ""
@@ -77,6 +73,7 @@ class DialFields {
         if (q.has("tcp_fast_open")) tcp_fast_open = q.value("tcp_fast_open") == "true"
         if (q.has("tcp_multi_path")) tcp_multi_path = q.value("tcp_multi_path") == "true"
         if (q.has("udp_fragment")) udp_fragment = q.value("udp_fragment") == "true"
+        if (q.has("quic_opener")) quic_opener = q.value("quic_opener") == "true"
         if (q.has("bind_interface")) bind_interface = q.value("bind_interface")
         connect_timeout = checked("connect_timeout", connect_timeout)
         inet4_bind_address = checked("inet4_bind_address", inet4_bind_address)
@@ -100,6 +97,7 @@ class DialFields {
         if (obj.contains("tcp_fast_open")) tcp_fast_open = obj.bool("tcp_fast_open")
         if (obj.contains("tcp_multi_path")) tcp_multi_path = obj.bool("tcp_multi_path")
         if (obj.contains("udp_fragment")) udp_fragment = obj.bool("udp_fragment")
+        if (obj.contains("quic_opener")) quic_opener = obj.bool("quic_opener")
         if (obj.contains("bind_interface")) bind_interface = obj.string("bind_interface")
         connect_timeout = checked("connect_timeout", connect_timeout)
         inet4_bind_address = checked("inet4_bind_address", inet4_bind_address)
@@ -116,6 +114,7 @@ class DialFields {
         if (tcp_fast_open) q.add("tcp_fast_open" to "true")
         if (tcp_multi_path) q.add("tcp_multi_path" to "true")
         if (udp_fragment) q.add("udp_fragment" to "true")
+        if (quic_opener) q.add("quic_opener" to "true")
         if (bind_interface.isNotEmpty()) q.add("bind_interface" to bind_interface)
         if (inet4_bind_address.isNotEmpty()) q.add("inet4_bind_address" to inet4_bind_address)
         if (inet6_bind_address.isNotEmpty()) q.add("inet6_bind_address" to inet6_bind_address)
@@ -130,6 +129,7 @@ class DialFields {
         if (tcp_fast_open) obj["tcp_fast_open"] = true
         if (tcp_multi_path) obj["tcp_multi_path"] = true
         if (udp_fragment) obj["udp_fragment"] = true
+        if (quic_opener) obj["quic_opener"] = true
         if (bind_interface.isNotEmpty()) obj["bind_interface"] = bind_interface
         if (inet4_bind_address.isNotEmpty()) obj["inet4_bind_address"] = inet4_bind_address
         if (inet6_bind_address.isNotEmpty()) obj["inet6_bind_address"] = inet6_bind_address
