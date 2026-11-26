@@ -5,6 +5,7 @@ import io.nekohasekai.sagernet.SpeedTestSettings
 import io.nekohasekai.sagernet.database.preference.SettingsStore
 import io.nekohasekai.sagernet.outbound.common.XRAY_MUX_MAX_COUNT
 import io.nekohasekai.sagernet.outbound.common.xrayXudpProxyUDP443Modes
+import io.nekohasekai.sagernet.outbound.config.ExitThrough
 import io.nekohasekai.sagernet.outbound.link.Hosts
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
@@ -97,6 +98,10 @@ object SettingsRegistry {
     @JvmField
     val DOMAIN_STRATEGIES = listOf("", "ipv4_only", "ipv6_only", "prefer_ipv4", "prefer_ipv6")
 
+    /** traffic_graph_seconds: the graph's 1, 2, 5 and 10 minute windows (mainwindow_setup.cpp). */
+    @JvmField
+    val TRAFFIC_GRAPH_WINDOWS = listOf(60, 120, 300, 600)
+
     /** Most verbose first (BS.cpp:48). */
     @JvmField
     val LOG_LEVELS = listOf("trace", "debug", "info", "warn", "error", "fatal", "panic")
@@ -151,6 +156,8 @@ object SettingsRegistry {
     @JvmField val CURRENT_GROUP = long("current_group", 0L) { it >= 0 }
     @JvmField val SHOW_CONFIG_SECURITY = bool("show_config_security", false)
     @JvmField val ALLOW_BETA_UPDATE = bool("allow_beta_update", false)
+    /** BackupArchive::PartNames of the parts ticked for the last backup made; empty means all (a [RESTORE_KEPT_KEYS] key). */
+    @JvmField val BACKUP_PARTS = stringList("backup_parts", emptyList())
 
     // ------------------------------------------------------------------------------------------------ inbound
 
@@ -267,16 +274,21 @@ object SettingsRegistry {
     @JvmField val URL_TEST_TIMEOUT_MS = int("url_test_timeout_ms", 3000) { it > 0 }
     @JvmField val TEST_CONCURRENT = int("test_concurrent", 10) { it > 0 }
     @JvmField val DIRECT_TEST_URL = string("direct_test_url", "")
+    /** The Service Check ids turned off (SettingsValues.h service_check_disabled); ids no definitions list are kept. */
+    @JvmField val SERVICE_CHECK_DISABLED = stringList("service_check_disabled", emptyList())
     /** The exit country of the running connection (widget/ExitIp.kt); off never asks a lookup service on its own. */
     @JvmField val EXIT_COUNTRY_LOOKUP = bool("exit_country_lookup", true)
     /** "auto" or one service id of ExitIp; an id this build does not know (a newer desktop's) runs as "auto". */
     @JvmField val EXIT_LOOKUP_PROVIDER = string("exit_lookup_provider", "auto")
-    /** 0 download + upload, 1 download, 2 upload, 3 simple download, 4 country (Const.hpp:39-49). */
-    @JvmField val SPEED_TEST_MODE = int("speed_test_mode", 0) { it in 0..4 }
+    /** 0 download + upload, 1 download, 2 upload, 3 simple download; the removed 4 (country) reads as 0. */
+    @JvmField val SPEED_TEST_MODE = int("speed_test_mode", 0) { it in 0..3 }
     @JvmField val SPEED_TEST_TIMEOUT_MS = int("speed_test_timeout_ms", 5000) { it > 0 }
-    @JvmField val SIMPLE_DL_URL = string("simple_dl_url", "http://cachefly.cachefly.net/1mb.test") {
+    @JvmField val SIMPLE_DL_URL = string("simple_dl_url", "http://cachefly.cachefly.net/5mb.test") {
         SpeedTestSettings.isValidHttpUrl(it)
     }
+
+    /** simple_dl_url's former default, which [DataStore.migrateSettings] moves to the current one once. */
+    const val OLD_SIMPLE_DL_URL = "http://cachefly.cachefly.net/1mb.test"
 
     // ------------------------------------------------------------------------------------------------ subscriptions
 
@@ -300,11 +312,36 @@ object SettingsRegistry {
     /** Follow a server's profile-update-interval instead of sub_auto_update's minutes. */
     @JvmField val SUB_RESPECT_SERVER_INTERVAL = bool("sub_respect_server_interval", false)
 
+    // ------------------------------------------------------------------------------------------------ exit
+
+    /** ExitThrough (ExitThrough.h): "server" or "warp"; [migratedExitThrough] rewrites any other value to "server". */
+    @JvmField val EXIT_THROUGH = string("exit_through", ExitThrough.SERVER.value)
+
+    /** The WARP switch exit_through replaced. */
+    private const val LEGACY_ENABLE_WARP = "enable_warp"
+
+    /**
+     * Deleted on load and on restore so they never go back out: the switches exit_through replaced, and the options of
+     * the retired Tor and Psiphon exits.
+     */
+    @JvmField
+    val RETIRED_EXIT_KEYS = listOf("enable_tor", LEGACY_ENABLE_WARP, "tor_exit_country", "psiphon_egress_region")
+
+    /**
+     * SettingsRepo::load: what exit_through is rewritten to, given the rows in [read] (a key's stored text), or null
+     * when it stays. Without exit_through, a legacy enable_warp makes it "warp"; an exit this version lacks (the
+     * retired "tor" and "psiphon") becomes "server". A legacy enable_tor no longer selects anything.
+     */
+    @JvmStatic
+    fun migratedExitThrough(read: (String) -> String?): String? {
+        val stored = read(EXIT_THROUGH.key) ?: return ExitThrough.WARP.value.takeIf {
+            read(LEGACY_ENABLE_WARP)?.let { SettingsStore.decodeBoolean(it) } == true
+        }
+        return ExitThrough.of(stored).value.takeIf { it != stored }
+    }
+
     // ------------------------------------------------------------------------------------------------ warp
 
-    @JvmField val ENABLE_WARP = bool("enable_warp", false)
-    /** The desktop's Tor exit, which outranks WARP there; Android has no Tor and keeps it only for the round trip. */
-    @JvmField val ENABLE_TOR = bool("enable_tor", false)
     @JvmField val WARP_MODE = oneOf("warp_mode", "wireguard", WARP_MODES)
     @JvmField val WARP_EP = string("warp_ep", "")
     @JvmField val WARP_PRIVATE_KEY = string("warp_private_key", "")
@@ -336,16 +373,21 @@ object SettingsRegistry {
     @JvmField val LOG_LEVEL = oneOf("log_level", "warn", LOG_LEVELS)
     @JvmField val XRAY_LOG_LEVEL = oneOf("xray_log_level", "warning", XRAY_LOG_LEVELS)
     @JvmField val ENABLE_STATS = bool("enable_stats", true)
-    @JvmField val DISABLE_TRAFFIC_STATS = bool("disable_traffic_stats", false)
     /**
      * The live traffic graph (SettingsRepo.h traffic_graph_*): hidden line keys ("proxy", "direct", the desktop's
-     * "route:<id>" and "aux:<id>"), hidden directions (bit 0 download, bit 1 upload), the 1m/2m/5m/10m window.
+     * "route:<id>" and "aux:<id>"), hidden directions (bit 0 download, bit 1 upload), the window in seconds.
      */
     @JvmField val TRAFFIC_GRAPH_HIDDEN = stringList("traffic_graph_hidden", emptyList())
     @JvmField val TRAFFIC_GRAPH_HIDDEN_DIRS = int("traffic_graph_hidden_dirs", 0) { it in 0..3 }
-    @JvmField val TRAFFIC_GRAPH_RANGE = int("traffic_graph_range", 1) { it in 0..3 }
+    @JvmField val TRAFFIC_GRAPH_SECONDS = int("traffic_graph_seconds", 120) { it in TRAFFIC_GRAPH_WINDOWS }
     @JvmField val TRAFFIC_GRAPH_SMOOTH = bool("traffic_graph_smooth", true)
-    @JvmField val TRAFFIC_GRAPH_MARKERS = bool("traffic_graph_markers", true)
+
+    /** The window index traffic_graph_seconds replaced (0..3 of [TRAFFIC_GRAPH_WINDOWS]); converted once, then deleted. */
+    const val LEGACY_TRAFFIC_GRAPH_RANGE = "traffic_graph_range"
+
+    /** Deleted on load and on restore (SettingsRepo::load): settings this version no longer has. */
+    @JvmField
+    val RETIRED_KEYS = listOf("disable_traffic_stats", "traffic_graph_markers", LEGACY_TRAFFIC_GRAPH_RANGE)
     /** Sign-encoded port: at most 0 is off. */
     @JvmField val CORE_BOX_CLASH_API = int("core_box_clash_api", -9090) { it in -65535..65535 }
     @JvmField val CORE_BOX_CLASH_LISTEN_ADDR = string("core_box_clash_listen_addr", LOOPBACK_ADDRESS) { it.isNotBlank() }
@@ -401,6 +443,79 @@ object SettingsRegistry {
         Key.SERVICE_ERROR_RULE_SETS, Key.START_WITHOUT_RULE_SETS, Key.RUNNING_PROFILES, Key.RUNNING_ROUTE,
         CORE_BOX_API_PORT.key,
     )
+
+    /** A backup carries these, but every restore keeps this device's value. */
+    @JvmField
+    val RESTORE_KEPT_KEYS: Set<String> = setOf(BACKUP_PARTS.key)
+
+    /**
+     * The desktop's Host scope (SettingsSchema.cpp) among the keys Android holds; core_box_api_port is in
+     * [DEVICE_LOCAL_KEYS]. A desktop backup's values never replace this phone's, as the desktop's API restore keeps the
+     * host's against another machine's archive; an Android backup restores them, as the desktop window does its own.
+     */
+    @JvmField
+    val HOST_KEYS: Set<String> = setOf(
+        LOG_LEVEL.key, XRAY_LOG_LEVEL.key, REMEMBER_ENABLE.key,
+        DISABLE_MIXED_INBOUND.key, INBOUND_ADDRESS.key, INBOUND_SOCKS_PORT.key, RANDOM_INBOUND_PORT.key,
+        CUSTOM_INBOUND.key, INBOUND_AUTH.key, INBOUND_USER.key, INBOUND_PASS.key,
+        ENABLE_TUN_ROUTING.key, VPN_MTU.key, DISABLE_PRIVATE_RANGE_BYPASS.key, VPN_PRIVATE_RANGES.key, VPN_IPV6.key,
+        VPN_TUN_IPV4_CIDR.key, VPN_TUN_IPV6_CIDR.key,
+        ENABLE_NTP.key, NTP_SERVER_ADDRESS.key, NTP_SERVER_PORT.key, NTP_INTERVAL.key, NTP_OUTBOUND.key,
+        CORE_BOX_CLASH_API.key, CORE_BOX_CLASH_LISTEN_ADDR.key, CORE_BOX_CLASH_API_SECRET.key, CORE_BOX_API_SECRET.key,
+        CORE_BOX_UNDERLYING_DNS.key, CORE_DNS_IN_PORT.key,
+    )
+
+    // ------------------------------------------------------------------------------------------------ listeners
+
+    /** The local listeners whose ports must all differ (SettingsRegistry.cpp portConflict); Android has no Throne API. */
+    enum class Listener(val key: String) {
+        MIXED("inbound_socks_port"),
+        DNS_IN("core_dns_in_port"),
+        CLASH_API("core_box_clash_api"),
+        BOX_API("core_box_api_port"),
+    }
+
+    /** [listener] would listen on [port], which [holder] uses; [reenabled] when it comes back on at the port it kept. */
+    class PortConflict(val listener: Listener, val holder: Listener, val port: Int, val reenabled: Boolean)
+
+    /** The port [listener] listens on with the settings [read] gives (a key's stored text), null while it is off. */
+    @JvmStatic
+    fun listenerPort(listener: Listener, read: (String) -> String? = DataStore.configurationStore::getRaw): Int? {
+        fun <T> value(setting: Setting<T>): T = read(setting.key)?.let(setting::decode) ?: setting.default
+        return when (listener) {
+            Listener.MIXED -> {
+                // disable_mixed_inbound only applies in VPN mode (DataStore.mixedInboundDisabled).
+                val vpn = (read(Key.SERVICE_MODE) ?: Key.MODE_VPN) == Key.MODE_VPN
+                if (value(DISABLE_MIXED_INBOUND) && vpn || value(RANDOM_INBOUND_PORT)) null
+                else read(INBOUND_SOCKS_PORT.key)?.let(INBOUND_SOCKS_PORT::decode) ?: DataStore.inboundSocksPort
+            }
+            Listener.DNS_IN -> value(CORE_DNS_IN_PORT).takeIf { it > 0 }
+            Listener.CLASH_API -> value(CORE_BOX_CLASH_API).takeIf { it > 0 }
+            Listener.BOX_API -> value(CORE_BOX_API_PORT).takeIf { it > 0 }
+        }
+    }
+
+    /**
+     * portConflict (SettingsRegistry.cpp): [pending] (key -> stored text) over the stored settings gives a listener a
+     * port another one uses afterwards. Only listeners whose port changes are checked; while one was off the others
+     * could take its port unchecked, so turning it back on is checked too.
+     */
+    @JvmStatic
+    fun portConflict(
+        pending: Map<String, String>,
+        read: (String) -> String? = DataStore.configurationStore::getRaw,
+    ): PortConflict? {
+        val before = Listener.entries.associateWith { listenerPort(it, read) }
+        val after = Listener.entries.associateWith { listenerPort(it) { key -> pending[key] ?: read(key) } }
+        for (listener in Listener.entries) {
+            val port = after[listener] ?: continue
+            if (port == before[listener]) continue
+            val holder = Listener.entries.firstOrNull { it != listener && after[it] == port } ?: continue
+            val portKept = pending[listener.key].let { it == null || it == read(listener.key) }
+            return PortConflict(listener, holder, port, before[listener] == null && portKept)
+        }
+        return null
+    }
 
     // ------------------------------------------------------------------------------------------------ lookup
 

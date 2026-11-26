@@ -34,6 +34,7 @@ import io.nekohasekai.sagernet.aidl.SpeedDisplayData
 import io.nekohasekai.sagernet.aidl.TrafficDataBatch
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.bg.SagerConnection
+import io.nekohasekai.sagernet.bg.VpnAuthClient
 import io.nekohasekai.sagernet.bg.test.TestSpec
 import io.nekohasekai.sagernet.database.DataStore
 import io.nekohasekai.sagernet.database.SettingsRegistry
@@ -47,6 +48,7 @@ import io.nekohasekai.sagernet.ktx.launchCustomTab
 import io.nekohasekai.sagernet.ktx.onMainDispatcher
 import io.nekohasekai.sagernet.database.SettingsMapper
 import io.nekohasekai.sagernet.outbound.`import`.ProfileImport
+import io.nekohasekai.sagernet.ui.profiles.ProfileTests
 import io.nekohasekai.sagernet.ui.route.RouteImports
 import io.nekohasekai.sagernet.ui.settings.DnsSettingsFragment
 import io.nekohasekai.sagernet.ui.settings.XrayGeoSettingsFragment
@@ -61,11 +63,14 @@ import io.nekohasekai.sagernet.utils.PlatformNotifications
 import io.nekohasekai.sagernet.utils.Theme
 import io.nekohasekai.sagernet.utils.WifiStateAccess
 import io.nekohasekai.sagernet.widget.bars
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.drawerlayout.widget.DrawerLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.nekohasekai.sagernet.ktx.closeNavigation
+import io.nekohasekai.sagernet.ktx.openNavigation
 
 class MainActivity : ThemedActivity(),
     SagerConnection.Callback,
@@ -88,10 +93,17 @@ class MainActivity : ThemedActivity(),
 
         binding = LayoutMainBinding.inflate(layoutInflater)
         binding.fab.initProgress(binding.fabProgress)
-        // White theme: a dark FAB with a light icon (white on white is unreadable)
-        if (Theme.isWhiteTheme()) {
+        // White theme: a dark FAB with a light icon, as white on white is unreadable. Black and White at night: a
+        // lighter grey, since their primary hardly shows on the night background (OLED White's is black on black).
+        val fabTint = when {
+            Theme.isWhiteTheme() -> R.color.color_white_theme_fab
+            themeResId == R.style.Theme_SagerNet_White_Night ||
+                (themeResId == R.style.Theme_SagerNet_Black && Theme.usingNightMode()) -> R.color.material_grey_700
+            else -> null
+        }
+        if (fabTint != null) {
             binding.fab.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                ContextCompat.getColor(this, R.color.color_white_theme_fab)
+                ContextCompat.getColor(this, fabTint)
             )
         }
         if (themeResId !in intArrayOf(
@@ -339,7 +351,7 @@ class MainActivity : ThemedActivity(),
     }
 
     override fun onNavigationItemSelected(item: MenuItem): Boolean {
-        if (item.isChecked) binding.drawerLayout.closeDrawers() else {
+        if (item.isChecked) binding.drawerLayout.closeNavigation() else {
             return displayFragmentWithId(item.itemId)
         }
         return true
@@ -352,7 +364,7 @@ class MainActivity : ThemedActivity(),
         supportFragmentManager.beginTransaction()
             .replace(R.id.fragment_holder, fragment)
             .commitAllowingStateLoss()
-        binding.drawerLayout.closeDrawers()
+        binding.drawerLayout.closeNavigation()
         syncMainControls(fragment, showWhenConnected = false, animate = true)
     }
 
@@ -504,13 +516,19 @@ class MainActivity : ThemedActivity(),
         val popup = PopupMenu(this, binding.stats)
         popup.menuInflater.inflate(R.menu.stats_bar_menu, popup.menu)
         popup.menu.findItem(R.id.action_test_speed_current).isEnabled = DataStore.serviceState.connected
+        popup.menu.findItem(R.id.action_test_service_current).isEnabled = DataStore.serviceState.connected
         popup.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_live_graphs -> displayFragmentWithId(R.id.nav_live_graphs)
                 R.id.action_test_speed_current -> {
                     if (!TestSessionClient.startCurrent(TestSpec.KIND_SPEED)) {
                         snackbar(R.string.profiles_test_busy).show()
+                    } else {
+                        ProfileTests.showTestedColumnOfRunning(TestSpec.KIND_SPEED)
                     }
+                }
+                R.id.action_test_service_current -> ProfileTests.startServiceCurrent(this) {
+                    snackbar(R.string.profiles_test_busy).show()
                 }
             }
             true
@@ -604,6 +622,17 @@ class MainActivity : ThemedActivity(),
         ProfileManager.postUpdate(data.items)
     }
 
+    override fun cbVpnAuthUpdate() {
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) promptVpnSignIn()
+    }
+
+    /** A sign-in an endpoint of the running profile waits for opens over the app by itself; the notification covers the rest. */
+    private fun promptVpnSignIn() {
+        val challenge = VpnAuthClient.unprompted() ?: return
+        VpnAuthClient.markPrompted(challenge)
+        startActivity(VpnAuthActivity.intent(this, challenge.tag))
+    }
+
     override fun cbSelectorUpdate(id: Long) {
         val old = DataStore.selectedProxy
         DataStore.selectedProxy = id
@@ -633,6 +662,7 @@ class MainActivity : ThemedActivity(),
     override fun onStart() {
         connection.updateConnectionId(SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND)
         super.onStart()
+        promptVpnSignIn()
     }
 
     override fun onStop() {
@@ -657,7 +687,7 @@ class MainActivity : ThemedActivity(),
                 // Row buttons, grid columns, tabs and toolbar items come first; the drawer opens at the edge.
                 val direction = if (rtl) View.FOCUS_RIGHT else View.FOCUS_LEFT
                 if (!binding.drawerLayout.isOpen && screenFocusTarget(direction) == null) {
-                    binding.drawerLayout.open()
+                    binding.drawerLayout.openNavigation()
                     navigation.requestFocus()
                     return true
                 }
@@ -665,7 +695,7 @@ class MainActivity : ThemedActivity(),
 
             awayFromDrawer -> {
                 if (binding.drawerLayout.isOpen) {
-                    binding.drawerLayout.close()
+                    binding.drawerLayout.closeNavigation()
                     return true
                 }
             }

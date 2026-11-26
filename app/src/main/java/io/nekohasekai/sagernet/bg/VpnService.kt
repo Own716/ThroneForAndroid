@@ -101,14 +101,12 @@ class VpnService : BaseVpnService(),
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // The system starts an always-on VPN whatever the service mode says; the rest of the app follows the mode.
         if (DataStore.serviceMode != Key.MODE_VPN && isAlwaysOnVpn()) DataStore.serviceMode = Key.MODE_VPN
-        if (DataStore.serviceMode == Key.MODE_VPN) {
-            if (prepare(this) != null) {
-                startActivity(
-                    Intent(
-                        this, VpnRequestActivity::class.java
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            } else return super<BaseService.Interface>.onStartCommand(intent, flags, startId)
+        val vpnMode = DataStore.serviceMode == Key.MODE_VPN
+        if (vpnMode && prepare(this) == null) return super<BaseService.Interface>.onStartCommand(intent, flags, startId)
+        // Started as a foreground service: stopping before startForeground crashes the process (see startProxy).
+        if (data.notification == null) data.notification = createNotification("")
+        if (vpnMode) {
+            startActivity(Intent(this, VpnRequestActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
         stopRunner()
         return Service.START_NOT_STICKY
@@ -167,6 +165,9 @@ class VpnService : BaseVpnService(),
             }
         }
 
+        // Without the mixed inbound the app's own proxied requests (subscriptions, downloads) count on the tun
+        // carrying them, so the per-app lists never leave this app outside (HTTPRequestHelper RequestUsesMixedInbound).
+        val keepSelf = DataStore.mixedInboundDisabled
         val includePackage = options.getIncludePackage()
         if (includePackage.hasNext()) {
             val added = includePackage.toList().count {
@@ -178,11 +179,12 @@ class VpnService : BaseVpnService(),
                 }
             }
             // None of the chosen apps is installed: an empty allow list would capture every app instead of none.
-            if (added == 0) builder.addAllowedApplication(packageName)
+            if (added == 0 || keepSelf) builder.addAllowedApplication(packageName)
         }
         val excludePackage = options.getExcludePackage()
         if (excludePackage.hasNext()) {
             excludePackage.toList().forEach {
+                if (keepSelf && it == packageName) return@forEach
                 try {
                     builder.addDisallowedApplication(it)
                 } catch (_: PackageManager.NameNotFoundException) {

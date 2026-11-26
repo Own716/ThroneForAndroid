@@ -23,6 +23,7 @@ import io.throneproj.mobile.Mobile
 import io.throneproj.mobile.ResolveRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /** The post-update filters (GroupUpdater.cpp:183-296) and the manual group actions that need the core. */
 internal object SubscriptionFilters {
@@ -90,18 +91,87 @@ internal object SubscriptionFilters {
         val outcome = ProfileManager.batchDeleteProfiles(doomed)
         if (!outcome.ok) SubscriptionRefresh.dbError(gid)
         if (outcome.kept.isNotEmpty()) sections.append('\n').append(app.getString(R.string.subs_running_kept))
+        sections.append(GroupRepo.hopNotice(outcome.clearedHops))
         return Outcome(outcome.deleted, sections.toString(), outcome.stopped, outcome.ok)
     }
 
-    /** removeUnavailableAndSort (GroupUpdater.cpp:266-296): the follow-ups of the subscription's URL test. */
-    suspend fun removeUnavailableAndSort(group: ProxyGroup, options: SubscriptionOptions): Outcome {
+    /** [untested]: members with no known exit country, never removed, as a failed test is no verdict. */
+    class CountryOutcome(
+        @JvmField val untested: List<Long>,
+        @JvmField val deleted: List<Long>,
+        @JvmField val report: String,
+        @JvmField val stopped: ProxyEntity?,
+        @JvmField val ok: Boolean,
+    )
+
+    /**
+     * applyCountryRules (GroupUpdater.cpp): removes the members [rules] refuse, unless some still await their test and
+     * this is not the [final] pass. A refused verdict is remembered only once its profile goes, so a refresh drops that
+     * content before it is imported. [verdicts] is updated and stored.
+     */
+    suspend fun applyCountryRules(
+        gid: Long,
+        rules: CountryRules,
+        verdicts: MutableMap<String, String>,
+        final: Boolean,
+    ): CountryOutcome {
+        val untested = ArrayList<Long>()
+        val refused = ArrayList<Long>()
+        val refusedNames = ArrayList<String>()
+        val refusedVerdicts = ArrayList<Pair<String, String>>()
+        var accepted = 0
+        for (profile in ProfileManager.members(gid)) {
+            if (profile.type == SubscriptionRefresh.AUTOSELECTOR) continue
+            val country = profile.testCountry.orEmpty().trim().uppercase(Locale.ROOT)
+            if (country.isEmpty()) {
+                untested.add(profile.id)
+                continue
+            }
+            val content = SubscriptionRefresh.contentKey(profile)
+            if (rules.accepts(country)) {
+                accepted++
+                verdicts[content] = country
+                continue
+            }
+            refused.add(profile.id)
+            refusedNames.add(profile.outbound.displayTypeAndName())
+            refusedVerdicts.add(content to country)
+        }
+
+        val report = StringBuilder()
+        var outcome: ProfileManager.DeleteOutcome? = null
+        val decide = refused.isNotEmpty() && (final || untested.isEmpty())
+        // Like a fetch the filters would empty: rules that accept none of the tested profiles are likelier wrong than meant.
+        if (decide && accepted == 0) {
+            report.append('\n').append(app.getString(R.string.subs_country_none_accepted, refused.size))
+        } else if (decide) {
+            val deleted = ProfileManager.batchDeleteProfiles(refused)
+            if (!deleted.ok) SubscriptionRefresh.dbError(gid)
+            for ((content, country) in refusedVerdicts) verdicts[content] = country
+            report.append('\n').append(app.getString(R.string.subs_removed_countries, refusedNames.size)).append('\n')
+                .append(SubscriptionRefresh.notice(refusedNames, "[-]", "removed"))
+            if (deleted.kept.isNotEmpty()) report.append('\n').append(app.getString(R.string.subs_running_kept))
+            report.append(GroupRepo.hopNotice(deleted.clearedHops))
+            outcome = deleted
+        }
+        SubscriptionCountryVerdicts.save(gid, verdicts)
+        return CountryOutcome(untested, outcome?.deleted.orEmpty(), report.toString(), outcome?.stopped, outcome?.ok ?: true)
+    }
+
+    /**
+     * removeUnavailableAndSort (GroupUpdater.cpp:518-545): the follow-ups of the subscription's URL test. Only the
+     * profiles that failed in the run started at [testedSince] (seconds) are removed, so an inconclusive or aborted
+     * test keeps the earlier result; null removes nothing.
+     */
+    suspend fun removeUnavailableAndSort(group: ProxyGroup, options: SubscriptionOptions, testedSince: Long?): Outcome {
         var deleted: List<Long> = emptyList()
         val report = StringBuilder()
-        if (options.removeUnavailable) {
+        if (options.removeUnavailable && testedSince != null) {
             val doomed = ArrayList<Long>()
             val names = ArrayList<String>()
             for (profile in ProfileManager.members(group.id)) {
                 if (profile.type == SubscriptionRefresh.AUTOSELECTOR || !profile.isUnavailable()) continue
+                if (profile.latencyAt < testedSince) continue
                 doomed.add(profile.id)
                 names.add(profile.outbound.displayTypeAndName())
             }
@@ -112,6 +182,7 @@ internal object SubscriptionFilters {
                 report.append('\n').append(app.getString(R.string.subs_removed_unavailable, names.size)).append('\n')
                     .append(SubscriptionRefresh.notice(names, "[-]", "removed"))
                 if (outcome.kept.isNotEmpty()) report.append('\n').append(app.getString(R.string.subs_running_kept))
+                report.append(GroupRepo.hopNotice(outcome.clearedHops))
             }
         }
         if (options.sortByLatency && !GroupSort.sortProfiles(group.id, GroupSortAction(GroupSortMethod.BY_LATENCY))) {
@@ -138,6 +209,7 @@ internal object SubscriptionFilters {
         var report = app.getString(R.string.subs_removed_invalid, names.size) + "\n" +
             SubscriptionRefresh.notice(names, "[-]", "removed")
         if (outcome.kept.isNotEmpty()) report += "\n" + app.getString(R.string.subs_running_kept)
+        report += GroupRepo.hopNotice(outcome.clearedHops)
         Logs.i(report)
         return report.trim()
     }

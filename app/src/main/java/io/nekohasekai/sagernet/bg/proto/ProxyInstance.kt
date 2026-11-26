@@ -2,13 +2,15 @@ package io.nekohasekai.sagernet.bg.proto
 
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.bg.ServiceNotification
+import io.nekohasekai.sagernet.bg.VpnAuthRuntime
 import io.nekohasekai.sagernet.bg.XrayGeoAssets
 import io.nekohasekai.sagernet.bg.autoselector.AutoSelectorRuntime
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.ktx.Logs
-import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.outbound.config.AutoSelectorBuild
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
 class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = null) :
@@ -17,6 +19,7 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
     var displayProfileName = ServiceNotification.genTitle(profile)
 
     // for TrafficLooper
+    @Volatile
     var looper: TrafficLooper? = null
 
     /**
@@ -61,10 +64,10 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
     override fun launch() {
         super.launch() // start box
         AutoSelectorRuntime.onStarted(this)
-        runOnDefaultDispatcher {
-            looper = service?.let { TrafficLooper(it.data, this) }
-            looper?.start()
-        }
+        VpnAuthRuntime.onStarted(this)
+        // Set before launch returns, on the thread close runs on: a close right after the start always finds it.
+        looper = service?.let { TrafficLooper(it.data, CoroutineScope(Dispatchers.Default)) }
+        looper?.start()
     }
 
     override fun close() {
@@ -73,6 +76,15 @@ class ProxyInstance(profile: ProxyEntity, var service: BaseService.Interface? = 
             AutoSelectorRuntime.onClosed(this)
         } catch (error: Throwable) {
             closeError = error
+        }
+        try {
+            VpnAuthRuntime.onClosed(this)
+        } catch (error: Throwable) {
+            if (closeError == null) {
+                closeError = error
+            } else {
+                closeError?.addSuppressed(error)
+            }
         }
         try {
             super.close()

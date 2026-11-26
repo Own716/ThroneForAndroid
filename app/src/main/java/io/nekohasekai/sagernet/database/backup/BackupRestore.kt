@@ -6,13 +6,20 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.GroupSort
+import io.nekohasekai.sagernet.database.GroupSortMethod
 import io.nekohasekai.sagernet.database.ProfileManager
+import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.RouteManager
 import io.nekohasekai.sagernet.database.SagerDatabase
 import io.nekohasekai.sagernet.database.SettingsRegistry
+import io.nekohasekai.sagernet.database.SortInput
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.ENTITY_IDS
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.GROUPS
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.GROUPS_ORDER
+import io.nekohasekai.sagernet.database.backup.DesktopSchema.IP_LISTS
+import io.nekohasekai.sagernet.database.backup.DesktopSchema.IP_LIST_ENTRIES
+import io.nekohasekai.sagernet.database.backup.DesktopSchema.IP_SCANS
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.MARKERS
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.PROFILES
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.ROUTE_PROFILES
@@ -20,6 +27,9 @@ import io.nekohasekai.sagernet.database.backup.DesktopSchema.ROUTE_RULES
 import io.nekohasekai.sagernet.database.backup.DesktopSchema.SETTINGS
 import io.nekohasekai.sagernet.group.RemoteRouteUpdater
 import io.nekohasekai.sagernet.group.SubscriptionScheduler
+import io.nekohasekai.sagernet.scan.EndpointSources
+import io.nekohasekai.sagernet.scan.IpListUpdater
+import io.nekohasekai.sagernet.scan.ScannerStartup
 import io.nekohasekai.sagernet.ktx.app
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonInput
@@ -37,8 +47,8 @@ import java.io.InputStream
 object BackupRestore {
 
     /** The parts to restore. */
-    data class Choice(val profiles: Boolean, val routes: Boolean, val settings: Boolean) {
-        fun any(): Boolean = profiles || routes || settings
+    data class Choice(val profiles: Boolean, val routes: Boolean, val settings: Boolean, val ipLists: Boolean = false) {
+        fun any(): Boolean = profiles || routes || settings || ipLists
     }
 
     class RestoreException(message: String) : Exception(message)
@@ -65,6 +75,7 @@ object BackupRestore {
         profiles = contents.parts.profiles,
         routes = contents.parts.routes,
         settings = contents.parts.settings,
+        ipLists = contents.parts.ipLists,
     )
 
     /** Restores [choice] from [backup] and discards it; returns the warnings to show. */
@@ -76,6 +87,11 @@ object BackupRestore {
                 commit(staged, choice, backup.contents.isAndroid, warnings)
                 if (choice.profiles || choice.settings) SubscriptionScheduler.schedule()
                 if (choice.settings) RemoteRouteUpdater.schedule()
+                if (choice.ipLists) {
+                    ScannerStartup.ensureDefaults()
+                    IpListUpdater.schedule()
+                }
+                if (choice.profiles || choice.ipLists) EndpointSources.invalidateDisplayCache()
             }
             return warnings
         } finally {
@@ -94,6 +110,11 @@ object BackupRestore {
 
         /** Null when the backup has no markers table (the desktop then clears its markers). */
         var markers: SqlTable? = null
+
+        /** Each null when the backup lacks the table, which then stays as it is (copyTable). */
+        var ipLists: SqlTable? = null
+        var ipListEntries: SqlTable? = null
+        var ipScans: SqlTable? = null
         val counters = HashMap<String, Long>()
     }
 
@@ -114,9 +135,13 @@ object BackupRestore {
             if (choice.profiles) stageProfiles(bak, main, staged, warnings)
             if (choice.routes) stageRoutes(bak, main, staged, warnings)
             if (choice.settings) stageSettings(bak, main, staged, warnings)
-            if ((choice.profiles || choice.routes) && bak.hasTable(ENTITY_IDS)) {
+            if (choice.ipLists) stageIpLists(bak, main, staged, warnings)
+            if (bak.hasTable(ENTITY_IDS)) {
                 val columns = bak.tableColumns(ENTITY_IDS).mapTo(HashSet()) { it.name }
-                for ((table, column) in COUNTERS) {
+                // Database.cpp restoreSelective: the three entity counters with either part, the IP ones with theirs.
+                val counters = (if (choice.profiles || choice.routes) COUNTERS else emptyList()) +
+                    (if (choice.ipLists) IP_COUNTERS else emptyList())
+                for ((table, column) in counters) {
                     if (column !in columns) continue
                     bak.longQuery("SELECT MAX(`$column`) FROM `$ENTITY_IDS`")?.let { staged.counters[table] = it }
                 }
@@ -184,8 +209,10 @@ object BackupRestore {
         require(bak, GROUPS)
         require(bak, PROFILES)
         val groups = stageTable(bak, main, GROUPS, "`id`", warnings, extra = listOf("display_order"))
+            .withColumns(listOf("visible_columns", "test_items_to_show", "custom_order_json"))
         val groupId = groups.index("id")
         val groupIds = groups.rows.mapTo(LinkedHashSet()) { it[groupId] as Long }
+        stageVisibleColumns(groups)
 
         val tabs = LinkedHashMap<Long, Long>()
         var orphanTabs = 0
@@ -242,6 +269,7 @@ object BackupRestore {
         if (dropped > 0) warnings.add(app.getString(R.string.backup_warn_dropped_profiles, dropped))
 
         val members = profiles.rows.groupBy({ it[gid] as Long }, { it[profileId] as Long })
+        val arranged = stageCustomOrder(groups, members)
         val position = HashMap<Long, Long>()
         var unlisted = 0
         for ((group, ids) in members) {
@@ -251,7 +279,9 @@ object BackupRestore {
             val rest = ids.filter { it !in ordered }.sorted()
             unlisted += rest.size
             ordered.addAll(rest)
-            ordered.forEachIndexed { index, id -> position[id] = index.toLong() }
+            // Group::Arrangement; normalizePinsLocked then puts the pins at the head.
+            val shown = arranged[group]?.let { order -> LinkedHashSet(order).apply { addAll(ordered) } } ?: ordered
+            shown.forEachIndexed { index, id -> position[id] = index.toLong() }
         }
         if (unlisted > 0) warnings.add(app.getString(R.string.backup_warn_unlisted_profiles, unlisted))
         val userOrder = profiles.index("user_order")
@@ -259,6 +289,64 @@ object BackupRestore {
 
         staged.groups = groups
         staged.profiles = profiles
+    }
+
+    /**
+     * visible_columns, else the columns an older backup's test_items_to_show showed (GroupsRepo.cpp's migration), and
+     * test_items_to_show mirroring it, which a desktop backup lacks.
+     */
+    private fun stageVisibleColumns(groups: SqlTable) {
+        val visible = groups.index("visible_columns")
+        val shown = groups.index("test_items_to_show")
+        for (row in groups.rows) {
+            val bits = sqlLong(row[visible])?.toInt()
+                ?: sqlLong(row[shown])?.let { ProxyGroup.visibleColumnsFor(it.toInt()) }
+                ?: ProxyGroup.VisibleColumns.DEFAULT
+            row[visible] = bits.toLong()
+            row[shown] = ProxyGroup.testItemsFor(bits).toLong()
+        }
+    }
+
+    /**
+     * Group::NormalizePins on load: each custom_order keeps its own members only. Returns the custom order of each
+     * group that is not kept sorted, which comes first in its arrangement.
+     */
+    private fun stageCustomOrder(groups: SqlTable, members: Map<Long, List<Long>>): Map<Long, List<Long>> {
+        val id = groups.index("id")
+        val column = groups.index("custom_order_json")
+        val sortMethod = groups.index("sort_method")
+        val arranged = HashMap<Long, List<Long>>()
+        for (row in groups.rows) {
+            val group = row[id] as Long
+            val own = members[group].orEmpty().toHashSet()
+            val order = ProxyGroup.parsePinned(row[column] as? String).filter { it in own }
+            row[column] = ProxyGroup.customOrderToJson(order)
+            val method = if (sortMethod < 0) GroupSortMethod.RAW else GroupSortMethod.of(sqlLong(row[sortMethod])?.toInt() ?: 0)
+            if (!GroupSort.reads(method, SortInput.MEMBERSHIP)) arranged[group] = order
+        }
+        return arranged
+    }
+
+    /**
+     * kIpListTables, ids kept, each only when the backup has it (copyTable). Entries of a list the backup lacks would
+     * break Android's foreign key, so they are skipped.
+     */
+    private fun stageIpLists(bak: SQLiteDatabase, main: SupportSQLiteDatabase, staged: Staged, warnings: MutableList<String>) {
+        if (bak.hasTable(IP_SCANS)) staged.ipScans = stageTable(bak, main, IP_SCANS, "`id`", warnings)
+        if (!bak.hasTable(IP_LISTS)) return
+        val lists = stageTable(bak, main, IP_LISTS, "`id`", warnings)
+        staged.ipLists = lists
+        if (!bak.hasTable(IP_LIST_ENTRIES)) return
+        val entries = stageTable(bak, main, IP_LIST_ENTRIES, "`ip_list_id`, `entry_order`", warnings)
+        val listId = lists.index("id")
+        val ids = lists.rows.mapTo(HashSet()) { it[listId] }
+        val owner = entries.index("ip_list_id")
+        val before = entries.rows.size
+        entries.rows.removeAll { it[owner] !in ids }
+        if (entries.rows.size < before) {
+            warnings.add(app.getString(R.string.backup_warn_rows_skipped, before - entries.rows.size, IP_LIST_ENTRIES))
+        }
+        staged.ipListEntries = entries
     }
 
     private fun stageRoutes(bak: SQLiteDatabase, main: SupportSQLiteDatabase, staged: Staged, warnings: MutableList<String>) {
@@ -276,6 +364,7 @@ object BackupRestore {
         if (rules.rows.size < before) warnings.add(app.getString(R.string.backup_warn_orphan_rules, before - rules.rows.size))
         if (owner >= 0) {
             skipUnsupportedRules(bak, main, rules, warnings)
+            remapRemoteRules(bak, profiles, rules)
             // RoutesRepo numbers each profile's rules 0..n-1: close the gaps of skipped rows and of the backup itself.
             val order = rules.index("rule_order")
             val next = HashMap<Any?, Long>()
@@ -289,6 +378,42 @@ object BackupRestore {
         if (raw > 0) warnings.add(app.getString(R.string.backup_warn_raw_routes, raw))
         staged.routeProfiles = profiles
         staged.routeRules = rules
+    }
+
+    /**
+     * `remote_rules` lists rule positions (RoutesRepo.cpp routesRepoRemoteIndexes), which the rules skipped here shift:
+     * each position follows its rule, and a skipped remote rule drops out. NULL stays NULL (origins not tracked).
+     */
+    private fun remapRemoteRules(bak: SQLiteDatabase, profiles: SqlTable, rules: SqlTable) {
+        val column = profiles.index("remote_rules")
+        if (column < 0) return
+        val original = HashMap<Pair<Any?, Any?>, Int>()
+        val counted = HashMap<Any?, Int>()
+        bak.rawQuery("SELECT `route_profile_id`, `rule_order` FROM `$ROUTE_RULES` ORDER BY `route_profile_id`, `rule_order`", null).use { c ->
+            while (c.moveToNext()) {
+                val profile = c.value(0)
+                val n = counted[profile] ?: 0
+                original[profile to c.value(1)] = n
+                counted[profile] = n + 1
+            }
+        }
+        val owner = rules.index("route_profile_id")
+        val order = rules.index("rule_order")
+        val positions = HashMap<Any?, HashMap<Int, Int>>()
+        val kept = HashMap<Any?, Int>()
+        for (row in rules.rows) {
+            val n = kept[row[owner]] ?: 0
+            original[row[owner] to row[order]]?.let { positions.getOrPut(row[owner]) { HashMap() }[it] = n }
+            kept[row[owner]] = n + 1
+        }
+        val id = profiles.index("id")
+        for (row in profiles.rows) {
+            val array = (row[column] as? String)?.let { JsonInput.parseValue(it) } as? JsonArray ?: continue
+            val moved = positions[row[id]].orEmpty()
+            val out = JsonArray()
+            array.filter { it is Long || it is Double }.mapNotNull { moved[JsonValues.toInt(it)] }.distinct().sorted().forEach { out.add(it) }
+            row[column] = out.toCompact()
+        }
     }
 
     /**
@@ -369,11 +494,14 @@ object BackupRestore {
                 db.execSQL("UPDATE `$GROUPS` SET `route_id` = -1")
                 db.execSQL("UPDATE `$ROUTE_PROFILES` SET `source_gid` = -1")
             }
-            if (choice.profiles || choice.routes) {
-                // Database.cpp:364-377 raises all three counters whichever of the two parts was restored.
-                for ((table, value) in staged.counters) raiseSequence(db, table, value)
+            if (choice.ipLists) {
+                val tables = listOf(IP_LISTS to staged.ipLists, IP_SCANS to staged.ipScans, IP_LIST_ENTRIES to staged.ipListEntries)
+                for ((table, data) in tables.asReversed()) if (data != null) db.execSQL("DELETE FROM `$table`")
+                for ((table, data) in tables) if (data != null) insertRows(db, table, data)
             }
-            if (choice.settings) applySettings(db, staged, fromAndroid, warnings)
+            // Staged only for the parts restored: the three entity counters with either part, the IP ones with theirs.
+            for ((table, value) in staged.counters) raiseSequence(db, table, value)
+            if (choice.settings) applySettings(db, staged, choice, fromAndroid)
             // Configs.cpp:32-44 initDB: an empty table gets its Default row, with a fresh id.
             if (choice.profiles) SagerDatabase.groupDao.insertDefaultIfEmpty(SagerDatabase.defaultGroupName())
             // GroupsRepo's NormalizePins on load, once for the restored groups: the pins head their order.
@@ -411,13 +539,22 @@ object BackupRestore {
     }
 
     /**
-     * R10 §8.3: an Android backup replaces every row but the device-local keys; a desktop backup replaces the desktop
-     * rows and keeps this phone's Android-only rows (adopting only those the phone lacks). Unknown and desktop-only
-     * keys are stored as they are so they go back to the desktop; enable_tor is one, with a warning since Android has
-     * no Tor exit.
+     * R10 §8.3: every restore keeps this phone's device-local and [SettingsRegistry.RESTORE_KEPT_KEYS] rows and the
+     * selection ids of the tables it leaves ([keptSelection]). An Android backup replaces every other row; a desktop
+     * backup replaces the desktop rows but the Host ones and keeps this phone's Android-only rows (adopting only those
+     * the phone lacks). Unknown and desktop-only keys are stored as they are so they go back to the desktop, but
+     * exit_through migrates as on load ([DataStore.migrateLegacyExit]), the retired exit rows go, and the restored rows
+     * and markers go through [DataStore.migrateSettings].
      */
-    private fun applySettings(db: SupportSQLiteDatabase, staged: Staged, fromAndroid: Boolean, warnings: MutableList<String>) {
-        val kept = if (fromAndroid) SettingsRegistry.DEVICE_LOCAL_KEYS else SettingsRegistry.DEVICE_LOCAL_KEYS + SettingsRegistry.ANDROID_KEYS
+    private fun applySettings(
+        db: SupportSQLiteDatabase,
+        staged: Staged,
+        choice: Choice,
+        fromAndroid: Boolean,
+    ) {
+        val local = SettingsRegistry.DEVICE_LOCAL_KEYS + SettingsRegistry.RESTORE_KEPT_KEYS + keptSelection(choice) +
+            (if (fromAndroid) emptySet<String>() else SettingsRegistry.HOST_KEYS)
+        val kept = if (fromAndroid) local else local + SettingsRegistry.ANDROID_KEYS
         db.execSQL(
             "DELETE FROM `$SETTINGS` WHERE `key` NOT IN (${kept.joinToString(",") { "?" }})",
             kept.toTypedArray<Any?>()
@@ -425,7 +562,7 @@ object BackupRestore {
         db.compileStatement("INSERT OR REPLACE INTO `$SETTINGS` (`key`, `value`) VALUES (?, ?)").use { replace ->
             db.compileStatement("INSERT OR IGNORE INTO `$SETTINGS` (`key`, `value`) VALUES (?, ?)").use { ignore ->
                 for ((key, value) in staged.settings.orEmpty()) {
-                    if (key in SettingsRegistry.DEVICE_LOCAL_KEYS) continue
+                    if (key in local) continue
                     val statement = if (!fromAndroid && key in SettingsRegistry.ANDROID_KEYS) ignore else replace
                     statement.clearBindings()
                     statement.bindString(1, key)
@@ -434,11 +571,14 @@ object BackupRestore {
                 }
             }
         }
-        val tor = staged.settings?.get(SettingsRegistry.ENABLE_TOR.key)
-        if (tor != null && SettingsRegistry.ENABLE_TOR.decode(tor) == true) warnings.add(app.getString(R.string.backup_warn_tor_egress))
+        // A backup from before exit_through brings enable_warp instead, and an older desktop's may exit through Tor or
+        // Psiphon; the process may have migrated already, so it is done here too.
+        SettingsRegistry.migratedExitThrough { readSetting(db, it) }?.let { writeSetting(db, SettingsRegistry.EXIT_THROUGH.key, it) }
+        for (key in SettingsRegistry.RETIRED_EXIT_KEYS) writeSetting(db, key, null)
         // Database.cpp:357-359: without a markers table the backup predates the migrations, which then run again.
         db.execSQL("DELETE FROM `$MARKERS`")
         staged.markers?.let { insertRows(db, MARKERS, it) }
+        DataStore.migrateSettings(db)
     }
 
     private fun readSetting(db: SupportSQLiteDatabase, key: String): String? =
@@ -454,10 +594,18 @@ object BackupRestore {
         }
     }
 
+    /** Database.cpp:548-555: a selection whose table stays keeps this phone's id; the backup's would name an unrelated row. */
+    private fun keptSelection(choice: Choice): Set<String> = buildSet {
+        if (!choice.profiles) addAll(listOf(SettingsRegistry.CURRENT_GROUP.key, Key.PROFILE_ID, Key.PROFILE_CURRENT, REMEMBER_ID))
+        if (!choice.routes) add(SettingsRegistry.CURRENT_ROUTE_ID.key)
+    }
+
     /**
-     * The ids kept in settings must name existing rows: `current_group` (else the first tab), `current_route_id`
-     * (a non-raw profile, else the first one), the selected / last profile (a desktop backup's `remember_id` when it
-     * names a restored profile, else none); `inbound_address` goes back to loopback unless LAN access was already on.
+     * Database.cpp:568-591: the ids kept in settings must name existing rows, and one this phone kept for a table the
+     * backup replaced now names an unrelated row. So `current_group` (else the first tab), `current_route_id` (a
+     * non-raw profile, else the first one) and the selected / last profile (a desktop backup's `remember_id` when it
+     * names a restored profile, else none) follow the replaced tables; `inbound_address` goes back to loopback unless
+     * LAN access was already on.
      */
     private fun fixSelection(
         db: SupportSQLiteDatabase,
@@ -473,12 +621,26 @@ object BackupRestore {
             out
         }
 
+        fun id(key: String): Long? = readSetting(db, key)?.trim()?.toLongOrNull()
+
         if (choice.profiles || choice.settings) {
+            // Without the backup's settings, the ids are still this phone's.
+            val stale = choice.profiles && !choice.settings
             val groups = ids("SELECT `id` FROM `$GROUPS` ORDER BY `display_order`, `id`")
-            val key = SettingsRegistry.CURRENT_GROUP.key
-            if (readSetting(db, key)?.trim()?.toLongOrNull() !in groups) writeSetting(db, key, groups.firstOrNull()?.toString())
+            val groupKey = SettingsRegistry.CURRENT_GROUP.key
+            if (stale || id(groupKey) !in groups) writeSetting(db, groupKey, groups.firstOrNull()?.toString())
 
             val profiles = ids("SELECT `id` FROM `$PROFILES`").toHashSet()
+            // A desktop backup keeps this phone's Android-only selection, which its profiles replace just the same.
+            val staleProfile = stale || choice.profiles && !fromAndroid
+            for (selection in listOf(Key.PROFILE_ID, Key.PROFILE_CURRENT)) {
+                val selected = id(selection) ?: continue
+                if (selected > 0L && (staleProfile || selected !in profiles)) writeSetting(db, selection, null)
+            }
+            val rememberId = id(REMEMBER_ID)
+            if (rememberId != null && rememberId >= 0L && (stale || rememberId !in profiles)) {
+                writeSetting(db, REMEMBER_ID, DesktopSchema.NO_PROFILE_ID.toString())
+            }
             // remember_id names a profile of the same backup only when its profiles came along.
             if (choice.settings && choice.profiles && !fromAndroid) {
                 val remember = staged.settings?.get(REMEMBER_ID)?.trim()?.toLongOrNull()?.takeIf { it in profiles }
@@ -487,16 +649,13 @@ object BackupRestore {
                     writeSetting(db, Key.PROFILE_CURRENT, remember.toString())
                 }
             }
-            for (selection in listOf(Key.PROFILE_ID, Key.PROFILE_CURRENT)) {
-                val id = readSetting(db, selection)?.trim()?.toLongOrNull() ?: continue
-                if (id > 0L && id !in profiles) writeSetting(db, selection, null)
-            }
         }
 
         if (choice.routes || choice.settings) {
             val usable = ids("SELECT `id` FROM `$ROUTE_PROFILES` WHERE `is_raw` = 0 ORDER BY `id`")
             val key = SettingsRegistry.CURRENT_ROUTE_ID.key
-            if (readSetting(db, key)?.trim()?.toLongOrNull() !in usable) writeSetting(db, key, usable.firstOrNull()?.toString())
+            val stale = choice.routes && !choice.settings
+            if (stale || id(key) !in usable) writeSetting(db, key, usable.firstOrNull()?.toString())
         }
 
         if (choice.settings && !lanWasOn) {
@@ -516,5 +675,10 @@ object BackupRestore {
         PROFILES to "profile_last_id",
         GROUPS to "group_last_id",
         ROUTE_PROFILES to "route_profile_last_id",
+    )
+
+    private val IP_COUNTERS = listOf(
+        IP_LISTS to "ip_list_last_id",
+        IP_SCANS to "ip_scan_last_id",
     )
 }

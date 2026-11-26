@@ -38,6 +38,7 @@ import kotlinx.coroutines.sync.withLock
 import moe.matsuri.nb4a.Protocols
 import moe.matsuri.nb4a.utils.Util
 import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 class BaseService {
@@ -96,7 +97,7 @@ class BaseService {
                         proxy?.boxOrNull?.resetNetwork()
                         runOnMainDispatcher {
                             Util.collapseStatusBar(ctx)
-                            Toast.makeText(ctx, "Reset upstream connections done", Toast.LENGTH_SHORT)
+                            Toast.makeText(ctx, R.string.reset_upstream_connections_done, Toast.LENGTH_SHORT)
                                 .show()
                         }
                     }
@@ -134,7 +135,6 @@ class BaseService {
 
         /** A plain stop asked for while a restart was stopping the old core: the restart ends stopped instead. */
         var stopRequested = false
-        var startRequestedWhileStopping = false
 
         private var wakeLock: PowerManager.WakeLock? = null
 
@@ -165,6 +165,9 @@ class BaseService {
                 Logs.w("[KeepAlive] Failed to release WakeLock: ${e.message}")
             }
         }
+
+        /** A start asked for while stopping, the later of it and [stopRequested] winning: the stop ends in a start. */
+        var startRequested = false
 
         fun changeState(s: State, msg: String? = null) {
             if (state == s && msg == null) return
@@ -207,13 +210,14 @@ class BaseService {
 
     class Binder(private var data: Data? = null) : ISagerNetService.Stub(), CoroutineScope,
         AutoCloseable {
+        /** Client binder -> connection id: a remote client's callback arrives as a new proxy object on every call. */
+        private val callbackIds = ConcurrentHashMap<IBinder, Int>()
+
         private val callbacks = object : RemoteCallbackList<ISagerNetServiceCallback>() {
             override fun onCallbackDied(callback: ISagerNetServiceCallback?, cookie: Any?) {
-                super.onCallbackDied(callback, cookie)
+                callback?.let { callbackIds.remove(it.asBinder()) }
             }
         }
-
-        val callbackIdMap = mutableMapOf<ISagerNetServiceCallback, Int>()
 
         override val coroutineContext = Dispatchers.Main.immediate + Job()
 
@@ -225,10 +229,10 @@ class BaseService {
                 Runtime.getRuntime().exit(0)
                 return
             }
-            if (!callbackIdMap.contains(cb)) {
-                callbacks.register(cb)
+            val binder = cb.asBinder()
+            synchronized(callbackIds) {
+                if (callbackIds.put(binder, id) == null && !callbacks.register(cb)) callbackIds.remove(binder)
             }
-            callbackIdMap[cb] = id
         }
 
         private val broadcastMutex = Mutex()
@@ -250,9 +254,17 @@ class BaseService {
             }
         }
 
+        /** [work] for the callbacks registered with [id] only. */
+        suspend fun broadcast(id: Int, work: (ISagerNetServiceCallback) -> Unit) =
+            broadcast { if (callbackIds[it.asBinder()] == id) work(it) }
+
+        fun hasCallback(id: Int): Boolean = callbackIds.containsValue(id)
+
         override fun unregisterCallback(cb: ISagerNetServiceCallback) {
-            callbackIdMap.remove(cb)
-            callbacks.unregister(cb)
+            synchronized(callbackIds) {
+                callbackIds.remove(cb.asBinder())
+                callbacks.unregister(cb)
+            }
         }
 
         override fun resetTraffic(profileIds: LongArray) {
@@ -302,6 +314,20 @@ class BaseService {
 
         override fun liveStats(session: Long, afterSerial: Long): LiveStatsBatch = LiveStatsRecorder.batch(session, afterSerial)
 
+        override fun vpnAuthState(): String = VpnAuthRuntime.stateJson()
+
+        override fun submitVpnChallenge(tag: String?, id: String?, answerJson: String?): String =
+            VpnAuthRuntime.submit(tag.orEmpty(), id.orEmpty(), answerJson.orEmpty())
+
+        override fun cancelVpnChallenge(tag: String?, id: String?): String = VpnAuthRuntime.cancel(tag.orEmpty(), id.orEmpty())
+
+        /** A screen of the app is in the foreground: MainActivity between onStart and onStop, or the VPN sign-in prompt. */
+        fun uiForeground(): Boolean = callbackIds.values.any {
+            it == SagerConnection.CONNECTION_ID_MAIN_ACTIVITY_FOREGROUND || it == SagerConnection.CONNECTION_ID_VPN_AUTH
+        }
+
+        fun vpnAuthChanged(json: String) = launch { broadcast { it.cbVpnAuthUpdate(json) } }
+
         fun stateChanged(s: State, msg: String?) = launch {
             val profileName = profileName
             broadcast { it.stateChanged(s.ordinal, profileName, msg) }
@@ -309,6 +335,7 @@ class BaseService {
 
         override fun close() {
             callbacks.kill()
+            callbackIds.clear()
             cancel()
             data = null
         }
@@ -333,7 +360,8 @@ class BaseService {
                 s.canStop -> AutoSelectorRuntime.restart(this) { stopRunner(true) }
                 s == State.Stopping -> {
                     Logs.i("reload invoked while Stopping, queuing pending start")
-                    data.startRequestedWhileStopping = true
+                    data.stopRequested = false
+                    data.startRequested = true
                 }
                 else -> Logs.w("Illegal state $s when invoking use")
             }
@@ -367,7 +395,8 @@ class BaseService {
             this as Context
             if (data.state == State.Stopping) {
                 Logs.i("startRunner called while Stopping, queuing pending start")
-                data.startRequestedWhileStopping = true
+                data.stopRequested = false
+                data.startRequested = true
                 return
             }
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(Intent(this, javaClass))
@@ -451,7 +480,10 @@ class BaseService {
             )
             if (data.state == State.Stopping) {
                 // the old core now closes off the main thread, so a Stop can arrive in the middle of a restart
-                if (!restart) data.stopRequested = true
+                if (!restart) {
+                    data.stopRequested = true
+                    data.startRequested = false
+                }
                 Logs.i(
                     "ServiceStopTrace serviceId=$serviceId proxyId=$proxyId " +
                         "stage=ignored-already-stopping"
@@ -461,6 +493,7 @@ class BaseService {
             this as Service
 
             data.stopRequested = false
+            data.startRequested = false
             data.changeState(State.Stopping)
             val originalMessage = msg
 
@@ -487,7 +520,8 @@ class BaseService {
                     data.connectingJob = null
                 }
 
-                var keepNotification = restart && data.notification != null
+                // A start that already came in keeps the notification too, so it needs no second startForeground.
+                val keepNotification = (restart || data.startRequested) && data.notification != null
                 if (keepNotification) {
                     try {
                         data.notification?.postNotificationTitle(getString(R.string.notification_switching))
@@ -511,9 +545,14 @@ class BaseService {
                 }
 
                 val stopInstead = restart && data.stopRequested
+                val startInstead = data.startRequested
                 data.stopRequested = false
-                if (stopInstead && keepNotification) {
-                    keepNotification = false
+                data.startRequested = false
+                val finishRestart = restart && !stopInstead
+                // A start asked for meanwhile runs in place: on the kept notification or on the one it put up itself.
+                val startInPlace = startInstead || (finishRestart && data.notification != null)
+
+                if (!startInPlace) {
                     try {
                         data.notification?.destroy()
                     } catch (error: Throwable) {
@@ -521,10 +560,6 @@ class BaseService {
                     } finally {
                         data.notification = null
                     }
-                }
-                val finishRestart = restart && !stopInstead
-
-                if (!keepNotification) {
                     try {
                         if (data.closeReceiverRegistered) {
                             unregisterReceiver(data.receiver)
@@ -554,29 +589,23 @@ class BaseService {
                 }
                 Logs.i(
                     "ServiceStopTrace serviceId=$serviceId proxyId=$proxyId " +
-                        "stage=stopped restart=$restart hasCleanupError=${cleanupError != null}"
+                        "stage=stopped restart=$restart startInstead=$startInstead " +
+                        "hasCleanupError=${cleanupError != null}"
                 )
                 if (!finishRestart) {
                     DeferredRuleSets.serviceStopped()
                     AutoSelectorRuntime.serviceStopped()
                 }
 
-                val queuedStart = data.startRequestedWhileStopping
-                data.startRequestedWhileStopping = false
-
                 try {
                     when {
-                        keepNotification -> startProxy()
+                        startInPlace -> startProxy()
                         finishRestart -> startRunner()
-                        queuedStart -> {
-                            Logs.i("Executing queued start command after stopping completed")
-                            startProxy()
-                        }
                         else -> stopSelf() // stop the service if nothing has bound to it
                     }
                 } catch (error: Throwable) {
                     recordCleanupFailure("service-finish", error)
-                    if (keepNotification || queuedStart) {
+                    if (startInPlace) {
                         failRunner("${getString(R.string.service_failed)} ${error.readableMessage}")
                     }
                 }
@@ -653,13 +682,20 @@ class BaseService {
         fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
             DataStore.baseService = this
 
-            if (data.state == State.Stopping) {
-                Logs.i("Service received start command while Stopping, queuing pending start")
-                data.startRequestedWhileStopping = true
-                return Service.START_NOT_STICKY
+            when (data.state) {
+                State.Stopped -> startProxy()
+                // startForeground now, as this start requires; the stop then ends in a start instead of stopSelf.
+                State.Stopping -> {
+                    if (data.notification == null) {
+                        val title = (this as Context).getString(R.string.notification_switching)
+                        data.notification = createNotification(title)
+                    }
+                    data.stopRequested = false
+                    data.startRequested = true
+                }
+
+                else -> {}
             }
-            if (data.state != State.Stopped) return Service.START_NOT_STICKY
-            startProxy()
             return Service.START_NOT_STICKY
         }
 
@@ -667,7 +703,7 @@ class BaseService {
         fun startProxy() {
             DataStore.baseService = this
             val data = data
-            data.startRequestedWhileStopping = false
+            data.startRequested = false
             val profile = SagerDatabase.proxyDao.getById(DataStore.selectedProxy)
             this as Context
             if (profile == null) { // gracefully shutdown: https://stackoverflow.com/q/47337857/2245107

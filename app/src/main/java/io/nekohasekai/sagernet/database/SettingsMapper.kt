@@ -122,7 +122,7 @@ object SettingsMapper {
             xrayLogLevel = DataStore.xrayLogLevel,
             testUrl = DataStore.testUrl,
             directTestUrl = DataStore.directTestUrl,
-            enableWarp = DataStore.enableWarp,
+            exitThrough = DataStore.exitThrough,
             warpMode = DataStore.warpMode,
             warpEp = DataStore.warpEp,
             warpPrivateKey = DataStore.warpPrivateKey,

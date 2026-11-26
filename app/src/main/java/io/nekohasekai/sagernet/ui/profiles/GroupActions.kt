@@ -12,7 +12,6 @@ import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.ProxyEntity
 import io.nekohasekai.sagernet.database.ProxyGroup
 import io.nekohasekai.sagernet.database.SagerDatabase
-import io.nekohasekai.sagernet.database.TestShowItems
 import io.nekohasekai.sagernet.group.SubscriptionClient
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.confirmAction
@@ -29,12 +28,28 @@ internal object GroupActions {
         if (group.isSubscription) SubscriptionClient.refreshGroup(group.id, showDiff = true)
     }
 
-    fun clearTestResults(host: ConfigurationFragment, group: ProxyGroup) {
-        host.requireContext().confirmAction(
-            host.getString(R.string.confirm_clear_test_results), group.displayName(), R.string.confirm_clear,
-        ) {
+    /**
+     * Clear results (the column header menus' ClearTestResults): the group's results of [kind], all of them when null.
+     * The exit IP takes the service checks with it while the group shows them, as they share the desktop's column.
+     */
+    fun clearTestResults(host: ConfigurationFragment, group: ProxyGroup, kind: ProfileManager.ResultKind?) {
+        val title = when (kind) {
+            null -> R.string.confirm_clear_test_results
+            ProfileManager.ResultKind.LATENCY -> R.string.confirm_clear_latency
+            ProfileManager.ResultKind.EXIT_IP -> R.string.confirm_clear_exit_ip
+            ProfileManager.ResultKind.SPEED -> R.string.confirm_clear_speed
+            ProfileManager.ResultKind.SERVICES -> R.string.confirm_clear_services
+        }
+        val kinds = kind?.let {
+            if (it == ProfileManager.ResultKind.EXIT_IP && group.showServices) {
+                listOf(it, ProfileManager.ResultKind.SERVICES)
+            } else {
+                listOf(it)
+            }
+        }
+        host.requireContext().confirmAction(host.getString(title), group.displayName(), R.string.confirm_clear) {
             host.launchIo {
-                ProfileManager.clearGroupTestResults(group.id)
+                ProfileManager.clearGroupTestResults(group.id, kinds)
                 GroupRepo.postReload(group.id)
             }
         }
@@ -47,11 +62,12 @@ internal object GroupActions {
             val seen = HashSet<String>()
             val duplicates = ProfileManager.members(groupId).filter { !seen.add(it.dedupKey()) }
             val names = shownNames(duplicates)
+            val warning = if (skip) "" else GroupRepo.hopWarning(duplicates.map { it.id })
             host.onUi {
                 if (duplicates.isEmpty()) {
                     snackbar(R.string.profiles_no_duplicates).show()
                 } else {
-                    confirmRemoval(this, skip, R.plurals.confirm_remove_duplicates, duplicates.size, names) {
+                    confirmRemoval(this, skip, R.plurals.confirm_remove_duplicates, duplicates.size, names, warning) {
                         deleteProfiles(this, duplicates.map { it.id }, stopRunning = true)
                     }
                 }
@@ -70,11 +86,12 @@ internal object GroupActions {
                 .map { it.id }
             val shown = unavailable.take(NAMES_SHOWN)
             val names = shownNames(ProfileManager.getProfiles(shown).sortedBy { shown.indexOf(it.id) })
+            val warning = if (skip) "" else GroupRepo.hopWarning(unavailable)
             host.onUi {
                 if (unavailable.isEmpty()) {
                     snackbar(R.string.profiles_no_unavailable).show()
                 } else {
-                    confirmRemoval(this, skip, R.plurals.confirm_remove_unavailable, unavailable.size, names) {
+                    confirmRemoval(this, skip, R.plurals.confirm_remove_unavailable, unavailable.size, names, warning) {
                         deleteProfiles(this, unavailable, stopRunning = false)
                     }
                 }
@@ -89,11 +106,12 @@ internal object GroupActions {
             val skipCert = DataStore.skipCert
             val insecure = ProfileManager.members(groupId).filter { it.outbound.effectiveSecurity(skipCert).isInsecure }
             val names = shownNames(insecure)
+            val warning = if (skip) "" else GroupRepo.hopWarning(insecure.map { it.id })
             host.onUi {
                 if (insecure.isEmpty()) {
                     snackbar(R.string.profiles_no_insecure).show()
                 } else {
-                    confirmRemoval(this, skip, R.plurals.confirm_remove_insecure, insecure.size, names) {
+                    confirmRemoval(this, skip, R.plurals.confirm_remove_insecure, insecure.size, names, warning) {
                         deleteProfiles(this, insecure.map { it.id }, stopRunning = true)
                     }
                 }
@@ -152,20 +170,21 @@ internal object GroupActions {
     /** The names a confirmation lists, worked out off the main thread for the shown ones only. */
     private fun shownNames(profiles: List<ProxyEntity>): List<String> = profiles.take(NAMES_SHOWN).map { it.displayName() }
 
-    /** [names] are those of the first of [count] profiles; the rest are only counted. */
+    /** [names] are those of the first of [count] profiles; the rest are only counted. [warning]: [GroupRepo.hopWarning]. */
     private fun confirmRemoval(
         host: ConfigurationFragment,
         skip: Boolean,
         @PluralsRes question: Int,
         count: Int,
         names: List<String>,
+        warning: String,
         remove: () -> Unit,
     ) {
         if (skip) return remove()
         val context = host.requireContext()
         context.confirmAction(
             context.resources.getQuantityString(question, count, count),
-            context.nameList(names, total = count),
+            context.nameList(names, total = count) + warning,
             R.string.delete,
             remove,
         )
@@ -204,21 +223,17 @@ internal object GroupActions {
         }
     }
 
-    /** stopSortingCurrentGroup: the order as it is becomes the manual one. */
-    fun stopSorting(host: ConfigurationFragment, groupId: Long) {
-        host.launchIo { GroupSort.setSort(groupId, GroupSortAction()) }
+    /** restoreOriginalOrder (mainwindow_view.cpp): the order from before the kept sort, which stops. */
+    fun restoreOriginalOrder(host: ConfigurationFragment, groupId: Long) {
+        host.launchIo { ProfileManager.restoreOriginalOrder(groupId) }
     }
 
-    /** The test result column's "Include: Out IP / Speed" (updateTestItemsToShow). */
-    fun setShownItems(host: ConfigurationFragment, groupId: Long, outIp: Boolean, speed: Boolean) {
-        val value = when {
-            outIp && speed -> TestShowItems.ALL
-            outIp -> TestShowItems.IP_ONLY
-            speed -> TestShowItems.SPEED_ONLY
-            else -> TestShowItems.NONE
-        }.value
+    /** The column header menus' Show checkboxes: whether the rows show the results of visible_columns [bit]. */
+    fun setColumnShown(host: ConfigurationFragment, groupId: Long, bit: Int, shown: Boolean) {
         host.launchIo {
-            GroupFields.update(groupId) { it.testItemsToShow = value }?.let { GroupRepo.postUpdate(it) }
+            GroupFields.update(groupId) {
+                it.updateVisibleColumns(if (shown) it.visibleColumns or bit else it.visibleColumns and bit.inv())
+            }?.let { GroupRepo.postUpdate(it) }
         }
     }
 

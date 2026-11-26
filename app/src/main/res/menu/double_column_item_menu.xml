@@ -4,6 +4,9 @@
         android:id="@+id/action_edit"
         android:title="@string/edit" />
     <item
+        android:id="@+id/action_find_warp_endpoint"
+        android:title="@string/scan_finder_title" />
+    <item
         android:id="@+id/action_share"
         android:title="@string/share" />
     <item
@@ -22,6 +25,9 @@
             <item
                 android:id="@+id/action_test_service"
                 android:title="@string/service_check" />
+            <item
+                android:id="@+id/action_test_service_current"
+                android:title="@string/service_check_current" />
         </menu>
     </item>
     <item

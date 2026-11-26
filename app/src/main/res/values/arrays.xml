@@ -4,22 +4,16 @@
     <string-array name="language_entries">
         <item>@string/follow_system</item>
         <item>English</item>
-        <item>日本語</item>
-        <item>한국어</item>
         <item>فارسی</item>
         <item>Русский</item>
         <item>简体中文</item>
-        <item>繁體中文</item>
     </string-array>
     <string-array name="language_values">
         <item></item>
         <item>en</item>
-        <item>ja</item>
-        <item>ko</item>
         <item>fa</item>
         <item>ru</item>
         <item>zh-CN</item>
-        <item>zh-TW</item>
     </string-array>
 
     <string-array name="int_array_2">
@@ -62,13 +56,11 @@
         <item>full_stats</item>
         <item>custom</item>
     </string-array>
-
     <string-array name="speed_test_modes">
         <item>@string/speed_test_mode_download_upload</item>
         <item>@string/speed_test_mode_download</item>
         <item>@string/speed_test_mode_upload</item>
         <item>@string/speed_test_mode_simple_download</item>
-        <item>@string/speed_test_mode_country</item>
     </string-array>
 
     <string-array name="exit_lookup_provider_entries">
@@ -422,13 +414,18 @@
         <item>native</item>
         <item>quic</item>
     </string-array>
-    <string-array name="trusttunnel_congestion_control" translatable="false">
+    <!-- sing-trusttunnel runs every other name as BBR; a stored alias is kept as an extra entry -->
+    <string-array name="trusttunnel_congestion_control_entry">
+        <item>@string/tri_state_default</item>
         <item>bbr</item>
         <item>cubic</item>
         <item>reno</item>
-        <item>bbr_standard</item>
-        <item>bbr2</item>
-        <item>bbr_variant</item>
+    </string-array>
+    <string-array name="trusttunnel_congestion_control_value" translatable="false">
+        <item></item>
+        <item>bbr</item>
+        <item>cubic</item>
+        <item>reno</item>
     </string-array>
     <string-array name="dnstt_mode_entry">
         <item>DNSTT</item>
@@ -803,6 +800,13 @@
         <item>4</item>
         <item>6</item>
     </string-array>
+    <!-- values: bit 1 tls_fragment, bit 2 tls_record_fragment (int_array_4) -->
+    <string-array name="route_rule_tls_fragment_entries">
+        <item>@string/off</item>
+        <item>@string/route_rule_tls_fragment_handshake</item>
+        <item>@string/route_rule_tls_fragment_records</item>
+        <item>@string/route_rule_tls_fragment_both</item>
+    </string-array>
 
     <!-- notification actions -->
     <string-array name="notification_action_entries">
@@ -827,8 +831,8 @@
 
     <!-- auto selector -->
     <string-array name="autosel_balance_modes">
-        <item>Rotate on a timer (keeps sessions stable)</item>
-        <item>Per connection (widest spread)</item>
+        <item>Rotate every 30 s</item>
+        <item>Per connection</item>
     </string-array>
     <string-array name="autosel_balance_mode_values" translatable="false">
         <item>rotate</item>

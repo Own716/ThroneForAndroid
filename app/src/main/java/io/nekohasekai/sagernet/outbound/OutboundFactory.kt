@@ -38,22 +38,25 @@ object OutboundFactory {
     @JvmField
     val ALL_TYPES: List<String> = listOf(
         "socks", "http", "shadowsocks", "chain", "autoselector", "vmess", "trojan", "vless", "xrayvless", "hysteria",
-        "tuic", "juicity", "trusttunnel", "anytls", "mieru", "snell", "shadowtls", "wireguard", "masque", "openvpn",
+        "tuic", "trusttunnel", "anytls", "mieru", "snell", "shadowtls", "wireguard", "masque", "openvpn",
         "openconnect", "tailscale", "ssh", "custom", "extracore", "naive", "direct", "dnstt", "masterdns",
     )
 
     /** OutboundFactory.cpp:44 and the JSON alias of openvpn.cpp:157-158. */
     private val TYPE_ALIASES = mapOf("hysteria2" to "hysteria", "openvpn-client" to "openvpn")
 
-    /** Not ported (tailscale) or desktop-only (extracore); always an [InvalidOutbound]. */
+    /**
+     * Not ported (tailscale), desktop-only (extracore) or retired (tor, psiphon, juicity); always an [InvalidOutbound].
+     * The retired ones stay out of [ALL_TYPES] so their stored rows count as unsupported, not malformed.
+     */
     @JvmField
-    val UNSUPPORTED_TYPES: Set<String> = setOf("tailscale", "extracore")
+    val UNSUPPORTED_TYPES: Set<String> = setOf("tailscale", "extracore", "tor", "psiphon", "juicity")
 
     /** Factory string to the class expected in io.nekohasekai.sagernet.outbound.types for the types other packages add. */
     @JvmField
     val CONVENTION_CLASSES: Map<String, String> = mapOf(
         "vmess" to "Vmess", "trojan" to "Trojan", "vless" to "Vless", "xrayvless" to "XrayVless",
-        "hysteria" to "Hysteria", "tuic" to "Tuic", "juicity" to "Juicity", "trusttunnel" to "TrustTunnel",
+        "hysteria" to "Hysteria", "tuic" to "Tuic", "trusttunnel" to "TrustTunnel",
         "anytls" to "AnyTls", "mieru" to "Mieru", "snell" to "Snell", "shadowtls" to "ShadowTls",
         "wireguard" to "WireGuard", "masque" to "Masque", "openvpn" to "OpenVpn", "openconnect" to "OpenConnect",
         "ssh" to "Ssh", "custom" to "Custom", "naive" to "Naive", "direct" to "Direct", "chain" to "Chain",
@@ -126,7 +129,6 @@ object OutboundFactory {
         Protocol("snell", listOf("snell://"), listOf("snell"), listOf("snell")),
         Protocol("hysteria", listOf("hysteria://", "hysteria2://", "hy2://"), listOf("hysteria", "hysteria2"), listOf("hysteria", "hysteria2")),
         Protocol("tuic", listOf("tuic://"), listOf("tuic"), listOf("tuic")),
-        Protocol("juicity", listOf("juicity://"), listOf("juicity"), emptyList()),
         Protocol("trusttunnel", listOf("tt://"), listOf("trusttunnel"), emptyList()),
         Protocol("shadowtls", listOf("shadowtls://"), listOf("shadowtls"), emptyList()),
         Protocol("wireguard", listOf("awg://", "wg://", "wireguard://"), listOf("wireguard"), listOf("wireguard")),
@@ -169,6 +171,35 @@ object OutboundFactory {
         return serverName.isNotEmpty()
     }
 
+    /** VlessTraits (utils.h): what the choice between sing-box and Xray VLESS reads, from a link or any other import format. */
+    class VlessTraits(
+        /** An [xrayNetworks] name, else the format's own spelling; empty for the default. */
+        @JvmField val transport: String = "",
+        @JvmField val reality: Boolean = false,
+        /** Carries a value only Xray runs. */
+        @JvmField val xrayOnly: Boolean = false,
+        @JvmField val rawHttpOverTls: Boolean = false,
+    )
+
+    /** useXrayVless(VlessTraits) (utils.cpp): whether a VLESS profile needs the Xray core. */
+    @JvmStatic
+    @JvmOverloads
+    fun useXrayVless(traits: VlessTraits, preference: XrayVlessPreference = DEFAULT_XRAY_VLESS_PREFERENCE): Boolean {
+        val transport = traits.transport
+        // Throne's Xray stream refuses any other network, which sing-box VLESS may still carry (http, quic), but it would drop the Xray-only values.
+        if (transport.isNotEmpty() && transport !in xrayNetworks) return traits.xrayOnly
+        // sing-box has no mKCP, so even a profile Xray refuses goes there to get Xray's reason.
+        if (transport == "kcp") return true
+        // Xray refuses REALITY over ws and httpupgrade, which sing-box carries.
+        if (!traits.xrayOnly && traits.reality && XrayChecks.xrayRealityNetwork("reality", transport).isNotEmpty()) return false
+        return traits.xrayOnly ||
+            preference == XrayVlessPreference.AllVLESS ||
+            traits.rawHttpOverTls ||
+            transport == "xhttp" ||
+            transport == "xdrive" ||
+            (traits.reality && preference == XrayVlessPreference.XhttpAndReality)
+    }
+
     /** useXrayVless (utils.cpp): whether a vless:// link needs the Xray core. */
     @JvmStatic
     @JvmOverloads
@@ -178,7 +209,7 @@ object OutboundFactory {
         val query = url.query
         val transport = normalizeXrayNetwork(query.value("type"))
         val encryption = query.value("encryption")
-        val security = query.value("security").trim().lowercase()
+        val reality = query.value("security").trim().lowercase() == "reality"
         val xrayOnly = query.has("fm") ||
             query.has("finalmask") ||
             // sing-box has no counterpart to verifyPeerCertByName
@@ -190,23 +221,12 @@ object OutboundFactory {
             (encryption.isNotEmpty() && encryption != "none") ||
             query.value("extra").isNotEmpty() ||
             // sing-box REALITY cannot verify the ML-DSA-65 signature
-            (security == "reality" && query.value("pqv").isNotBlank())
-        // Throne's Xray stream refuses any other network, which sing-box VLESS may still carry (http, quic), but it would drop the Xray-only values.
-        if (transport.isNotEmpty() && transport !in xrayNetworks) return xrayOnly
-        // sing-box has no mKCP, so even a link Xray refuses goes there to get Xray's reason.
-        if (transport == "kcp") return true
-        // Xray refuses REALITY over ws and httpupgrade, which sing-box carries.
-        if (!xrayOnly && XrayChecks.xrayRealityNetwork(security, transport).isNotEmpty()) return false
+            (reality && query.value("pqv").isNotBlank())
         // sing-box's http transport speaks the raw HTTP header only in plaintext; TLS (which a bare sni also enables) turns it into h2
         val rawHttpOverTls = (transport.isEmpty() || transport == "raw") &&
             query.value("headerType") == "http" &&
             linkEnablesTls(query)
-        return xrayOnly ||
-            preference == XrayVlessPreference.AllVLESS ||
-            rawHttpOverTls ||
-            transport == "xhttp" ||
-            transport == "xdrive" ||
-            (security == "reality" && preference == XrayVlessPreference.XhttpAndReality)
+        return useXrayVless(VlessTraits(transport, reality, xrayOnly, rawHttpOverTls), preference)
     }
 
     /**

@@ -49,7 +49,10 @@ class GeneralSettingsFragment : SettingsScreenFragment(R.xml.settings_general) {
     private lateinit var battery: Preference
 
     override fun bind() {
-        pref<Preference>(Key.SERVICE_MODE).setOnPreferenceChangeListener { _, _ ->
+        val serviceMode = pref<Preference>(Key.SERVICE_MODE)
+        serviceMode.setOnPreferenceChangeListener { _, newValue ->
+            // Proxy mode ignores disable_mixed_inbound, so the mixed inbound comes back on at its kept port.
+            if (refusedByPorts(serviceMode, Key.SERVICE_MODE to newValue.toString())) return@setOnPreferenceChangeListener false
             if (DataStore.serviceState.started) SagerNet.stopService()
             true
         }
@@ -150,8 +153,7 @@ class AppearanceSettingsFragment : SettingsScreenFragment(R.xml.settings_appeara
             true
         }
         pref<SimpleMenuPreference>(Key.NIGHT_THEME).setOnPreferenceChangeListener { _, newTheme ->
-            Theme.currentNightMode = (newTheme as String).toInt()
-            Theme.applyNightTheme()
+            Theme.applyNightTheme((newTheme as String).toInt())
             true
         }
         // AMOLED black: recreate the host so the overlay is applied or removed

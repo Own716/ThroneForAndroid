@@ -112,7 +112,7 @@ data class SubscriptionOptions(
     var nameExclude: String = "",
     /** SubscriptionNameFilter.PROTOCOLS ids whose profiles every update drops; unknown ids are kept as they are. */
     var typeExclude: List<String> = emptyList(),
-    /** The desktop's IP-test country filter ("HK,JP" keeps, "!RU" drops): carried, not applied on Android. */
+    /** Exit countries by IP test ("HK,JP" keeps, "!RU" drops), stored normalized; see CountryRules. */
     var countryFilter: String = "",
     /** Android-only: the subscription info card above the profiles; stored only when off. */
     var showInfoCard: Boolean = true,
@@ -186,10 +186,13 @@ data class SubscriptionOptions(
             )
         }
 
-        /** Trimmed, non-empty, first occurrence kept (Group.cpp FromJson). */
+        /**
+         * Trimmed, non-empty, first occurrence kept (Group.cpp FromJson). The retired juicity is dropped: excluding it
+         * means nothing, and keeping it would warn on every update.
+         */
         @JvmStatic
         fun typeIds(ids: Iterable<String>): List<String> =
-            ids.mapNotNullTo(LinkedHashSet()) { id -> id.trim().takeIf { it.isNotEmpty() } }.toList()
+            ids.mapNotNullTo(LinkedHashSet()) { id -> id.trim().takeIf { it.isNotEmpty() && it != "juicity" } }.toList()
 
         /** QJsonValue::toInt(-1): null unless a whole number that fits an int. */
         private fun JsonObject.intOrNull(key: String): Int? = when (val v = this[key]) {

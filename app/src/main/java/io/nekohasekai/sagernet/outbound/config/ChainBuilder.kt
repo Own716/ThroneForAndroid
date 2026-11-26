@@ -2,12 +2,14 @@ package io.nekohasekai.sagernet.outbound.config
 
 import io.nekohasekai.sagernet.outbound.BuildContext
 import io.nekohasekai.sagernet.outbound.Outbound
+import io.nekohasekai.sagernet.outbound.common.relaxXrayTcpKeepAlive
 import io.nekohasekai.sagernet.outbound.common.setXrayDialerProxy
 import io.nekohasekai.sagernet.outbound.common.useXraySystemCA
 import io.nekohasekai.sagernet.outbound.json.JsonArray
 import io.nekohasekai.sagernet.outbound.json.JsonObject
 import io.nekohasekai.sagernet.outbound.json.jsonObjectOf
 import io.nekohasekai.sagernet.outbound.types.AutoSelector
+import io.nekohasekai.sagernet.outbound.types.Custom
 import io.nekohasekai.sagernet.outbound.types.Socks
 
 /** ChainBuildRequest (generate.cpp:1413-1428). */
@@ -338,6 +340,7 @@ internal class ChainBuilder(
                 "destOverride" to JsonArray.of("http", "tls", "quic"),
                 "routeOnly" to false,
             )
+            Custom.routeXrayListenerRulesViaBridge(userXrayConfig)
             val inbounds = JsonArray()
             inbounds.add(bridgeInbound)
             if (!state.forTest && !req.soleXrayInbound) for (item in userXrayConfig.array("inbounds")) inbounds.add(item)
@@ -482,6 +485,7 @@ internal class ChainBuilder(
             // Xray removed outbound-level proxySettings; sockopt.dialerProxy is its 1:1 replacement, the XHTTP download leg included.
             if (nextTag.isNotEmpty() && (opts.link || bridge.needed)) setXrayDialerProxy(obj, nextTag)
             if (ctx.xrayUseSystemCA) useXraySystemCA(obj)
+            relaxXrayTcpKeepAlive(obj)
             state.xrayOutbounds.add(obj)
         }
         if (bridge.needed) {

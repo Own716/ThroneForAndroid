@@ -28,14 +28,15 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * One test sweep (TestRunner's session): resolves the profiles, runs the kind's runner, persists every result as it
- * lands (desktop result codes) and streams it to [client], shows the progress notification, and after a URL sweep
- * clears the unavailable profiles of a group with `auto_clear_unavailable`.
+ * lands (desktop result codes) and streams it to [client], shows the progress notification, and after a URL sweep that
+ * ran to the end clears the unavailable profiles of the tested groups with `auto_clear_unavailable`. A URL failure
+ * while the local network was down or changed is inconclusive: nothing is stored and nothing is cleared for it.
  */
 internal class TestSession(
     val id: Int,
     val spec: TestSpec,
     client: ITestSessionCallback?,
-    /** Gets each URL result once stored (TestRunner's ResultHook). */
+    /** Gets each URL result once stored (TestRunner's ResultHook); set for auto-selector ranking. */
     private val onUrlStored: ((ProxyEntity) -> Unit)? = null,
 ) {
 
@@ -44,11 +45,11 @@ internal class TestSession(
         val url: String = spec.url.ifBlank { DataStore.testUrl }
         val timeoutMs: Int = spec.timeoutMs.takeIf { it > 0 } ?: DataStore.urlTestTimeoutMs
         val concurrency: Int = spec.concurrency.takeIf { it > 0 } ?: DataStore.testConcurrent
-        val speedMode: Int = spec.speedMode.takeIf { it in SpeedTestSettings.FULL..SpeedTestSettings.COUNTRY }
-            ?: DataStore.speedTestMode
+        // The removed "Only country" mode (4) runs as FULL, as on the desktop.
+        val speedMode: Int = (spec.speedMode.takeIf { it >= 0 } ?: DataStore.speedTestMode)
+            .takeIf { it in SpeedTestSettings.FULL..SpeedTestSettings.SIMPLE_DOWNLOAD } ?: SpeedTestSettings.FULL
         val speedTimeoutMs: Int = spec.speedTimeoutMs.takeIf { it > 0 } ?: DataStore.speedTestTimeoutMs
         val simpleDlUrl: String = spec.simpleDlUrl.ifBlank { DataStore.simpleDlUrl }
-        val creditTraffic: Boolean = !DataStore.disableTrafficStats
 
         /** The IP test's `exit_lookup_provider` id; "" or "auto" lets the core try several. */
         val ipProvider: String = DataStore.exitLookupProvider
@@ -68,6 +69,17 @@ internal class TestSession(
 
     @Volatile
     private var client: ITestSessionCallback? = client
+
+    /** Started by the UI, whose panel offers a retest of what was inconclusive; the other sessions only log it. */
+    private val interactive = client != null
+
+    /** URL results that stored nothing because the local network was down or changed (TestRunner's inconclusive_). */
+    private val inconclusiveIds: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+
+    /** The sweep ran to its end: it was neither stopped nor failed. */
+    @Volatile
+    var completed = false
+        private set
 
     @Volatile
     var total = 0
@@ -106,6 +118,7 @@ internal class TestSession(
                 val refresher = launch { notification.refreshLoop() }
                 try {
                     if (spec.testCurrent) runCurrent() else runProfiles()
+                    completed = !cancelled
                 } finally {
                     refresher.cancel()
                 }
@@ -180,7 +193,10 @@ internal class TestSession(
         when (kind) {
             TestSpec.KIND_URL -> {
                 UrlTestRunner(this).run(profiles)
-                autoClearUnavailable(profiles)
+                val kept = HashSet(inconclusiveIds)
+                // Ranking never deletes the selector's members.
+                if (!cancelled && onUrlStored == null) autoClearUnavailable(profiles, kept)
+                reportInconclusive(kept)
             }
 
             TestSpec.KIND_IP -> IpTestRunner(this).run(profiles)
@@ -196,11 +212,7 @@ internal class TestSession(
         when (kind) {
             TestSpec.KIND_URL -> UrlTestRunner(this).runCurrent(running)
             TestSpec.KIND_SPEED -> SpeedTestRunner(this).runCurrent(running)
-            // runCurrentServiceCheck is not ported: the menus check stored profiles only
-            TestSpec.KIND_SERVICE -> reportService(
-                listOf(ProbeResult(running?.profileId ?: 0L, error = ERROR_ABORTED, measured = false))
-            )
-
+            TestSpec.KIND_SERVICE -> ServiceTestRunner(this).runCurrent(running)
             else -> reportIp(
                 listOf(
                     ProbeResult(
@@ -226,12 +238,18 @@ internal class TestSession(
         notification.changed()
     }
 
-    /** TestRunner.cpp:393-404: the first tested profile's group drops its unavailable ones; the running one stays. */
-    private suspend fun autoClearUnavailable(profiles: List<ProxyEntity>) {
-        val group = profiles.firstOrNull()?.let { GroupRepo.get(it.groupId) } ?: return
-        if (!group.autoClearUnavailable) return
+    /**
+     * TestRunner::runLatencyGroup: each tested group with `auto_clear_unavailable` drops its tested profiles that are
+     * unavailable, except the [kept] ones whose test was inconclusive (also when they failed in an earlier run); the
+     * running one stays.
+     */
+    private suspend fun autoClearUnavailable(profiles: List<ProxyEntity>, kept: Set<Long>) {
+        val clearable = profiles.groupBy({ it.groupId }, { it.id }).flatMap { (groupId, ids) ->
+            if (GroupRepo.get(groupId)?.autoClearUnavailable == true) ids.filter { it !in kept } else emptyList()
+        }
+        if (clearable.isEmpty()) return
         val unavailable = try {
-            profiles.map { it.id }.chunked(ProfileManager.CHUNK).flatMap { ids ->
+            clearable.chunked(ProfileManager.CHUNK).flatMap { ids ->
                 SagerDatabase.proxyDao.getWithoutData(ids).filter { it.isUnavailable() }.map { it.id }
             }
         } catch (e: SQLException) {
@@ -243,31 +261,53 @@ internal class TestSession(
         ProfileManager.batchDeleteProfiles(unavailable, stopRunning = false)
     }
 
+    /**
+     * TestRunner.cpp:775-778: the count goes to the log; the panel of an interactive run offers the retest, other runs
+     * also log which profiles kept their results (HeadlessPolicy::testsInconclusive), ranking excepted.
+     */
+    private fun reportInconclusive(ids: Set<Long>) {
+        if (ids.isEmpty()) return
+        Logs.w(app.resources.getQuantityString(R.plurals.test_inconclusive, ids.size, ids.size))
+        if (interactive || onUrlStored != null) return
+        val listed = ids.take(LISTED_INCONCLUSIVE).joinToString(", ") { nameOf(it) }
+        val more = if (ids.size > LISTED_INCONCLUSIVE) " and ${ids.size - LISTED_INCONCLUSIVE} more" else ""
+        Logs.w("Untested because the network was unavailable, earlier results kept: $listed$more.")
+    }
+
     // ------------------------------------------------------------------------------------------------ results
 
     /**
-     * applyUrlResult (TestRunner.cpp:127-142); the callback carries the latency code as stored. A Connect OK verdict
-     * turns the failure its profile already reported into a success.
+     * The URL result loop of runUrlProbe (TestRunner.cpp:385-417); the callback carries the latency code as stored. An
+     * inconclusive failure stores nothing and reaches the callback as untested (0). A Connect OK verdict turns the
+     * failure, or the inconclusive result, its profile already reported into a success.
      */
     fun reportUrl(results: List<ProbeResult>) {
         val stored = ArrayList<ProxyEntity>()
-        persist(results) {
+        persist(results.filter { !it.inconclusive }) {
             ProfileManager.saveUrlTestResult(it.profileId, it.latency, it.error, it.connectOnly)?.let(stored::add)
         }
         val hook = onUrlStored
         // A failing hook must not end the session, whose other results are still to come.
         if (hook != null) for (profile in stored) runCatching { hook(profile) }.onFailure { Logs.w(it) }
         for (result in results) {
+            if (result.inconclusive) {
+                inconclusiveIds.add(result.profileId)
+                counted(false, false)
+                notifyClient { it.onUrlResult(result.profileId, 0, result.error, true) }
+                continue
+            }
             val latency = if (result.measured) latencyCode(result.latency, result.error, result.connectOnly) else 0
             if (result.connectOnly) {
-                failed.decrementAndGet()
+                if (!inconclusiveIds.remove(result.profileId)) failed.decrementAndGet()
                 ok.incrementAndGet()
                 notification.changed()
             } else {
                 counted(ProxyEntity.isWorking(latency), ProxyEntity.isUnavailable(latency))
             }
             if (ProxyEntity.isUnavailable(latency)) Logs.w("[${nameOf(result.profileId)}] test error: ${result.error}")
-            notifyClient { it.onUrlResult(result.profileId, latency, if (result.connectOnly) "" else result.error) }
+            notifyClient {
+                it.onUrlResult(result.profileId, latency, if (result.connectOnly) "" else result.error, false)
+            }
         }
     }
 
@@ -276,7 +316,7 @@ internal class TestSession(
         if (result.error.isNotEmpty()) Logs.w("UrlTest error: ${result.error}")
         val latency = latencyCode(result.latency, result.error, result.connectOnly)
         counted(ProxyEntity.isWorking(latency), ProxyEntity.isUnavailable(latency))
-        notifyClient { it.onUrlResult(result.profileId, latency, if (result.connectOnly) "" else result.error) }
+        notifyClient { it.onUrlResult(result.profileId, latency, if (result.connectOnly) "" else result.error, false) }
     }
 
     /** applyIpResult (TestRunner.cpp:144-157). */
@@ -310,21 +350,25 @@ internal class TestSession(
     }
 
     /**
-     * The speed result loop of TestRunner.cpp:632-647 (the server's country name mapped to its code); the callback
-     * carries the values as stored.
+     * The speed result loop of TestRunner::runSpeedProbe: a cancelled, aborted or never-measured result stores nothing
+     * and keeps the previous speeds; the callback carries the values as stored.
      */
     fun reportSpeed(profileId: Long, result: SpeedTestResult) {
         val error = result.error.orEmpty()
         val dl = result.dlSpeed.orEmpty()
         val ul = result.ulSpeed.orEmpty()
-        val country = CountryNames.toCode(result.serverCountry)
+        if (result.cancelled || !ProxyEntity.isSpeedMeasured(dl, ul, error)) {
+            val reason = when {
+                ProxyEntity.isTestAborted(error) -> error
+                result.cancelled || cancelled -> ERROR_ABORTED
+                else -> ERROR_NO_RESULT
+            }
+            reportSpeedUnmeasured(profileId, reason)
+            return
+        }
         if (error.isNotEmpty()) Logs.w("[${nameOf(profileId)}] speed test error: $error")
         val stored = try {
-            if (error.isEmpty()) {
-                ProfileManager.saveSpeedTestResult(profileId, dl, ul, result.latency, country, "")
-            } else {
-                ProfileManager.saveSpeedTestResult(profileId, "", "", 0, "", error)
-            }
+            ProfileManager.saveSpeedTestResult(profileId, dl, ul, error)
         } catch (e: Exception) {
             Logs.w(e)
             null
@@ -337,9 +381,9 @@ internal class TestSession(
                     stored.testCountry.orEmpty(), error,
                 )
             } else if (error.isEmpty()) {
-                it.onSpeedResult(profileId, dl, ul, result.latency, country, error)
+                it.onSpeedResult(profileId, dl, ul, 0, "", error)
             } else {
-                it.onSpeedResult(profileId, ProxyEntity.SPEED_NA, ProxyEntity.SPEED_NA, -1, "", error)
+                it.onSpeedResult(profileId, ProxyEntity.SPEED_NA, ProxyEntity.SPEED_NA, 0, "", error)
             }
         }
     }
@@ -400,6 +444,9 @@ internal class TestSession(
 
     companion object {
         const val TYPE_AUTO_SELECTOR = "autoselector"
+
+        /** HeadlessPolicy::testsInconclusive's kListed. */
+        private const val LISTED_INCONCLUSIVE = 20
 
         /** ProxyEntity.displayName, parsed without caching it on [profile], which the session keeps until it ends. */
         fun displayNameOf(profile: ProxyEntity): String {

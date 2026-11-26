@@ -40,6 +40,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.bg.test.TestSpec
 import io.nekohasekai.sagernet.database.DataStore
+import io.nekohasekai.sagernet.database.GroupRepo
 import io.nekohasekai.sagernet.database.GroupSort
 import io.nekohasekai.sagernet.database.GroupSortAction
 import io.nekohasekai.sagernet.database.GroupSortMethod
@@ -123,6 +124,7 @@ class TestPanelController(
     private val connectAction: Chip = root.findViewById(R.id.test_panel_action_connect)
     private val sortAction: Chip = root.findViewById(R.id.test_panel_action_sort)
     private val removeAction: Chip = root.findViewById(R.id.test_panel_action_remove)
+    private val retestAction: Chip = root.findViewById(R.id.test_panel_action_retest)
     private val stopOtherAction: Chip = root.findViewById(R.id.test_panel_action_stop_other)
     private val body: TestPanelScrollView = root.findViewById(R.id.test_panel_body)
     private val okCount: TextView = root.findViewById(R.id.test_panel_ok_count)
@@ -304,7 +306,7 @@ class TestPanelController(
         ImageViewCompat.setImageTintList(expandButton, ColorStateList.valueOf(textSecondary))
         connectAction.chipBackgroundColor = ColorStateList.valueOf(accent)
         connectAction.setTextColor(if (ColorUtils.calculateLuminance(accent) > 0.5) Color.BLACK else Color.WHITE)
-        for (chip in listOf(sortAction, removeAction, stopOtherAction)) {
+        for (chip in listOf(sortAction, removeAction, retestAction, stopOtherAction)) {
             chip.chipBackgroundColor = ColorStateList.valueOf(Color.TRANSPARENT)
             chip.chipStrokeColor = ColorStateList.valueOf(ColorUtils.setAlphaComponent(accent, 0x80))
             chip.chipStrokeWidth = density
@@ -335,6 +337,7 @@ class TestPanelController(
         connectAction.setOnClickListener { rendered?.let(::connectFastest) }
         sortAction.setOnClickListener { rendered?.let(::sort) }
         removeAction.setOnClickListener { rendered?.let(::removeUnavailable) }
+        retestAction.setOnClickListener { rendered?.let { retest(it.inconclusiveIds(), it.groupId) } }
         stopOtherAction.setOnClickListener {
             TestSessionClient.stopBackgroundSession()
             TestSessionClient.dismiss()
@@ -370,6 +373,7 @@ class TestPanelController(
             renderActions(s)
             if (expanded) renderBody(s)
         }
+        if (rendered?.running == true && s.finished) announceInconclusive(s)
         rendered = s
         backCallback.isEnabled = shown && expanded && !side
     }
@@ -494,7 +498,7 @@ class TestPanelController(
 
     private fun renderLive(s: TestUiState) {
         val live = s.speed
-        val show = !expanded && s.running && s.kind == TestSpec.KIND_SPEED && !s.countryMode && live != null
+        val show = !expanded && s.running && s.kind == TestSpec.KIND_SPEED && live != null
         liveLine.isVisible = show
         if (!show || live == null) return
         val detail = if (live.dlBps <= 0 && live.ulBps <= 0) {
@@ -532,7 +536,7 @@ class TestPanelController(
         if (sortAction.isVisible) {
             sortAction.setTextIfChanged(
                 context.getString(
-                    if (s.kind == TestSpec.KIND_SPEED && !s.countryMode) R.string.test_panel_action_sort_speed
+                    if (s.kind == TestSpec.KIND_SPEED) R.string.test_panel_action_sort_speed
                     else R.string.test_panel_action_sort_latency
                 )
             )
@@ -540,9 +544,12 @@ class TestPanelController(
         val removable = if (canAct && latencyKind) removableIds(s).size else 0
         removeAction.isVisible = removable > 0
         if (removable > 0) removeAction.setTextIfChanged(context.getString(R.string.test_panel_action_remove, removable))
+        val untested = if (canAct && s.kind == TestSpec.KIND_URL) s.inconclusiveIds().size else 0
+        retestAction.isVisible = untested > 0
+        if (untested > 0) retestAction.setTextIfChanged(context.getString(R.string.test_panel_action_retest, untested))
         stopOtherAction.isVisible = s.finished && s.failure == TestFailure.BUSY
         actions.isVisible = connectAction.isVisible || sortAction.isVisible || removeAction.isVisible ||
-            stopOtherAction.isVisible
+            retestAction.isVisible || stopOtherAction.isVisible
     }
 
     private fun removableIds(s: TestUiState): List<Long> = s.failedIds().filter { it != runningId }
@@ -554,12 +561,12 @@ class TestPanelController(
         pendingLabel.setTextIfChanged(
             context.getString(if (s.running) R.string.test_panel_pending else R.string.test_panel_skipped)
         )
-        val speed = s.kind == TestSpec.KIND_SPEED && !s.countryMode
+        val speed = s.kind == TestSpec.KIND_SPEED
 
         latencySection.isVisible = s.kind == TestSpec.KIND_URL && !s.testCurrent
         if (latencySection.isVisible) renderHistogram(s)
 
-        countrySection.isVisible = (s.kind == TestSpec.KIND_IP || s.countryMode) && s.countries.isNotEmpty()
+        countrySection.isVisible = s.kind == TestSpec.KIND_IP && s.countries.isNotEmpty()
         if (countrySection.isVisible) renderCountries(s)
 
         speedSection.isVisible = speed && s.running && s.speed != null
@@ -760,7 +767,6 @@ class TestPanelController(
             )
 
             s.ok == 0 -> context.getString(R.string.test_panel_summary_none_working)
-            s.countryMode -> context.getString(R.string.test_panel_summary_working_countries, s.ok, s.countries.size)
             else -> s.ranking.firstOrNull()?.let {
                 context.getString(R.string.test_panel_summary_working_fastest, s.ok, bestText(s, it))
             } ?: context.getString(R.string.test_panel_summary_working, s.ok)
@@ -776,14 +782,6 @@ class TestPanelController(
             s.kind == TestSpec.KIND_IP -> listOf(TestFormat.flag(row.country), row.ip).filter { it.isNotEmpty() }
                 .joinToString(" ")
 
-            s.countryMode && row.latency <= 0 -> TestFormat.countryName(row.country)
-
-            s.countryMode -> context.getString(
-                R.string.test_panel_current_country,
-                TestFormat.countryName(row.country),
-                TestFormat.latency(context, row.latency),
-            )
-
             s.kind == TestSpec.KIND_SPEED -> speedText(
                 GroupSort.bitrateToBps(row.dlSpeed).coerceAtLeast(0.0),
                 GroupSort.bitrateToBps(row.ulSpeed).coerceAtLeast(0.0),
@@ -791,13 +789,14 @@ class TestPanelController(
                 "  ",
             )
 
+            s.kind == TestSpec.KIND_SERVICE -> context.getString(R.string.service_check_summary_results)
             row.latency > 0 -> TestFormat.latency(context, row.latency)
             else -> context.getString(R.string.test_panel_band_connect_only)
         }
     }
 
     private fun bestText(s: TestUiState, best: RankedResult): String = when {
-        s.kind == TestSpec.KIND_SPEED && !s.countryMode ->
+        s.kind == TestSpec.KIND_SPEED ->
             TestFormat.rate(if (s.speedMode == TestUiState.SPEED_MODE_UPLOAD) best.ulBps else best.dlBps)
 
         else -> TestFormat.latency(context, best.latency)
@@ -852,7 +851,7 @@ class TestPanelController(
     private fun sort(s: TestUiState) {
         val groupId = s.groupId
         if (groupId <= 0) return
-        val bySpeed = s.kind == TestSpec.KIND_SPEED && !s.countryMode
+        val bySpeed = s.kind == TestSpec.KIND_SPEED
         val upload = s.speedMode == TestUiState.SPEED_MODE_UPLOAD
         val fastest = s.ranking.firstOrNull()?.profileId
         runOnDefaultDispatcher {
@@ -886,6 +885,7 @@ class TestPanelController(
             if (existing.isEmpty()) return@runOnDefaultDispatcher
             val names = existing.take(10).map { it.displayName() }
             val skipConfirmation = DataStore.skipDeleteConfirmation
+            val warning = if (skipConfirmation) "" else GroupRepo.hopWarning(existingIds)
             onMainDispatcher {
                 if (!fragment.isAdded) return@onMainDispatcher
                 if (skipConfirmation) {
@@ -895,7 +895,7 @@ class TestPanelController(
                         context.resources.getQuantityString(
                             R.plurals.confirm_remove_unavailable, existing.size, existing.size
                         ),
-                        context.nameList(names, total = existing.size),
+                        context.nameList(names, total = existing.size) + warning,
                         R.string.delete,
                     ) { deleteProfiles(existingIds) }
                 }
@@ -921,6 +921,30 @@ class TestPanelController(
         }
     }
 
+    /** testsInconclusive (mainwindow_policy.cpp:419): once the run ends, with a retest of just those profiles. */
+    private fun announceInconclusive(s: TestUiState) {
+        if (s.kind != TestSpec.KIND_URL || s.testCurrent || !fragment.isAdded) return
+        val ids = s.inconclusiveIds()
+        if (ids.isEmpty()) return
+        fragment.snackbar(context.resources.getQuantityString(R.plurals.test_inconclusive, ids.size, ids.size))
+            .setDuration(ANNOUNCE_MS)
+            .setAction(R.string.test_inconclusive_retest) { retest(ids, s.groupId) }
+            .show()
+    }
+
+    /** URL-tests those of [ids] that still exist. */
+    private fun retest(ids: List<Long>, groupId: Long) {
+        if (ids.isEmpty()) return
+        runOnDefaultDispatcher {
+            val existing = ProfileManager.getProfiles(ids).mapTo(HashSet()) { it.id }
+            val present = ids.filter { it in existing }
+            if (present.isEmpty()) return@runOnDefaultDispatcher
+            if (!TestSessionClient.startProfiles(TestSpec.KIND_URL, present, groupId)) onMainDispatcher {
+                if (fragment.isAdded) fragment.snackbar(R.string.profiles_test_busy).show()
+            }
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------ helpers
 
     private fun appendColored(text: SpannableStringBuilder, part: String, @ColorInt color: Int) {
@@ -942,6 +966,7 @@ class TestPanelController(
         const val SHOW_MS = 220L
         const val HIDE_MS = 160L
         const val MIN_ETA_ELAPSED_MS = 2000L
+        const val ANNOUNCE_MS = 6000
         const val BODY_MAX_FRACTION = 0.45f
         const val SEP = " · "
 

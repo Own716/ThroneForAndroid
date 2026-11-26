@@ -19,7 +19,7 @@ object RouteManager {
 
     private val dao get() = SagerDatabase.routeDao
 
-    /** Every profile in id order; an empty table is given the Default profile first. */
+    /** Every profile in the user's order; an empty table is given the Default profile first. */
     fun all(): List<RouteProfile> {
         val profiles = load()
         if (profiles.isNotEmpty()) return profiles
@@ -128,15 +128,22 @@ object RouteManager {
         }
     }
 
-    /** Inserts when [p] has no id (and assigns it), else upserts the row; the rules are replaced in list order. */
+    /**
+     * Inserts when [p] has no id (and assigns it), else upserts the row; the rules are replaced in list order. An
+     * update keeps the profile's place, an insert puts it last (RoutesRepo::Save).
+     */
     fun save(p: RouteProfile): Long {
         SagerDatabase.instance.runInTransaction {
             val entity = RouteProfileEntity.of(p)
-            if (p.id <= 0L) {
-                entity.id = 0L
-                p.id = dao.insertProfile(entity)
-            } else if (dao.updateProfile(entity) == 0) {
-                dao.insertProfile(entity)
+            val stored = if (p.id > 0L) dao.displayOrderOf(p.id) else null
+            if (stored != null) {
+                entity.displayOrder = stored
+                dao.updateProfile(entity)
+            } else {
+                if (p.id <= 0L) entity.id = 0L
+                entity.displayOrder = dao.nextDisplayOrder()
+                val id = dao.insertProfile(entity)
+                if (p.id <= 0L) p.id = id
             }
             dao.deleteRules(p.id)
             if (p.rules.isNotEmpty()) {
@@ -145,6 +152,22 @@ object RouteManager {
         }
         return p.id
     }
+
+    /**
+     * Saves [updated] only while the stored profile is still [original] (a profile as stored, e.g. from [get]); false
+     * when it was edited or deleted meanwhile, so that change wins.
+     */
+    fun saveIfUnchanged(original: RouteProfile, updated: RouteProfile): Boolean =
+        SagerDatabase.instance.runInTransaction(Callable {
+            val stored = get(original.id) ?: return@Callable false
+            if (storedForm(stored) != storedForm(original)) return@Callable false
+            save(updated)
+            true
+        })
+
+    /** The rows [save] writes for [p], to compare two profiles as stored. */
+    private fun storedForm(p: RouteProfile): Pair<RouteProfileEntity, List<RouteRuleEntity>> =
+        RouteProfileEntity.of(p) to p.rules.mapIndexed { index, rule -> RouteRuleEntity.of(p.id, index, rule) }
 
     /**
      * Refuses to delete the last profile; deleting the current one makes the first remaining profile current. Groups
@@ -168,6 +191,21 @@ object RouteManager {
             if (dao.count() == 0L) save(RouteProfile.defaultProfile())
         }
     }
+
+    /**
+     * RoutesRepo::SetRouteProfilesOrder: [ids] first (unknown ones skipped), every other profile after them in its
+     * current order; false when the order stays the same.
+     */
+    fun setOrder(ids: List<Long>): Boolean = SagerDatabase.instance.runInTransaction(Callable {
+        val current = dao.allIds()
+        val known = current.toHashSet()
+        val order = LinkedHashSet<Long>()
+        for (id in ids) if (id in known) order.add(id)
+        order.addAll(current)
+        if (order.toList() == current) return@Callable false
+        order.forEachIndexed { position, id -> dao.setDisplayOrder(id, position.toLong()) }
+        true
+    })
 
     /**
      * [l] runs on a background thread after any change to the route tables, including changes made by the

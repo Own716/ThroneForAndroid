@@ -30,7 +30,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import moe.matsuri.nb4a.ui.EditConfigPreference
 import moe.matsuri.nb4a.ui.MTUPreference
-import moe.matsuri.nb4a.ui.SimpleMenuPreference
 import kotlin.math.abs
 
 /**
@@ -55,10 +54,10 @@ class InboundSettingsFragment : SettingsScreenFragment(R.xml.settings_inbound) {
         val dnsInPort = pref<EditTextPreference>(SettingsRegistry.CORE_DNS_IN_PORT.key)
 
         // The four local listeners need distinct ports; the Clash and sing-box API ports are on the Core screen.
-        gateText(port.key, SettingChecks.listenPort(SettingChecks.Listener.MIXED), invalid = R.string.invalid_port, valid = SettingValidators::isPort)
+        gateText(port.key, SettingChecks.listenPort(SettingsRegistry.Listener.MIXED), invalid = R.string.invalid_port, valid = SettingValidators::isPort)
         port.setOnBindEditTextListener(EditTextPreferenceModifiers.Port)
         // dialog_basic_settings.cpp:255-256.
-        gateText(dnsInPort.key, SettingChecks.listenPort(SettingChecks.Listener.DNS), invalid = R.string.invalid_port, valid = SettingValidators::isPort)
+        gateText(dnsInPort.key, SettingChecks.listenPort(SettingsRegistry.Listener.DNS_IN), invalid = R.string.invalid_port, valid = SettingValidators::isPort)
         dnsInPort.setOnBindEditTextListener(EditTextPreferenceModifiers.Port)
         // The address itself has no field: the LAN switch writes it, so a restored one that is not an IP marks the switch.
         validation.bind(KEY_ALLOW_LAN) {
@@ -104,8 +103,12 @@ class InboundSettingsFragment : SettingsScreenFragment(R.xml.settings_inbound) {
             updateHttpProxyState()
         }
         updateMixedState(mixedDisabled)
-        pref<SwitchPreference>(SettingsRegistry.DISABLE_MIXED_INBOUND.key).setOnPreferenceChangeListener { _, newValue ->
+        val disableMixed = pref<SwitchPreference>(SettingsRegistry.DISABLE_MIXED_INBOUND.key)
+        disableMixed.setOnPreferenceChangeListener { _, newValue ->
             val disabled = newValue as Boolean
+            if (!disabled && refusedByPorts(disableMixed, SettingsRegistry.DISABLE_MIXED_INBOUND.key to "false")) {
+                return@setOnPreferenceChangeListener false
+            }
             if (disabled && DataStore.serviceMode == Key.MODE_PROXY) {
                 Toast.makeText(
                     requireContext(),
@@ -134,7 +137,15 @@ class InboundSettingsFragment : SettingsScreenFragment(R.xml.settings_inbound) {
             appendHttpProxy.isVisible = false
             httpProxyBypass.isVisible = false
         }
-        reloadOn(randomPort.key, user.key, pass.key, httpProxyBypass.key)
+        randomPort.setOnPreferenceChangeListener { _, newValue ->
+            // Off again, the mixed inbound comes back on its fixed port.
+            if (newValue == false && refusedByPorts(randomPort, SettingsRegistry.RANDOM_INBOUND_PORT.key to "false")) {
+                return@setOnPreferenceChangeListener false
+            }
+            needReload()
+            true
+        }
+        reloadOn(user.key, pass.key, httpProxyBypass.key)
     }
 
     private companion object {
@@ -240,13 +251,6 @@ class RoutingSettingsFragment : SettingsScreenFragment(R.xml.settings_routing) {
             SettingsRegistry.OUTBOUND_DOMAIN_STRATEGY.key, SettingsRegistry.DOMAIN_STRATEGY.key,
             SettingsRegistry.RULESET_MIRROR.key, SettingsRegistry.ADBLOCK_ENABLE.key,
         )
-        for ((key, note) in listOf(
-            SettingsRegistry.OUTBOUND_DOMAIN_STRATEGY.key to R.string.outbound_domain_strategy_sum,
-            SettingsRegistry.DOMAIN_STRATEGY.key to R.string.resolve_domain_strategy_sum,
-        )) {
-            pref<SimpleMenuPreference>(key).summaryProvider =
-                Preference.SummaryProvider<SimpleMenuPreference> { "${it.entry}\n${getString(note)}" }
-        }
 
         val enabled = pref<SwitchPreference>(KEY_AUTO_UPDATE)
         val interval = pref<EditTextPreference>(KEY_AUTO_UPDATE_INTERVAL)

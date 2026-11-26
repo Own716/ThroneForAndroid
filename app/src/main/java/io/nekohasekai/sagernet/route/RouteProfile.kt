@@ -33,7 +33,7 @@ class RouteProfile {
 
     @JvmField var rules: MutableList<RouteRule> = mutableListOf()
 
-    /** The subscription group whose refreshes overwrite [rules], -1 = none; local only, never shared. */
+    /** The subscription group whose refreshes replace the [RouteRule.remote] rules, -1 = none; local only, never shared. */
     @JvmField var source_gid: Long = -1L
 
     fun copy(): RouteProfile {
@@ -102,8 +102,6 @@ class RouteProfile {
 
     /** The number of profile ids in [endpoint_profile_ids]. */
     fun endpointCount(): Int = RULE_IDS.findAll(endpoint_profile_ids).count()
-
-    fun isEmpty(): Boolean = rules.all { it.isEmpty() }
 
     /**
      * get_used_outbounds (RouteProfile.cpp:672-685), deduplicated (D12) and limited to the rules whose JSON
@@ -246,14 +244,7 @@ class RouteProfile {
             return RouteRule.checkValue(attr, value, catalog)
         }
 
-        /** GetDefaultChain (RouteProfile.cpp:661-670). */
-        fun defaultProfile(): RouteProfile = RouteProfile().apply {
-            name = "Default"
-            rules.add(RouteRule().apply {
-                name = "Route DNS"
-                action = "hijack-dns"
-                protocol = "dns"
-            })
-        }
+        /** GetDefaultChain (RouteProfile.cpp:981-985). */
+        fun defaultProfile(): RouteProfile = RouteProfile().apply { name = "Default" }
     }
 }

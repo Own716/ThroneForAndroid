@@ -285,6 +285,26 @@ private fun xrayUseSystemCAIn(streams: List<XrayNode>) {
     }
 }
 
+// Xray probes an idle TCP flow every 45 s (Chrome's default) until its 300 s idle timeout closes it. Every 120 s still
+// refreshes NAT mappings well inside the shortest measured TCP timeouts (sing-box waits 5 min) with a third of the wakeups.
+private const val XRAY_TCP_KEEPALIVE_IDLE_S = 120L
+
+private fun xrayTcpKeepAliveIn(streams: List<XrayNode>) {
+    xrayEditLive(streams, "sockopt", true) { sockopts ->
+        if (xrayLast(sockopts, "tcpKeepAliveIdle", false).first != null) return@xrayEditLive
+        if (xrayLast(sockopts, "tcpKeepAliveInterval", false).first != null) return@xrayEditLive
+        sockopts.last().obj["tcpKeepAliveIdle"] = XRAY_TCP_KEEPALIVE_IDLE_S
+    }
+}
+
+/** Sets a longer TCP keepalive idle time on every leg of an Xray outbound, unless a leg sets its own keepalive. */
+fun relaxXrayTcpKeepAlive(outbound: JsonObject) {
+    xrayEditLive(xrayRoot(outbound), "streamSettings", true) { streams ->
+        xrayTcpKeepAliveIn(streams)
+        xrayEditDownloadLeg(streams, ::xrayTcpKeepAliveIn)
+    }
+}
+
 /** UseXraySystemCA: turns on useSystemCA in every TLS block of an Xray outbound, the XHTTP download leg included, unless the block sets it itself. */
 fun useXraySystemCA(outbound: JsonObject) {
     xrayEditLive(xrayRoot(outbound), "streamSettings", false) { streams ->
@@ -2392,9 +2412,8 @@ class XrayStreamSetting {
     fun isXdns(): Boolean = normalizeXrayNetwork(network) == "kcp" && xrayFinalmaskHasXdns(finalmask)
 
     /**
-     * xrayStreamSetting::Build: binding and DNS are wired by the core, not the config. The XDNS resolver lines replace
-     * the resolvers of the xdns masks; [owner] names the profile in their error. Android has no IP lists, so only the
-     * lines build.
+     * xrayStreamSetting::Build: binding and DNS are wired by the core, not the config. The XDNS resolver lines and the
+     * resolver IP list replace the resolvers of the xdns masks; [owner] names the profile in their error.
      */
     fun build(ctx: BuildContext, owner: String = "XDNS"): BuildResult {
         val obj = exportToJson()
@@ -2455,9 +2474,6 @@ class XrayStreamSetting {
                 if (message.isEmpty()) continue
                 issues.addIssue(Severity.Error, root + "xdnsResolvers", message, line.trim())
                 break
-            }
-            if (xdnsResolvers.hasIpList()) {
-                issues.addIssue(Severity.Warning, root + "xdnsResolverList", vtr(R.string.validation_xray_xdns_resolver_list_android))
             }
         }
         val net = normalizeXrayNetwork(network)

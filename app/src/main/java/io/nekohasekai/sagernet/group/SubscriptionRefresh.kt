@@ -77,7 +77,21 @@ internal object SubscriptionRefresh {
         val parsed = result.outbounds
         // A filtered-out profile never reaches the database; an old one that no longer passes goes stale below.
         val filter = SubscriptionNameFilter.Filter(options, group.name)
-        val servers = if (filter.active) parsed.filter(filter::admits) else parsed
+        val countryRules = filter.countries.active
+        val verdicts = if (countryRules) SubscriptionCountryVerdicts.load(gid) else HashMap<String, String>()
+        val servers = if (!filter.active) parsed.map { Arrival(it) } else {
+            val arrived = HashSet<String>()
+            val admitted = parsed.mapNotNull { outbound ->
+                // admitted: a country an earlier IP test found for the same content counts as known and is stamped on it.
+                val content = if (countryRules) contentKey(outbound) else ""
+                if (countryRules) arrived.add(content)
+                val country = verdicts[content].orEmpty()
+                if (filter.admits(outbound, country)) Arrival(outbound, content, country) else null
+            }
+            // Verdicts for content the subscription no longer sends would only grow the store.
+            if (countryRules) verdicts.keys.retainAll(arrived)
+            admitted
+        }
         // Likewise when the filters leave nothing: a provider renaming its servers must not empty the group.
         if (servers.isEmpty()) {
             if (info.valid) saveMetadata(group, info)
@@ -101,12 +115,13 @@ internal object SubscriptionRefresh {
         val working = snapshot.working
         val cleared = snapshot.cleared
         var stoppedRunning = snapshot.stopped
+        val clearedHops = ArrayList(snapshot.clearedHops)
         var dbFailed = false
         val index = ContentIndex(old)
         val sink = ImportSink(gid, if (cleared) null else index)
 
         Logs.i(">>>>>>>> " + str(R.string.subs_processing))
-        for (outbound in servers) sink.add(outbound)
+        for (arrival in servers) sink.add(arrival.outbound, arrival.content, arrival.country)
         sink.finish(old)
         val running = ProfileManager.runningProfileId()
         val updatedRunning = running.takeIf { it > 0L && it in sink.updatedByName }
@@ -141,6 +156,7 @@ internal object SubscriptionRefresh {
             disturbed.addAll(outcome.deleted)
             removed.addAll(outcome.deleted)
             outcome.stopped?.let { stoppedRunning = it }
+            clearedHops.addAll(outcome.clearedHops)
 
             // Survivors of the deletion (the running profile, working ones) return to their previous position.
             val ordered = order.toHashSet()
@@ -181,6 +197,7 @@ internal object SubscriptionRefresh {
                 changeText = str(R.string.subs_nothing)
             }
         }
+        changeText += GroupRepo.hopNotice(clearedHops)
 
         val filteredOut = parsed.size - servers.size
         if (filteredOut > 0) changeText += "\n" + str(R.string.subs_filtered_out, filteredOut) + "\n"
@@ -193,8 +210,21 @@ internal object SubscriptionRefresh {
         filtered.stopped?.let { stoppedRunning = it }
         if (!filtered.ok) dbFailed = true
 
+        // Country rules judge by an IP test: members with a known country are settled here, the rest once tested.
+        // The tester always exists in :bg, so this pass is never final.
+        var untested: List<Long> = emptyList()
+        if (countryRules) {
+            val countries = SubscriptionFilters.applyCountryRules(gid, filter.countries, verdicts, final = false)
+            changeText += countries.report
+            untested = countries.untested
+            disturbed.addAll(countries.deleted)
+            removed.addAll(countries.deleted)
+            countries.stopped?.let { stoppedRunning = it }
+            if (!countries.ok) dbFailed = true
+        }
+
         SubscriptionRouteRebind.rebind(gid, removed, snapshot.routeNames)
-        // The subscription's own order replaced the group's above.
+        // The subscription's own order replaced a sorted group's above (an unsorted one keeps its arrangement).
         if (disturbed.isNotEmpty() || ProfileManager.memberIds(gid) != snapshot.membersBefore) GroupSort.resortLater(gid)
         // Stamped only once the update went through, so an interrupted one is retried instead of counting as fresh.
         if (!urlChanged(gid, url)) {
@@ -217,8 +247,17 @@ internal object SubscriptionRefresh {
         // GroupUpdater.cpp:996: only after an update that went through.
         if (routing.isNotEmpty() && !dbFailed) SubscriptionRoute.importRoute(gid, routing)
 
+        if (untested.isNotEmpty()) {
+            Logs.i(str(R.string.subs_country_testing, untested.size, group.name))
+            // The URL test waits for the country test, so it skips the profiles that one removes.
+            SubscriptionQueue.requestCountryTest(gid, untested)
+            return
+        }
         if (options.urlTest) SubscriptionQueue.requestUrlTest(gid, ProfileManager.memberIds(gid).filter { it !in stickyIds })
     }
+
+    /** A parsed profile the filters let in; [content] is its content key when already computed, [country] a known exit country. */
+    private class Arrival(@JvmField val outbound: Outbound, @JvmField val content: String = "", @JvmField val country: String = "")
 
     /**
      * The answer's subscription info, parse result and routing profile value ([SubscriptionRoute.valueOf], "" unless
@@ -310,8 +349,8 @@ internal object SubscriptionRefresh {
     }
 
     /**
-     * EngineHost's subscriptionReplacedRunning: the delete only asked the service to stop, and a start while it is
-     * stopping is ignored, so this waits for Stopped. Whatever the user started meanwhile wins.
+     * EngineHost's subscriptionReplacedRunning: the delete only asked the service to stop, so this waits for Stopped
+     * before starting the successor. Whatever the user started meanwhile wins.
      */
     private suspend fun startWhenStopped(stoppedId: Long, successor: Long) {
         val deadline = SystemClock.elapsedRealtime() + RECONNECT_WAIT_MS
@@ -341,6 +380,7 @@ internal object SubscriptionRefresh {
         @JvmField val working: HashSet<Long>,
         @JvmField val cleared: Boolean,
         @JvmField val stopped: ProxyEntity?,
+        @JvmField val clearedHops: List<GroupRepo.HopReference>,
     )
 
     /**
@@ -355,8 +395,8 @@ internal object SubscriptionRefresh {
         removed: MutableList<Long>,
     ): Snapshot? {
         // The filters win over keep_working.
-        fun keptWorking(profile: ProxyEntity): Boolean =
-            options.keepWorking && profile.isWorking() && filter.admits(profile.type) { profile.outbound.displayName() }
+        fun keptWorking(profile: ProxyEntity): Boolean = options.keepWorking && profile.isWorking() &&
+            filter.admits(profile.type, profile.testCountry.orEmpty()) { profile.outbound.displayName() }
         // Auto selectors are local state, not servers the remote sent: keep them out of the diff.
         var members = ProfileManager.members(gid)
         val sticky = members.withIndex()
@@ -369,6 +409,7 @@ internal object SubscriptionRefresh {
         val routeNames = SubscriptionRouteRebind.referencedNames(members)
         var cleared = false
         var stopped: ProxyEntity? = null
+        var clearedHops: List<GroupRepo.HopReference> = emptyList()
         if (DataStore.subClear) {
             Logs.i(str(R.string.subs_clearing))
             val doomed = members.filter { !keptWorking(it) }
@@ -382,6 +423,7 @@ internal object SubscriptionRefresh {
             disturbed.addAll(outcome.deleted)
             removed.addAll(outcome.deleted)
             stopped = outcome.stopped
+            clearedHops = outcome.clearedHops
             // A survivor still belongs to the subscription: fall through to the diff. A row gone meanwhile is none.
             val alive = ProfileManager.memberIds(gid).toHashSet()
             members = members.filter { it.id in alive }
@@ -401,7 +443,7 @@ internal object SubscriptionRefresh {
                 if (keptWorking(profile)) working.add(profile.id)
             }
         }
-        return Snapshot(sticky, stickyIds, membersBefore, routeNames, old, working, cleared, stopped)
+        return Snapshot(sticky, stickyIds, membersBefore, routeNames, old, working, cleared, stopped, clearedHops)
     }
 
     /**
@@ -438,14 +480,44 @@ internal object SubscriptionRefresh {
         return ImportResult(target, count, reported = true)
     }
 
-    /** afterUrlTest (GroupUpdater.cpp:669-683). */
-    suspend fun afterUrlTest(gid: Long) {
+    /** afterCountryTest (GroupUpdater.cpp): the final pass of the country rules, then the URL test it held back. */
+    suspend fun afterCountryTest(gid: Long) {
+        val group = GroupRepo.get(gid) ?: return
+        if (group.archive) return
+        val options = group.subOptions
+        val rules = CountryRules.parse(options.countryFilter)
+        if (rules.active) {
+            val countries = SubscriptionFilters.applyCountryRules(gid, rules, SubscriptionCountryVerdicts.load(gid), final = true)
+            var report = countries.report
+            if (countries.untested.isNotEmpty()) report += "\n" + str(R.string.subs_country_untested_kept, countries.untested.size)
+            if (report.isNotEmpty()) {
+                val heading = str(R.string.subs_after_country_test, group.name)
+                Logs.i("<<<<<<<< $heading$report")
+                SubscriptionQueue.report(gid, heading.removeSuffix(":"), report.trim(), false)
+            }
+            countries.stopped?.let { reconnectSuccessor(gid, it) }
+            SubscriptionQueue.groupChanged(gid, countries.deleted)
+        }
+        if (options.urlTest) {
+            val members = SagerDatabase.proxyDao.getNamesByGroup(gid).filter { it.type != AUTOSELECTOR }.map { it.id }
+            SubscriptionQueue.requestUrlTest(gid, members)
+        }
+    }
+
+    /**
+     * afterUrlTest (GroupUpdater.cpp:1483-1495) of the run started at [testedSince] (seconds); a run that was stopped
+     * or failed to start (not [completed]) removes nothing.
+     */
+    suspend fun afterUrlTest(gid: Long, testedSince: Long, completed: Boolean) {
         val group = GroupRepo.get(gid) ?: return
         if (group.archive) return
         val options = group.subOptions
         if (!options.urlTest || (!options.removeUnavailable && !options.sortByLatency)) return
 
-        val result = SubscriptionFilters.removeUnavailableAndSort(group, options)
+        if (options.removeUnavailable && !completed) {
+            Logs.i("The URL test of ${group.name} did not finish; no unavailable profiles were removed.")
+        }
+        val result = SubscriptionFilters.removeUnavailableAndSort(group, options, testedSince.takeIf { completed })
         if (result.report.isNotEmpty()) {
             val heading = str(R.string.subs_after_url_test, group.name)
             Logs.i("<<<<<<<< $heading${result.report}")
@@ -488,9 +560,11 @@ internal object SubscriptionRefresh {
         ProfileImport.parse(body, SettingsMapper.xrayVlessPreference(), SettingsMapper.buildContext())
 
     /** The stored JSON of a type this build cannot parse is kept as is (re-exporting would drop its fields). */
-    private fun contentKey(profile: ProxyEntity): String = SubscriptionReconcile.contentKey(
+    internal fun contentKey(profile: ProxyEntity): String = SubscriptionReconcile.contentKey(
         if (profile.outbound.invalid) profile.outboundJson else profile.outbound.exportToJson().toCompact()
     )
+
+    private fun contentKey(outbound: Outbound): String = SubscriptionReconcile.contentKey(outbound.exportToJson().toCompact())
 
     private fun identityKey(profile: ProxyEntity): String =
         SubscriptionReconcile.identityKey(profile.type, profile.outbound.exportIdentity().toCompact())
@@ -511,10 +585,14 @@ internal object SubscriptionRefresh {
         private val pendingIndex = ArrayList<Int>()
         private val pending = ArrayList<Outbound>()
 
-        suspend fun add(outbound: Outbound) {
+        /** Known exit countries by entry position, stamped on the rows that store them. */
+        private val countries = HashMap<Int, String>()
+
+        /** [content]: the arrival's content key when the caller already has it; [country]: its known exit country. */
+        suspend fun add(outbound: Outbound, content: String = "", country: String = "") {
             val entry = NewEntry(outbound.displayTypeAndName())
             if (index != null) {
-                entry.content = SubscriptionReconcile.contentKey(outbound.exportToJson().toCompact())
+                entry.content = content.ifEmpty { contentKey(outbound) }
                 index.noteArrival(entry.content)
                 entry.contentKnown = index.knows(entry.content)
                 val oldId = index.claim(entry.content)
@@ -528,11 +606,13 @@ internal object SubscriptionRefresh {
                     entry.identity = SubscriptionReconcile.identityKey(outbound.type, outbound.exportIdentity().toCompact())
                 }
                 entry.name = outbound.name
+                if (country.isNotEmpty()) countries[entries.size] = country
                 pendingIndex.add(entries.size)
                 entries.add(entry)
                 pending.add(outbound)
                 return
             }
+            if (country.isNotEmpty()) countries[entries.size] = country
             entryIndex.add(entries.size)
             entries.add(entry)
             chunk.add(outbound)
@@ -571,6 +651,12 @@ internal object SubscriptionRefresh {
                             if (entry.byName) byName.add(entry.supersedes)
                         }
                         if (byName.isNotEmpty()) SagerDatabase.proxyDao.clearTestResults(byName)
+                        // Possibly another server: it takes the arrival's known country, like an inserted row.
+                        for (k in part) {
+                            val position = pendingIndex[k]
+                            val entry = entries[position]
+                            if (entry.byName) countries[position]?.let { stamp(entry.supersedes, it) }
+                        }
                         updatedByName.addAll(byName)
                     }
                 }
@@ -584,12 +670,24 @@ internal object SubscriptionRefresh {
             if (chunk.isEmpty()) return
             try {
                 val rows = ProfileManager.addProfileBatch(chunk, gid)
-                rows.forEachIndexed { i, row -> entries[entryIndex[i]].id = row.id }
+                val stamped = ArrayList<Pair<Long, String>>()
+                rows.forEachIndexed { i, row ->
+                    entries[entryIndex[i]].id = row.id
+                    countries[entryIndex[i]]?.let { stamped.add(row.id to it) }
+                }
+                if (stamped.isNotEmpty()) {
+                    SagerDatabase.instance.runInTransaction { for ((id, country) in stamped) stamp(id, country) }
+                }
             } catch (e: Exception) {
                 Logs.w(e)
             }
             chunk.clear()
             entryIndex.clear()
+        }
+
+        /** The test columns of a fresh (or cleared) row with only its exit country known. */
+        private fun stamp(id: Long, country: String) {
+            SagerDatabase.proxyDao.updateTestResult(id, 0, 0L, null, null, country, null, null)
         }
     }
 }

@@ -9,7 +9,7 @@ import io.nekohasekai.sagernet.outbound.types.WireGuardPeer
 /**
  * The built-in WARP hop of generate.cpp: the synthetic profile id (generate.h:98), the WireGuard or MASQUE endpoint
  * built from the warp_* settings (getWarpProfile, :475-524) and the missing-identity check of calculatePrerequisites
- * (:559-571). With enable_warp the main chain becomes [WARP as `proxy`, exit hop as `warp-bypass`, ...].
+ * (:559-571). With WARP as the exit the main chain becomes [WARP as `proxy`, exit hop as `warp-bypass`, ...].
  */
 object WarpHop {
     const val PROFILE_ID = -2408L
@@ -66,7 +66,7 @@ object WarpHop {
             address = host
             this.port = port
             reserved = settings.warpReserved.mapTo(ArrayList()) { QtStrings.toInt(it) }
-            persistent_keepalive = "10"
+            persistent_keepalive = "25"
         }
         wireGuard.mtu = 1280
         if (settings.warpMode == "amnezia") {

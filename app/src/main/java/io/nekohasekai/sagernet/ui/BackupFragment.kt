@@ -43,6 +43,7 @@ import io.nekohasekai.sagernet.ktx.runOnDefaultDispatcher
 import io.nekohasekai.sagernet.ktx.snackbar
 import io.nekohasekai.sagernet.ktx.startFilesForResult
 import io.nekohasekai.sagernet.ktx.triggerFullRestart
+import io.nekohasekai.sagernet.ui.scan.ScanClient
 import io.nekohasekai.sagernet.widget.applyListInsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -72,6 +73,9 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         }
 
         fun fileName(): String = "Throne-backup-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.thrbackup"
+
+        /** BackupArchive::PartNames, Android's four and the desktop-only ones. */
+        private val PART_NAMES = setOf("profiles", "routes", "settings", "otp", "ip_lists", "icons")
     }
 
     private var binding: LayoutBackupBinding? = null
@@ -106,6 +110,7 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         }
         binding.backupToWebdav.setOnClickListener { selection()?.let(::uploadToWebDav) }
         binding.restoreFromWebdav.setOnClickListener { restoreFromWebDav() }
+        restoreCheckedParts(binding)
 
         val restore = arguments?.getString(ARG_RESTORE)
         if (restore != null) {
@@ -138,6 +143,7 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
             profiles = b.backupProfiles.isChecked,
             routes = b.backupRoutes.isChecked,
             settings = b.backupSettings.isChecked,
+            ipLists = b.backupIpLists.isChecked,
         )
         if (!selection.any()) {
             snackbar(R.string.backup_select_part).show()
@@ -146,8 +152,37 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         return selection
     }
 
+    /** basicSettingsRestoreCheckedParts: the parts of the last backup made; none, or a name it does not know, ticks all. */
+    private fun restoreCheckedParts(b: LayoutBackupBinding) {
+        val saved = DataStore.backupParts
+        if (saved.isEmpty() || saved.any { it !in PART_NAMES }) return
+        val selection = BackupExport.Selection(
+            profiles = "profiles" in saved,
+            routes = "routes" in saved,
+            settings = "settings" in saved,
+            ipLists = "ip_lists" in saved,
+        )
+        if (!selection.any()) return
+        b.backupProfiles.isChecked = selection.profiles
+        b.backupRoutes.isChecked = selection.routes
+        b.backupSettings.isChecked = selection.settings
+        b.backupIpLists.isChecked = selection.ipLists
+    }
+
+    /** basicSettingsRememberCheckedParts, once a backup is under way. */
+    private fun rememberCheckedParts(selection: BackupExport.Selection) {
+        val names = listOfNotNull(
+            "profiles".takeIf { selection.profiles },
+            "routes".takeIf { selection.routes },
+            "settings".takeIf { selection.settings },
+            "ip_lists".takeIf { selection.ipLists },
+        )
+        if (DataStore.backupParts != names) DataStore.backupParts = names
+    }
+
     private fun createTo(uri: Uri) {
         val selection = selection() ?: return
+        rememberCheckedParts(selection)
         runTask(R.string.backup_creating, R.string.backup_failed, work = {
             app.contentResolver.openOutputStream(uri)?.use { BackupExport.write(selection, it) }
                 ?: error("cannot write $uri")
@@ -157,6 +192,7 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
     }
 
     private fun share(selection: BackupExport.Selection) {
+        rememberCheckedParts(selection)
         runTask(R.string.backup_creating, R.string.backup_failed, work = {
             val dir = File(app.cacheDir, SHARE_DIR).apply { mkdirs() }
             val stale = System.currentTimeMillis() - 10 * 60_000L
@@ -186,12 +222,14 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
 
     private fun uploadToWebDav(selection: BackupExport.Selection) {
         val dav = webDav() ?: return
+        rememberCheckedParts(selection)
         runTask(R.string.webdav_uploading, R.string.webdav_backup_failed, work = {
             val file = File(app.cacheDir, "thrupload-${System.currentTimeMillis()}.thrbackup")
             try {
                 file.outputStream().use { BackupExport.write(selection, it) }
                 val parts = ThrBackup.Parts(
-                    profiles = selection.profiles, routes = selection.routes, settings = selection.settings
+                    profiles = selection.profiles, routes = selection.routes, settings = selection.settings,
+                    ipLists = selection.ipLists,
                 )
                 dav.upload(file, parts)
             } finally {
@@ -211,6 +249,7 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         R.string.backup_part_profiles.takeIf { selection.profiles },
         R.string.backup_part_routes.takeIf { selection.routes },
         R.string.backup_part_settings.takeIf { selection.settings },
+        R.string.backup_part_ip_lists.takeIf { selection.ipLists },
     ).joinToString(", ") { getString(it) }
 
     // ------------------------------------------------------------------------------------------------ restore
@@ -380,6 +419,7 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
             view.restoreProfiles to available.profiles,
             view.restoreRoutes to available.routes,
             view.restoreSettings to available.settings,
+            view.restoreIpLists to available.ipLists,
         )) {
             box.isEnabled = on
             box.isChecked = on
@@ -404,6 +444,7 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
                 profiles = available.profiles && view.restoreProfiles.isChecked,
                 routes = available.routes && view.restoreRoutes.isChecked,
                 settings = available.settings && view.restoreSettings.isChecked,
+                ipLists = available.ipLists && view.restoreIpLists.isChecked,
             )
             if (!choice.any()) {
                 Toast.makeText(requireContext(), R.string.backup_restore_select_part, Toast.LENGTH_SHORT).show()
@@ -432,6 +473,8 @@ class BackupFragment : Fragment(R.layout.layout_backup) {
         runOnDefaultDispatcher {
             val result = runCatching {
                 stopService()
+                // As the desktop's DatabaseManager: no scan may write its progress into the restored database.
+                ScanClient.stopAll(persist = false)
                 BackupRestore.restore(backup, choice)
             }
             onMainDispatcher {

@@ -169,7 +169,6 @@
                 <data android:scheme="hysteria2" />
                 <data android:scheme="hy2" />
                 <data android:scheme="tuic" />
-                <data android:scheme="juicity" />
                 <data android:scheme="anytls" />
                 <data android:scheme="shadowtls" />
                 <data android:scheme="ssh" />
@@ -238,9 +237,6 @@
             android:name="io.nekohasekai.sagernet.ui.profile.TuicSettingsActivity"
             android:configChanges="uiMode" />
         <activity
-            android:name="io.nekohasekai.sagernet.ui.profile.JuicitySettingsActivity"
-            android:configChanges="uiMode" />
-        <activity
             android:name="io.nekohasekai.sagernet.ui.profile.SnellSettingsActivity"
             android:configChanges="uiMode" />
         <activity
@@ -304,6 +300,20 @@
             android:configChanges="uiMode"
             android:windowSoftInputMode="adjustResize" />
         <activity
+            android:name="io.nekohasekai.sagernet.ui.iplist.IpListsActivity"
+            android:configChanges="uiMode" />
+        <activity
+            android:name="io.nekohasekai.sagernet.ui.iplist.IpListEditActivity"
+            android:configChanges="uiMode"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name="io.nekohasekai.sagernet.ui.scan.WarpFinderActivity"
+            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+        <activity
+            android:name="io.nekohasekai.sagernet.ui.scan.ResolverScanActivity"
+            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".QuickToggleShortcut"
             android:excludeFromRecents="true"
             android:exported="true"
@@ -358,6 +368,12 @@
         <activity
             android:name="io.nekohasekai.sagernet.ui.SwitchActivity"
             android:configChanges="uiMode"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.SagerNet.Dialog" />
+        <activity
+            android:name="io.nekohasekai.sagernet.ui.VpnAuthActivity"
+            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:excludeFromRecents="true"
             android:launchMode="singleInstance"
             android:theme="@style/Theme.SagerNet.Dialog" />

@@ -12,6 +12,7 @@ import io.nekohasekai.sagernet.R
 import io.nekohasekai.sagernet.SagerNet
 import io.nekohasekai.sagernet.database.ProfileManager
 import io.nekohasekai.sagernet.database.SettingsMapper
+import io.nekohasekai.sagernet.group.SubscriptionClient
 import io.nekohasekai.sagernet.ktx.Logs
 import io.nekohasekai.sagernet.ktx.readableMessage
 import io.nekohasekai.sagernet.ktx.snackbar
@@ -31,7 +32,6 @@ import io.nekohasekai.sagernet.ui.profile.DirectSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.DnsttSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.HttpSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.HysteriaSettingsActivity
-import io.nekohasekai.sagernet.ui.profile.JuicitySettingsActivity
 import io.nekohasekai.sagernet.ui.profile.MasqueSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.MasterDnsSettingsActivity
 import io.nekohasekai.sagernet.ui.profile.MieruSettingsActivity
@@ -104,6 +104,10 @@ class ProfileImports(private val host: ConfigurationFragment) {
                     host.onUi { SubscribeFlows.importUri(activity, uri, groupId) }
                     return@launchIo
                 }
+                SubscriptionClient.importRefusal(groupId)?.let { refusal ->
+                    host.onUi { snackbar(refusal).show() }
+                    return@launchIo
+                }
                 val outbounds = mutableListOf<Outbound>()
                 val report = ImportReport()
                 val preference = SettingsMapper.xrayVlessPreference()
@@ -150,7 +154,6 @@ class ProfileImports(private val host: ConfigurationFragment) {
         R.id.action_new_naive -> NaiveSettingsActivity::class.java
         R.id.action_new_hysteria -> HysteriaSettingsActivity::class.java
         R.id.action_new_tuic -> TuicSettingsActivity::class.java
-        R.id.action_new_juicity -> JuicitySettingsActivity::class.java
         R.id.action_new_ssh -> SSHSettingsActivity::class.java
         R.id.action_new_snell -> SnellSettingsActivity::class.java
         R.id.action_new_wg -> WireGuardSettingsActivity::class.java

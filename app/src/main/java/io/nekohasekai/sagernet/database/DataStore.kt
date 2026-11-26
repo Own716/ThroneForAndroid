@@ -4,6 +4,7 @@ import android.os.Binder
 import android.os.Build
 import android.provider.Settings
 import androidx.preference.PreferenceDataStore
+import androidx.sqlite.db.SupportSQLiteDatabase
 import io.nekohasekai.sagernet.Key
 import io.nekohasekai.sagernet.bg.BaseService
 import io.nekohasekai.sagernet.bg.VpnService
@@ -16,6 +17,7 @@ import io.nekohasekai.sagernet.ktx.int
 import io.nekohasekai.sagernet.ktx.long
 import io.nekohasekai.sagernet.ktx.string
 import io.nekohasekai.sagernet.ktx.stringToInt
+import io.nekohasekai.sagernet.outbound.config.ExitThrough
 import moe.matsuri.nb4a.TempDatabase
 import java.util.UUID
 
@@ -150,6 +152,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var rememberEnable by SettingsRegistry.REMEMBER_ENABLE
     var skipDeleteConfirmation by SettingsRegistry.SKIP_DELETE_CONFIRMATION
     var allowBetaUpdate by SettingsRegistry.ALLOW_BETA_UPDATE
+    var backupParts by SettingsRegistry.BACKUP_PARTS
 
     // inbound
 
@@ -287,9 +290,74 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var subHttpVersion by SettingsRegistry.SUB_HTTP_VERSION
     var subRespectServerInterval by SettingsRegistry.SUB_RESPECT_SERVER_INTERVAL
 
+    // exit
+    @Volatile
+    private var legacyExitMigrated = false
+
+    /** exit_through; an unknown stored value reads as [ExitThrough.SERVER], and [migrateLegacyExit] rewrites it. */
+    var exitThrough: ExitThrough
+        get() {
+            migrateLegacyExit()
+            return ExitThrough.of(SettingsRegistry.EXIT_THROUGH.read(configurationStore))
+        }
+        set(value) {
+            migrateLegacyExit()
+            SettingsRegistry.EXIT_THROUGH.write(configurationStore, value.value)
+        }
+
+    /** WARP is the exit (the desktop's former enable_warp). */
+    val isWarpExit: Boolean get() = exitThrough == ExitThrough.WARP
+
+    /**
+     * SettingsRepo::load: exit_through is migrated ([SettingsRegistry.migratedExitThrough]) and the retired exit rows
+     * go; once per process, since both processes share the table and the migration is idempotent.
+     */
+    fun migrateLegacyExit() {
+        if (legacyExitMigrated) return
+        val store = configurationStore
+        SettingsRegistry.migratedExitThrough(store::getRaw)?.let { SettingsRegistry.EXIT_THROUGH.write(store, it) }
+        for (key in SettingsRegistry.RETIRED_EXIT_KEYS) if (store.contains(key)) store.remove(key)
+        legacyExitMigrated = true
+    }
+
+    /**
+     * DatabaseManager::applyMigrations and SettingsRepo::load on the rows of [db]: simple_dl_url's old default moves to
+     * 5mb once ([MarkerEntity.SIMPLE_DL_URL_5MB]), the old graph window index becomes traffic_graph_seconds and the
+     * retired rows go. Runs as SagerDatabase.instance opens (so on raw SQL, never through the store) and after a restore.
+     */
+    fun migrateSettings(db: SupportSQLiteDatabase) {
+        fun read(key: String): String? =
+            db.query("SELECT `value` FROM `settings` WHERE `key` = ?", arrayOf<Any?>(key)).use {
+                if (it.moveToFirst()) it.getString(0) else null
+            }
+
+        fun write(key: String, value: String) =
+            db.execSQL("INSERT OR REPLACE INTO `settings` (`key`, `value`) VALUES (?, ?)", arrayOf<Any?>(key, value))
+
+        db.beginTransaction()
+        try {
+            val marked = db.query("SELECT 1 FROM `markers` WHERE `key` = ?", arrayOf<Any?>(MarkerEntity.SIMPLE_DL_URL_5MB))
+                .use { it.moveToFirst() }
+            if (!marked) {
+                // Only the old default: a URL the user chose stays.
+                val url = SettingsRegistry.SIMPLE_DL_URL
+                if (read(url.key) == SettingsRegistry.OLD_SIMPLE_DL_URL) write(url.key, url.encodedDefault)
+                db.execSQL("INSERT OR IGNORE INTO `markers` (`key`) VALUES (?)", arrayOf<Any?>(MarkerEntity.SIMPLE_DL_URL_5MB))
+            }
+            val seconds = SettingsRegistry.TRAFFIC_GRAPH_SECONDS
+            if (read(seconds.key) == null) {
+                read(SettingsRegistry.LEGACY_TRAFFIC_GRAPH_RANGE)?.let { SettingsStore.decodeInt(it) }
+                    ?.let { SettingsRegistry.TRAFFIC_GRAPH_WINDOWS.getOrNull(it) }
+                    ?.let { write(seconds.key, seconds.encode(it)) }
+            }
+            for (key in SettingsRegistry.RETIRED_KEYS) db.execSQL("DELETE FROM `settings` WHERE `key` = ?", arrayOf<Any?>(key))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     // warp
-    var enableWarp by SettingsRegistry.ENABLE_WARP
-    var enableTor by SettingsRegistry.ENABLE_TOR
     var warpMode by SettingsRegistry.WARP_MODE
     var warpEp by SettingsRegistry.WARP_EP
     var warpPrivateKey by SettingsRegistry.WARP_PRIVATE_KEY
@@ -313,7 +381,7 @@ object DataStore : OnPreferenceDataStoreChangeListener {
     var logLevel by SettingsRegistry.LOG_LEVEL
     var xrayLogLevel by SettingsRegistry.XRAY_LOG_LEVEL
     var enableStats by SettingsRegistry.ENABLE_STATS
-    var disableTrafficStats by SettingsRegistry.DISABLE_TRAFFIC_STATS
+    var trafficGraphSeconds by SettingsRegistry.TRAFFIC_GRAPH_SECONDS
     var coreBoxClashApi by SettingsRegistry.CORE_BOX_CLASH_API
     var coreBoxClashListenAddr by SettingsRegistry.CORE_BOX_CLASH_LISTEN_ADDR
     var coreBoxClashApiSecret by SettingsRegistry.CORE_BOX_CLASH_API_SECRET
